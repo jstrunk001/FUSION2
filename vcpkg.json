@@ -1,0 +1,8 @@
+{
+  "name": "fusion-update",
+  "version-string": "5.0.0",
+  "dependencies": [
+    "gdal",
+    "laszip"
+  ]
+}

@@ -1,0 +1,16 @@
+# Build directories
+build/
+bin/
+lib/
+out/
+.vs/
+*.user
+*.suo
+
+# Dependencies
+vcpkg_installed/
+vcpkg/
+
+# System / OS
+.DS_Store
+Thumbs.db
