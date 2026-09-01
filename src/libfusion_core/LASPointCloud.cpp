@@ -1,22 +1,70 @@
 #include "fusion/lidar/LASPointCloud.h"
 
-#include "lasreader.hpp"
-#include "laswriter.hpp"
 #include <fstream>
 #include <iostream>
+#include <cstring>
+#include <cmath>
 
 namespace fusion::lidar {
 
+#pragma pack(push, 1)
+struct RawLASHeader {
+    char fileSignature[4];       // "LASF"
+    uint16_t fileSourceID;
+    uint16_t globalEncoding;
+    uint32_t guid1;
+    uint16_t guid2;
+    uint16_t guid3;
+    uint8_t guid4[8];
+    uint8_t versionMajor;
+    uint8_t versionMinor;
+    char systemIdentifier[32];
+    char generatingSoftware[32];
+    uint16_t fileCreationDay;
+    uint16_t fileCreationYear;
+    uint16_t headerSize;
+    uint32_t offsetToPointData;
+    uint32_t numberOfVLRs;
+    uint8_t pointDataFormat;
+    uint16_t pointDataRecordLength;
+    uint32_t numberOfPointRecords;
+    uint32_t numberOfPointsByReturn[5];
+    double xScaleFactor;
+    double yScaleFactor;
+    double zScaleFactor;
+    double xOffset;
+    double yOffset;
+    double zOffset;
+    double maxX;
+    double minX;
+    double maxY;
+    double minY;
+    double maxZ;
+    double minZ;
+};
+
+struct RawPointFormat0 {
+    int32_t x;
+    int32_t y;
+    int32_t z;
+    uint16_t intensity;
+    uint8_t returnBits; // return_num(3), num_returns(3), scan_dir(1), edge_flight(1)
+    uint8_t classification;
+    int8_t scanAngleRank;
+    uint8_t userData;
+    uint16_t pointSourceID;
+};
+#pragma pack(pop)
+
 class LASReader::Impl {
 public:
-    LASreadOpener lasreadopener;
-    LASreader* lasreader{nullptr};
+    std::ifstream file;
+    RawLASHeader rawHeader;
+    uint64_t currentPointIndex{0};
 
     ~Impl() {
-        if (lasreader) {
-            lasreader->close();
-            delete lasreader;
-            lasreader = nullptr;
+        if (file.is_open()) {
+            file.close();
         }
     }
 };
@@ -25,95 +73,115 @@ LASReader::LASReader() : m_impl(std::make_unique<Impl>()) {}
 LASReader::~LASReader() = default;
 
 LASReader::LASReader(LASReader&&) noexcept = default;
-LASReader& operator=(LASReader&&) noexcept = default;
+LASReader& LASReader::operator=(LASReader&&) noexcept = default;
 
 bool LASReader::Open(const std::filesystem::path& filePath) {
     Close();
 
-    std::string pathStr = filePath.string();
-    m_impl->lasreadopener.set_file_name(pathStr.c_str());
-    m_impl->lasreader = m_impl->lasreadopener.open();
-
-    if (!m_impl->lasreader) {
+    m_impl->file.open(filePath.string(), std::ios::binary);
+    if (!m_impl->file.is_open()) {
         return false;
     }
 
-    const auto& header = m_impl->lasreader->header;
-    m_header.pointCount = header.number_of_point_records ? header.number_of_point_records : header.extended_number_of_point_records;
-    m_header.minX = header.min_x;
-    m_header.maxX = header.max_x;
-    m_header.minY = header.min_y;
-    m_header.maxY = header.max_y;
-    m_header.minZ = header.min_z;
-    m_header.maxZ = header.max_z;
-    m_header.pointFormat = header.point_data_format;
-    m_header.versionMajor = header.version_major;
-    m_header.versionMinor = header.version_minor;
+    m_impl->file.read(reinterpret_cast<char*>(&m_impl->rawHeader), sizeof(RawLASHeader));
+    if (std::memcmp(m_impl->rawHeader.fileSignature, "LASF", 4) != 0) {
+        m_impl->file.close();
+        return false;
+    }
+
+    m_header.versionMajor = m_impl->rawHeader.versionMajor;
+    m_header.versionMinor = m_impl->rawHeader.versionMinor;
+    m_header.pointFormat = m_impl->rawHeader.pointDataFormat;
+    m_header.pointCount = m_impl->rawHeader.numberOfPointRecords;
+    m_header.minX = m_impl->rawHeader.minX;
+    m_header.maxX = m_impl->rawHeader.maxX;
+    m_header.minY = m_impl->rawHeader.minY;
+    m_header.maxY = m_impl->rawHeader.maxY;
+    m_header.minZ = m_impl->rawHeader.minZ;
+    m_header.maxZ = m_impl->rawHeader.maxZ;
     m_header.isCompressed = (filePath.extension() == ".laz");
+
+    // Seek to first point record
+    m_impl->file.seekg(m_impl->rawHeader.offsetToPointData, std::ios::beg);
+    m_impl->currentPointIndex = 0;
 
     return true;
 }
 
 void LASReader::Close() {
-    if (m_impl && m_impl->lasreader) {
-        m_impl->lasreader->close();
-        delete m_impl->lasreader;
-        m_impl->lasreader = nullptr;
+    if (m_impl && m_impl->file.is_open()) {
+        m_impl->file.close();
     }
     m_header = {};
 }
 
 bool LASReader::IsOpen() const {
-    return (m_impl && m_impl->lasreader != nullptr);
+    return (m_impl && m_impl->file.is_open());
 }
 
 bool LASReader::ReadNextPoint(PointRecord& pt) {
-    if (!IsOpen()) return false;
-
-    if (!m_impl->lasreader->read_point()) {
+    if (!IsOpen() || m_impl->currentPointIndex >= m_header.pointCount) {
         return false;
     }
 
-    const auto& p = m_impl->lasreader->point;
-    pt.x = p.get_x();
-    pt.y = p.get_y();
-    pt.z = p.get_z();
-    pt.intensity = p.intensity;
-    pt.returnNumber = p.return_number;
-    pt.numberOfReturns = p.number_of_returns;
-    pt.classification = p.classification;
-    pt.scanAngle = static_cast<int8_t>(p.scan_angle_rank);
-    pt.pointSourceID = p.point_source_ID;
-    pt.gpsTime = p.gps_time;
-    pt.red = p.rgb[0];
-    pt.green = p.rgb[1];
-    pt.blue = p.rgb[2];
-    pt.withheld = p.withheld_flag;
-    pt.keypoint = p.keypoint_flag;
-    pt.synthetic = p.synthetic_flag;
+    RawPointFormat0 rawPt;
+    m_impl->file.read(reinterpret_cast<char*>(&rawPt), sizeof(RawPointFormat0));
+    if (!m_impl->file) return false;
 
+    // Convert raw int32 coordinates using scale factors & offsets
+    pt.x = (rawPt.x * m_impl->rawHeader.xScaleFactor) + m_impl->rawHeader.xOffset;
+    pt.y = (rawPt.y * m_impl->rawHeader.yScaleFactor) + m_impl->rawHeader.yOffset;
+    pt.z = (rawPt.z * m_impl->rawHeader.zScaleFactor) + m_impl->rawHeader.zOffset;
+    pt.intensity = rawPt.intensity;
+    pt.returnNumber = rawPt.returnBits & 0x07;
+    pt.numberOfReturns = (rawPt.returnBits >> 3) & 0x07;
+    pt.classification = rawPt.classification & 0x1F;
+    pt.scanAngle = rawPt.scanAngleRank;
+    pt.pointSourceID = rawPt.pointSourceID;
+
+    // Read additional fields based on point format (GPS time, RGB)
+    if (m_impl->rawHeader.pointDataFormat == 1 || m_impl->rawHeader.pointDataFormat == 3) {
+        double gpsTime = 0.0;
+        m_impl->file.read(reinterpret_cast<char*>(&gpsTime), sizeof(double));
+        pt.gpsTime = gpsTime;
+    }
+    if (m_impl->rawHeader.pointDataFormat == 2 || m_impl->rawHeader.pointDataFormat == 3) {
+        uint16_t rgb[3] = {0, 0, 0};
+        m_impl->file.read(reinterpret_cast<char*>(rgb), sizeof(rgb));
+        pt.red = rgb[0];
+        pt.green = rgb[1];
+        pt.blue = rgb[2];
+    }
+
+    // Skip any extra bytes per record if record length > format size
+    int recordLengthRead = sizeof(RawPointFormat0) +
+                           ((m_impl->rawHeader.pointDataFormat == 1 || m_impl->rawHeader.pointDataFormat == 3) ? 8 : 0) +
+                           ((m_impl->rawHeader.pointDataFormat == 2 || m_impl->rawHeader.pointDataFormat == 3) ? 6 : 0);
+    if (m_impl->rawHeader.pointDataRecordLength > recordLengthRead) {
+        m_impl->file.seekg(m_impl->rawHeader.pointDataRecordLength - recordLengthRead, std::ios::cur);
+    }
+
+    m_impl->currentPointIndex++;
     return true;
 }
 
 void LASReader::Rewind() {
     if (IsOpen()) {
-        m_impl->lasreader->seek(0);
+        m_impl->file.seekg(m_impl->rawHeader.offsetToPointData, std::ios::beg);
+        m_impl->currentPointIndex = 0;
     }
 }
 
 
 class LASWriter::Impl {
 public:
-    LASwriteOpener laswriteopener;
-    LASwriter* laswriter{nullptr};
-    LASheader header;
-    LASpoint point;
+    std::ofstream file;
+    RawLASHeader rawHeader;
+    uint64_t pointCount{0};
 
     ~Impl() {
-        if (laswriter) {
-            laswriter->close();
-            delete laswriter;
-            laswriter = nullptr;
+        if (file.is_open()) {
+            file.close();
         }
     }
 };
@@ -124,57 +192,56 @@ LASWriter::~LASWriter() = default;
 bool LASWriter::Open(const std::filesystem::path& filePath, const LASHeaderInfo& headerInfo) {
     Close();
 
-    std::string pathStr = filePath.string();
-    m_impl->laswriteopener.set_file_name(pathStr.c_str());
-
-    m_impl->header.point_data_format = headerInfo.pointFormat;
-    m_impl->header.point_data_record_length = (headerInfo.pointFormat == 2 || headerInfo.pointFormat == 3) ? 34 : 28;
-    m_impl->header.version_major = headerInfo.versionMajor;
-    m_impl->header.version_minor = headerInfo.versionMinor;
-    m_impl->header.x_scale_factor = 0.001;
-    m_impl->header.y_scale_factor = 0.001;
-    m_impl->header.z_scale_factor = 0.001;
-
-    m_impl->laswriter = m_impl->laswriteopener.open(&m_impl->header);
-    if (!m_impl->laswriter) {
+    m_impl->file.open(filePath.string(), std::ios::binary);
+    if (!m_impl->file.is_open()) {
         return false;
     }
 
-    m_impl->point.init(&m_impl->header, m_impl->header.point_data_format, m_impl->header.point_data_record_length, 0);
+    std::memset(&m_impl->rawHeader, 0, sizeof(RawLASHeader));
+    std::memcpy(m_impl->rawHeader.fileSignature, "LASF", 4);
+    m_impl->rawHeader.versionMajor = 1;
+    m_impl->rawHeader.versionMinor = 2;
+    m_impl->rawHeader.headerSize = sizeof(RawLASHeader);
+    m_impl->rawHeader.offsetToPointData = sizeof(RawLASHeader);
+    m_impl->rawHeader.pointDataFormat = 0;
+    m_impl->rawHeader.pointDataRecordLength = sizeof(RawPointFormat0);
+    m_impl->rawHeader.xScaleFactor = 0.001;
+    m_impl->rawHeader.yScaleFactor = 0.001;
+    m_impl->rawHeader.zScaleFactor = 0.001;
+    m_impl->rawHeader.xOffset = headerInfo.minX;
+    m_impl->rawHeader.yOffset = headerInfo.minY;
+    m_impl->rawHeader.zOffset = headerInfo.minZ;
+
+    m_impl->file.write(reinterpret_cast<char*>(&m_impl->rawHeader), sizeof(RawLASHeader));
+    m_impl->pointCount = 0;
     return true;
 }
 
 bool LASWriter::WritePoint(const PointRecord& pt) {
-    if (!m_impl->laswriter) return false;
+    if (!m_impl->file.is_open()) return false;
 
-    m_impl->point.set_x(pt.x);
-    m_impl->point.set_y(pt.y);
-    m_impl->point.set_z(pt.z);
-    m_impl->point.intensity = pt.intensity;
-    m_impl->point.return_number = pt.returnNumber;
-    m_impl->point.number_of_returns = pt.numberOfReturns;
-    m_impl->point.classification = pt.classification;
-    m_impl->point.scan_angle_rank = pt.scanAngle;
-    m_impl->point.point_source_ID = pt.pointSourceID;
-    m_impl->point.gps_time = pt.gpsTime;
-    m_impl->point.rgb[0] = pt.red;
-    m_impl->point.rgb[1] = pt.green;
-    m_impl->point.rgb[2] = pt.blue;
-    m_impl->point.withheld_flag = pt.withheld;
-    m_impl->point.keypoint_flag = pt.keypoint;
-    m_impl->point.synthetic_flag = pt.synthetic;
+    RawPointFormat0 rawPt;
+    rawPt.x = static_cast<int32_t>((pt.x - m_impl->rawHeader.xOffset) / m_impl->rawHeader.xScaleFactor);
+    rawPt.y = static_cast<int32_t>((pt.y - m_impl->rawHeader.yOffset) / m_impl->rawHeader.yScaleFactor);
+    rawPt.z = static_cast<int32_t>((pt.z - m_impl->rawHeader.zOffset) / m_impl->rawHeader.zScaleFactor);
+    rawPt.intensity = pt.intensity;
+    rawPt.returnBits = (pt.returnNumber & 0x07) | ((pt.numberOfReturns & 0x07) << 3);
+    rawPt.classification = pt.classification;
+    rawPt.scanAngleRank = pt.scanAngle;
+    rawPt.userData = 0;
+    rawPt.pointSourceID = pt.pointSourceID;
 
-    m_impl->laswriter->write_point(&m_impl->point);
-    m_impl->laswriter->update_inventory(&m_impl->point);
+    m_impl->file.write(reinterpret_cast<char*>(&rawPt), sizeof(RawPointFormat0));
+    m_impl->pointCount++;
     return true;
 }
 
 void LASWriter::Close() {
-    if (m_impl && m_impl->laswriter) {
-        m_impl->laswriter->update_header(&m_impl->header, true);
-        m_impl->laswriter->close();
-        delete m_impl->laswriter;
-        m_impl->laswriter = nullptr;
+    if (m_impl && m_impl->file.is_open()) {
+        m_impl->rawHeader.numberOfPointRecords = static_cast<uint32_t>(m_impl->pointCount);
+        m_impl->file.seekp(0, std::ios::beg);
+        m_impl->file.write(reinterpret_cast<char*>(&m_impl->rawHeader), sizeof(RawLASHeader));
+        m_impl->file.close();
     }
 }
 
