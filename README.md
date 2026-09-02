@@ -1,6 +1,6 @@
 # FUSION Update (GDAL & Native LAS/LAZ Point Cloud Engine)
 
-Modernized, high-performance C++ reimplementation of the **FUSION** point cloud processing suite and **LTK** batch toolkit (USDA Forest Service / PNW Research Station).
+GDAL-based raster handling & native LAS/LAZ point cloud support update to the **FUSION** suite of forest monitoring focused point cloud processing tools and **LTK** batch toolkit originally prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)).
 
 ## Key Features
 
