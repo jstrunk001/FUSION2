@@ -12,7 +12,7 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("clipdata", "Clips LAS/LAZ point clouds by bounding box or spatial extents");
     parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("extent", "Bounding box LLX,LLY,URX,URY");
-    parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization");
+    parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization, or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("minz", "Minimum height above ground or elevation");
     parser.AddOption("maxz", "Maximum height above ground or elevation");
     parser.AddOption("output", "Output LAS/LAZ file path");

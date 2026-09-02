@@ -2,13 +2,43 @@
 
 #include <gdal_priv.h>
 #include <cpl_conv.h>
+#include <cpl_vsi.h>
 #include <gdal_utils.h>
 #include <ogr_spatialref.h>
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <atomic>
 
 namespace fusion::raster {
+
+// Recognized single-tile raster file extensions when a directory is passed
+// to Open() in place of one file -- e.g. a folder of DTM tiles covering a
+// project area rather than one already-mosaicked ground surface raster.
+static const std::vector<std::string>& RasterTileExtensions() {
+    static const std::vector<std::string> extensions = {".tif", ".tiff", ".img", ".asc", ".bil", ".dtm"};
+    return extensions;
+}
+
+// Every raster file directly inside dirPath (non-recursive) whose extension
+// matches RasterTileExtensions(), sorted for a deterministic mosaic.
+static std::vector<std::filesystem::path> FindRasterTiles(const std::filesystem::path& dirPath) {
+    std::vector<std::filesystem::path> tiles;
+    for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
+        if (!entry.is_regular_file()) continue;
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        const auto& known = RasterTileExtensions();
+        if (std::find(known.begin(), known.end(), ext) != known.end()) {
+            // Absolute, since the mosaic VRT is written to /vsimem/ rather
+            // than alongside the tiles -- a relative source path would fail
+            // to resolve against that virtual location.
+            tiles.push_back(std::filesystem::absolute(entry.path()));
+        }
+    }
+    std::sort(tiles.begin(), tiles.end());
+    return tiles;
+}
 
 class GDALRaster::Impl {
 public:
@@ -37,8 +67,31 @@ GDALRaster& GDALRaster::operator=(GDALRaster&&) noexcept = default;
 bool GDALRaster::Open(const std::filesystem::path& filePath, bool readWrite) {
     Close();
 
+    // A directory of DTM/raster tiles (e.g. a project's per-tile ground
+    // surface models) stands in for one already-mosaicked raster file --
+    // mosaic them into a throwaway in-memory VRT and open that instead.
+    // Read-only, since a mosaic of several source files has no single file
+    // to write updates back into.
+    std::string openPath = filePath.string();
+    std::string vrtScratchPath;
+    if (!readWrite && std::filesystem::is_directory(filePath)) {
+        std::vector<std::filesystem::path> tiles = FindRasterTiles(filePath);
+        if (tiles.empty()) {
+            return false;
+        }
+        static std::atomic<uint64_t> counter{0};
+        vrtScratchPath = "/vsimem/fusion_dtm_mosaic_" + std::to_string(counter.fetch_add(1)) + ".vrt";
+        if (!BuildVRT(vrtScratchPath, tiles, /*relativePaths=*/false)) {
+            return false;
+        }
+        openPath = vrtScratchPath;
+    }
+
     GDALAccess access = readWrite ? GA_Update : GA_ReadOnly;
-    m_impl->dataset = static_cast<GDALDataset*>(GDALOpen(filePath.string().c_str(), access));
+    m_impl->dataset = static_cast<GDALDataset*>(GDALOpen(openPath.c_str(), access));
+    if (!vrtScratchPath.empty()) {
+        VSIUnlink(vrtScratchPath.c_str());
+    }
     if (!m_impl->dataset) {
         return false;
     }

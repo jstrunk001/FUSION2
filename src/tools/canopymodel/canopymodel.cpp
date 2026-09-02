@@ -13,7 +13,7 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("canopymodel", "Generates Canopy Height Model (CHM) GeoTIFF from point cloud");
     parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("cellsize", "Output CHM cell size", "1.0");
-    parser.AddOption("ground", "Path to ground DEM raster for height normalization");
+    parser.AddOption("ground", "Path to ground DEM raster for height normalization, or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("output", "Output GeoTIFF CHM file path");
     parser.AddFlag("slope", "Normalize heights perpendicular to local terrain slope plane");
     parser.AddOption("smooth", "Spatial smoothing window size (e.g. 3 for 3x3 filter)", "");

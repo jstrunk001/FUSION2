@@ -376,7 +376,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("gridmetrics", "Computes comprehensive canopy elevation and intensity metrics grid from point clouds");
     parser.SetPositionalArgsUsage("<input.las/laz or directory> [optional raster ground path]");
-    parser.AddOption("ground", "Path to ground surface DEM raster (GeoTIFF, ENVI, IMG)");
+    parser.AddOption("ground", "Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("cellsize", "Output grid cell size in project units", "10.0");
     parser.AddOption("minht", "Minimum height above ground for canopy metrics calculation", "2.0");
     parser.AddOption("heightcut", "Height cutoff threshold for canopy cover calculations (defaults to minht)");
