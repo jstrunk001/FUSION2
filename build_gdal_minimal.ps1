@@ -5,6 +5,10 @@ FUSION Update tools (GeoTIFF, Cloud Optimized GeoTIFF / COG, and VRT only).
 Produces a static libgdal.a and associated CMake configuration in deps/gdal_minimal/
 with zero external DLL dependencies.
 
+Builds in a local temp directory ($env:TEMP\fusion_gdal) to avoid sync/locking
+issues caused by cloud sync drives (e.g. Box Sync / OneDrive), then installs
+the compact output into deps/gdal_minimal/.
+
 Usage:
   .\build_gdal_minimal.ps1             # download + build + install minimal GDAL
   .\build_gdal_minimal.ps1 -Clean      # wipe existing build/install and re-build
@@ -25,8 +29,11 @@ if (-not $InstallDir) {
 }
 $deps_root = Join-Path $script_root "deps"
 $source_tar = Join-Path $deps_root "gdal-$GdalVersion.tar.gz"
-$source_dir = Join-Path $deps_root "gdal-$GdalVersion"
-$build_dir = Join-Path $deps_root "gdal_build"
+
+# Build in local temp directory to avoid cloud drive (Box Sync) locking and speed up compilation
+$local_temp = Join-Path $env:TEMP "fusion_gdal"
+$source_dir = Join-Path $local_temp "gdal-$GdalVersion"
+$build_dir  = Join-Path $local_temp "build"
 
 # Check if already installed
 $installed_cmake = Join-Path $InstallDir "lib\cmake\gdal\GDALConfig.cmake"
@@ -39,8 +46,8 @@ if (-not $Clean -and ((Test-Path $installed_cmake) -or (Test-Path $installed_cma
 
 if ($Clean) {
     Write-Host "Cleaning existing GDAL build/install..."
-    if (Test-Path $build_dir) { Remove-Item -Recurse -Force $build_dir }
-    if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
+    if (Test-Path $local_temp) { Remove-Item -Recurse -Force $local_temp -ErrorAction SilentlyContinue }
+    if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
 }
 
 # 1. Ensure Rtools toolchain (gcc, cmake, make) is on PATH
@@ -61,6 +68,9 @@ if (-not $have_cmake -or -not $have_make) {
 if (-not (Test-Path $deps_root)) {
     New-Item -ItemType Directory -Path $deps_root | Out-Null
 }
+if (-not (Test-Path $local_temp)) {
+    New-Item -ItemType Directory -Path $local_temp | Out-Null
+}
 
 # 2. Download GDAL source archive if needed
 if (-not (Test-Path $source_tar)) {
@@ -73,12 +83,12 @@ if (-not (Test-Path $source_tar)) {
     Write-Host "Downloaded GDAL source ($([math]::Round((Get-Item $source_tar).Length / 1MB, 2)) MB)."
 }
 
-# 3. Extract source archive
+# 3. Extract source archive into local temp directory
 if (-not (Test-Path $source_dir)) {
-    Write-Host "Extracting GDAL v$GdalVersion source..."
+    Write-Host "Extracting GDAL v$GdalVersion source into local temp directory..."
     $tar_bin = Join-Path $env:SystemRoot "System32\tar.exe"
     if (-not (Test-Path $tar_bin)) { $tar_bin = "tar.exe" }
-    & $tar_bin -xzf $source_tar -C $deps_root
+    & $tar_bin -xzf $source_tar -C $local_temp
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $source_dir)) {
         throw "Failed to extract GDAL archive."
     }
@@ -104,19 +114,69 @@ $configure_args = @(
   , "-DGDAL_USE_GEOTIFF_INTERNAL=ON"
   , "-DGDAL_USE_ZLIB_INTERNAL=ON"
   , "-DGDAL_USE_LERC_INTERNAL=ON"
+  , "-DGDAL_USE_SQLITE3=ON"
+  , "-DGDAL_USE_ARMADILLO=OFF"
+  , "-DGDAL_USE_ARROW=OFF"
+  , "-DGDAL_USE_AVIF=OFF"
+  , "-DGDAL_USE_BLOSC=OFF"
+  , "-DGDAL_USE_BRUNSLI=OFF"
+  , "-DGDAL_USE_CFITSIO=OFF"
+  , "-DGDAL_USE_CRNLIB=OFF"
+  , "-DGDAL_USE_CRYPTOPP=OFF"
   , "-DGDAL_USE_CURL=OFF"
+  , "-DGDAL_USE_DEFLATE=OFF"
+  , "-DGDAL_USE_ECW=OFF"
   , "-DGDAL_USE_EXPAT=OFF"
+  , "-DGDAL_USE_EXPRTK=OFF"
+  , "-DGDAL_USE_FREEXL=OFF"
+  , "-DGDAL_USE_FYBA=OFF"
   , "-DGDAL_USE_GEOS=OFF"
-  , "-DGDAL_USE_ICONV=OFF"
-  , "-DGDAL_USE_OPENSSL=OFF"
+  , "-DGDAL_USE_GIF=OFF"
+  , "-DGDAL_USE_GTA=OFF"
   , "-DGDAL_USE_HDF4=OFF"
   , "-DGDAL_USE_HDF5=OFF"
+  , "-DGDAL_USE_HEIF=OFF"
+  , "-DGDAL_USE_HDFS=OFF"
+  , "-DGDAL_USE_ICONV=OFF"
+  , "-DGDAL_USE_IDB=OFF"
+  , "-DGDAL_USE_ILMBASE=OFF"
+  , "-DGDAL_USE_JBIG=OFF"
+  , "-DGDAL_USE_JXL=OFF"
+  , "-DGDAL_USE_KDU=OFF"
+  , "-DGDAL_USE_KEA=OFF"
+  , "-DGDAL_USE_LIBKML=OFF"
+  , "-DGDAL_USE_LIBLZMA=OFF"
+  , "-DGDAL_USE_LIBXML2=OFF"
+  , "-DGDAL_USE_LURATECH=OFF"
+  , "-DGDAL_USE_LZ4=OFF"
+  , "-DGDAL_USE_MONGOCXX=OFF"
+  , "-DGDAL_USE_MRSID=OFF"
+  , "-DGDAL_USE_MSSQL_NCLI=OFF"
+  , "-DGDAL_USE_MSSQL_ODBC=OFF"
+  , "-DGDAL_USE_MUPARSER=OFF"
+  , "-DGDAL_USE_MYSQL=OFF"
   , "-DGDAL_USE_NETCDF=OFF"
+  , "-DGDAL_USE_ODBC=OFF"
+  , "-DGDAL_USE_OGDI=OFF"
+  , "-DGDAL_USE_OPENCV=OFF"
+  , "-DGDAL_USE_OPENEXR=OFF"
+  , "-DGDAL_USE_OPENJPEG=OFF"
+  , "-DGDAL_USE_OPENSSL=OFF"
+  , "-DGDAL_USE_PARQUET=OFF"
+  , "-DGDAL_USE_PCRE2=OFF"
+  , "-DGDAL_USE_PDFIUM=OFF"
+  , "-DGDAL_USE_PNG=OFF"
   , "-DGDAL_USE_POPPLER=OFF"
   , "-DGDAL_USE_POSTGRESQL=OFF"
-  , "-DGDAL_USE_MYSQL=OFF"
-  , "-DGDAL_USE_ODBC=OFF"
-  , "-DGDAL_USE_ARROW=OFF"
+  , "-DGDAL_USE_QHULL=OFF"
+  , "-DGDAL_USE_RASTERLITE2=OFF"
+  , "-DGDAL_USE_RDB=OFF"
+  , "-DGDAL_USE_SPATIALITE=OFF"
+  , "-DGDAL_USE_TEIGHA=OFF"
+  , "-DGDAL_USE_TILEDB=OFF"
+  , "-DGDAL_USE_WEBP=OFF"
+  , "-DGDAL_USE_XERCESC=OFF"
+  , "-DGDAL_USE_ZSTD=OFF"
   , "-DGDAL_BUILD_PYTHON_BINDINGS=OFF"
 )
 
@@ -138,5 +198,9 @@ Write-Host "Installing minimal GDAL to $InstallDir..."
 if ($LASTEXITCODE -ne 0) {
     throw "Installation of minimal GDAL failed."
 }
+
+# 7. Clean up local temp directory to save disk space
+Write-Host "Cleaning up local temp build directory..."
+Remove-Item -Recurse -Force $local_temp -ErrorAction SilentlyContinue
 
 Write-Host "Successfully built and installed minimal static GDAL at $InstallDir"
