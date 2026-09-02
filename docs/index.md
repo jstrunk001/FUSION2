@@ -28,7 +28,10 @@ Scientific manual detailing every metric computed by `gridmetrics`, `cloudmetric
 
 ### 3. [Executable Suite & CLI Tools Reference](CLI_TOOLS_REFERENCE.md)
 User guide for all 13 command-line executables:
-- `gridmetrics.exe`, `cloudmetrics.exe`, `canopymodel.exe`, `canopymaxima.exe`, `treeseg.exe`, `groundfilter.exe`, `clipdata.exe`, `filterdata.exe`, `thindata.exe`, `returndensity.exe`, `topometrics.exe`, `catalog.exe`, and `ltktools.exe`.
+- `gridmetrics.exe`, `cloudmetrics.exe`, `canopymodel.exe`, `canopymaxima.exe`, `treeseg.exe`, `groundfilter.exe`, `clipdata.exe`, `filterdata.exe`, `thindata.exe`, `returndensity.exe`, `topometrics.exe`, `catalog.exe`, and `pipeline.exe`.
+
+### 4. [Batch Pipelines (pipeline.exe)](PIPELINE_GUIDE.md)
+Worked examples for `gridmetrics.exe`'s own batch/tiled mode and for chaining multiple tools per tile with `pipeline.exe` -- the `_processing/` subfolder layout, the state manifest, resuming/retrying, and the valid-chaining rule.
 
 ---
 

@@ -14,24 +14,25 @@ GDAL-based raster handling & native LAS/LAZ point cloud support update to the **
    - **`canopymaxima`**: Variable Window Local Maxima (VLM) individual tree top detector on CHM rasters.
    - **`treeseg`**: Watershed region-growing individual tree crown segmentation and per-tree point clipping.
 4. **Comprehensive Lidar & Terrain Analytics Suite**:
-   - `gridmetrics.exe` generates rasters of point clouds statistics like 90th percentile height and proportion of returns above 2 meters.
+   - `gridmetrics.exe` generates rasters of point clouds statistics like 90th percentile height and proportion of returns above 2 meters -- either for a single file, or tiled/buffered/mosaicked across a whole directory (see its batch/tiled mode below).
    - `cloudmetrics.exe` computes statistical elevation, percentile, canopy cover, canopy relief ratio, and intensity metrics for point cloud files or plot boundaries.
    - `canopymodel.exe` interpolates point clouds to create Canopy Height Models (CHM) saved as GeoTIFF rasters with optional DEM height normalization.
    - `canopymaxima.exe` detects individual tree tops on CHM rasters using Variable Window Local Maxima (VLM) filtering with height-dependent window sizes.
    - `treeseg.exe` performs watershed region-growing individual tree crown segmentation on CHM rasters and outputs crown segment rasters and tabular crown metrics.
    - `groundfilter.exe` filters ground returns from point cloud files and generates a bare-earth ground Digital Elevation Model (DEM) GeoTIFF raster.
    - `clipdata.exe` clips point cloud data by spatial bounding box extents, height thresholds above ground, or elevation ranges.
-   - `filterdata.exe` filters point clouds by elevation ranges, return numbers (e.g. first returns), scan angles, or specific point attributes.
+   - `filterdata.exe` filters point clouds by elevation ranges, return numbers (e.g. first returns), classification, scan angles, or specific point attributes.
    - `thindata.exe` thins and decimates point cloud data by spatially sub-sampling points within a user-defined grid cell size.
    - `returndensity.exe` calculates pulse density (pts/m²) and return type ratio rasters (e.g., proportion of ground or first returns) saved as GeoTIFFs.
    - `topometrics.exe` calculates topographic terrain derivatives (slope and aspect rasters) directly from input DEM GeoTIFFs.
    - `catalog.exe` scans point cloud directories to produce summary reports of point counts, acquisition extents, and spatial density rasters.
-   - `ltktools.exe` automates tile-based batch processing with spatial buffer management, parallel execution across CPU cores, status monitoring, and GDAL Virtual Raster (`.vrt`) aggregation.
-5. **Batch Processing Toolkit (`ltktools.exe`)**:
-   - Configurable tiling engine with spatial buffer management.
-   - Parallel multi-process task execution across CPU cores.
-   - Real-time status monitor tracking job progress and handling resume/restarts.
-   - Automatic GDAL Virtual Raster (`.vrt`) aggregation across tiles.
+   - `pipeline.exe` chains any combination of the tools above per tile (e.g. ground filter -> canopy model -> tree tops) across a tiled, buffered, multithreaded batch run -- see below and [`docs/PIPELINE_GUIDE.md`](docs/PIPELINE_GUIDE.md).
+5. **Multi-Tool Batch Pipeline (`pipeline.exe`)**:
+   - Configurable tiling engine with spatial buffer management, shared with `gridmetrics.exe`'s own batch/tiled mode.
+   - Chains multiple tools per tile as child processes (e.g. `groundfilter,canopymodel,canopymaxima`), auto-wiring a `groundfilter` stage's DEM into any later stage's `/ground` option.
+   - Interim per-tile products (and the run's resumable state) live in an `_processing/` subfolder under the output directory.
+   - A CSV state manifest tracks tile x stage status, so re-runs skip finished work and `/retryfailed`/`/tiles:` can target a subset of tiles.
+   - Per-stage finalization: raster stages are mosaicked into a `.vrt` (optionally merged into one GeoTIFF), table stages are concatenated across tiles.
 
 ## Project Structure & Executable Suite
 
@@ -51,8 +52,7 @@ fusion_update/
 ├── src/
 │   ├── libfusion_core/         # Core engine implementation
 │   └── tools/                  # Complete CLI executable suite (13 tools)
-│       ├── ltktools/           # Batch processor & status monitor
-│       ├── gridmetrics/        # Gridded canopy metrics calculator
+│       ├── gridmetrics/        # Gridded canopy metrics calculator (single-file + batch/tiled modes)
 │       ├── clipdata/           # Point cloud subsetting & spatial clipper
 │       ├── groundfilter/       # Ground point filter & DEM creator
 │       ├── canopymodel/        # Canopy Height Model (CHM) interpolator
@@ -63,7 +63,8 @@ fusion_update/
 │       ├── topometrics/        # Topographic terrain derivatives (slope, aspect)
 │       ├── filterdata/         # Point cloud elevation & attribute filter
 │       ├── thindata/           # Spatial point cloud decimation & thinning
-│       └── returndensity/      # Point pulse density & return ratio mapper
+│       ├── returndensity/      # Point pulse density & return ratio mapper
+│       └── pipeline/           # Multi-tool batch pipeline orchestrator
 └── tests/                      # Evaluation suite, Quarto reports & comparative benchmarks
     ├── R/                      # Quarto benchmark report (.qmd)
     └── docs/                   # Rendered HTML evaluation report

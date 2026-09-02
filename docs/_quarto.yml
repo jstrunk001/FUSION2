@@ -16,6 +16,8 @@ website:
         file: METRICS_REFERENCE.md
       - text: "Executable Suite & CLI Reference"
         file: CLI_TOOLS_REFERENCE.md
+      - text: "Batch Pipelines (pipeline.exe)"
+        file: PIPELINE_GUIDE.md
 
 format:
   html:

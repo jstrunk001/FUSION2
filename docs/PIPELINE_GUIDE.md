@@ -1,0 +1,133 @@
+# Batch Pipelines: Running Multiple Tools Across Tiles
+
+This guide covers two related things: `gridmetrics.exe`'s own batch/tiled mode (for when you only need one tool run across a large area), and `pipeline.exe`, the general orchestrator for chaining several tools per tile. Both tile and buffer the input the same way; they differ in what they can run and how.
+
+See [`CLI_TOOLS_REFERENCE.md`](CLI_TOOLS_REFERENCE.md) for the full option reference for every tool named here.
+
+---
+
+## 1. When you only need gridmetrics: its own batch/tiled mode
+
+If your workflow is "run gridmetrics across a large area," you don't need `pipeline.exe` at all -- point `gridmetrics.exe` at a directory instead of a file:
+
+```bash
+gridmetrics D:\project\las_tiles /outdir:D:\project\output\gridmetrics /tilesize:1000,1000 /buffer:50 /threads:8 /cellsize:10 /minht:2
+```
+
+This tiles and buffers every LAS/LAZ file in `las_tiles`, computes grid metrics per tile in-process (no child processes, no `_processing` subfolder), and mosaics the results into `D:\project\output\gridmetrics\project_gridmetrics.vrt`. It's the same behavior the old `ltktools.exe` had -- just reached by pointing `gridmetrics` at a directory.
+
+## 2. Single-stage runs of any other tool: `pipeline.exe /tool:<name>`
+
+Every other tool (`canopymodel`, `groundfilter`, `returndensity`, `filterdata`, `thindata`, `canopymaxima`, `topometrics`, `treeseg`) can also be run tiled across a whole project this way, one stage at a time:
+
+```bash
+pipeline /tool:groundfilter /input:D:\project\las_tiles /output:D:\project\output /cellsize:1
+```
+
+This produces `D:\project\output\groundfilter.vrt` (the mosaicked ground DEM) plus the interim per-tile files under `D:\project\output\_processing\`.
+
+## 3. The canonical pipeline: ground, then canopy height, then tree tops
+
+```bash
+pipeline /pipeline:groundfilter,canopymodel,canopymaxima ^
+  /input:D:\project\las_tiles /output:D:\project\output ^
+  /tilesize:1000,1000 /buffer:50 /threads:8 ^
+  /cellsize:1 /minht:2 /window-a:0.5 /window-b:0.05
+```
+
+Per tile, this: buffer-clips the input points once; runs `groundfilter` on that clip to get a DEM; runs `canopymodel` on the *same* clip, automatically passed `/ground:<the DEM groundfilter just produced>`, to get a CHM; runs `canopymaxima` on the CHM to detect tree tops. You never pass `/ground` yourself here -- it's wired through automatically because `groundfilter` precedes `canopymodel` in the chain.
+
+Output: `groundfilter.vrt`, `canopymodel.vrt`, and `canopymaxima_all.csv` (every tile's tree-top table concatenated, `TreeID` prefixed with the tile name so IDs stay unique) in `D:\project\output\`.
+
+## 4. Crown segmentation instead of tree tops
+
+```bash
+pipeline /pipeline:groundfilter,canopymodel,treeseg /input:D:\project\las_tiles /output:D:\project\output /minht:2
+```
+
+Output: `groundfilter.vrt`, `canopymodel.vrt`, `treeseg.vrt` (mosaicked crown-segment rasters), and `treeseg_table_all.csv`. Unlike `canopymaxima`'s table, `treeseg`'s crown-summary table has no per-crown X/Y coordinates, so its rows can't be filtered to each tile's core extent the way `canopymaxima`'s can -- a crown centered in a tile's buffer zone may show up in more than one tile's rows. The `treeseg.vrt` raster itself has no such overlap (it's cropped to core extent before mosaicking); only the table carries this limitation.
+
+## 5. Terrain metrics only
+
+```bash
+pipeline /pipeline:groundfilter,topometrics /input:D:\project\las_tiles /output:D:\project\output
+```
+
+Output: `groundfilter.vrt` (DEM) and `topometrics.vrt` (slope + aspect bands).
+
+## 6. Point-cloud-only chain (no raster stage at all)
+
+```bash
+pipeline /pipeline:thindata,filterdata,gridmetrics /input:D:\project\las_tiles /output:D:\project\output /cellsize:2 /return:1
+```
+
+`thindata` and `filterdata` both consume and produce point clouds, so they can chain directly into each other before `gridmetrics` (or any other point-cloud-input stage) runs on the result. The intermediate thinned/filtered `.laz` files stay in `_processing/<tile>/`; only `gridmetrics.vrt` gets mosaicked into `/output`, since per-tile point cloud outputs aren't merged across tiles (each tile's `.laz` is still a separate file, listed at the end of the run).
+
+## 7. The `_processing/` subfolder and the state manifest
+
+Every stage's per-tile output lives under `<output>/_processing/<tile_name>/`:
+
+```
+_processing/
+  pipeline_state.csv          <- tile x stage status, read/written by every run
+  pipeline.log
+  tile_0001/
+    clip.laz                  <- Stage 0: buffered spatial clip (always first)
+    log.txt                   <- combined stdout/stderr for every stage's subprocess, this tile
+    groundfilter.tif          <- cropped to tile_0001's core extent
+    canopymodel_buffered.tif  <- buffered; feeds the next raster-consuming stage
+    canopymodel.tif           <- cropped to core extent; what gets mosaicked
+    canopymaxima.csv          <- filtered to core extent, TreeID prefixed with "tile_0001_"
+  tile_0002/
+    ...
+```
+
+`pipeline_state.csv` has one row per tile x stage that has actually run:
+
+```
+tile,stage,status,output_path,exit_code,started_at,finished_at
+tile_0001,clip,done,_processing/tile_0001/clip.laz,0,2026-09-02T09:00:01,2026-09-02T09:00:04
+tile_0001,groundfilter,done,_processing/tile_0001/groundfilter.tif,0,2026-09-02T09:00:04,2026-09-02T09:00:07
+tile_0001,canopymodel,failed,_processing/tile_0001/canopymodel.tif,1,2026-09-02T09:00:07,2026-09-02T09:00:08
+```
+
+This file is both the resume cache and the answer to "what actually happened."
+
+## 8. Resuming and retrying
+
+Re-running the exact same command is safe and cheap -- every tile/stage already marked `done` in `pipeline_state.csv`, with its output file still present, is skipped:
+
+```bash
+pipeline /pipeline:groundfilter,canopymodel,canopymaxima /input:D:\project\las_tiles /output:D:\project\output
+```
+
+To force everything to redo regardless of recorded state, add `/rebuild`. To process only the tiles that had a failure last time (say, `canopymodel` crashed on a couple of tiles because of a bad input file you've since fixed):
+
+```bash
+pipeline /pipeline:groundfilter,canopymodel,canopymaxima /input:D:\project\las_tiles /output:D:\project\output /retryfailed
+```
+
+Or name specific tiles directly with `/tiles:tile_0004,tile_0017`. `/cleanup` (delete `_processing/` once everything succeeds) refuses to run if any tile/stage is still recorded as failed, precisely so `/retryfailed` still has something to work from.
+
+## 9. Valid chaining
+
+Every stage reads either a point cloud or a raster, and produces a point cloud, a raster, or a table:
+
+| Stage | Input | Output |
+|---|---|---|
+| `gridmetrics` | point cloud | raster |
+| `canopymodel` | point cloud | raster |
+| `groundfilter` | point cloud | raster |
+| `returndensity` | point cloud | raster |
+| `filterdata` | point cloud | point cloud |
+| `thindata` | point cloud | point cloud |
+| `canopymaxima` | raster | table |
+| `topometrics` | raster | raster |
+| `treeseg` | raster | raster + table |
+
+Two rules, both checked before any tile is processed:
+
+1. **The first stage must consume a point cloud.** Nothing produces a raster before the chain starts, so a pipeline starting with `canopymaxima`, `topometrics`, or `treeseg` is rejected immediately with an error naming the offending stage.
+2. **A raster-input stage must directly follow a raster-output stage.** `/pipeline:filterdata,canopymaxima` is rejected -- `filterdata` produces a point cloud, not a raster, so `canopymaxima` has nothing to read. `/pipeline:groundfilter,canopymaxima` is accepted -- `groundfilter`'s DEM satisfies `canopymaxima`'s raster input (even though feeding a bare ground DEM into a tree-top detector isn't a meaningful workflow -- `pipeline.exe` checks artifact *kind* compatibility, not whether the chain makes scientific sense).
+
+Point-cloud-input stages have no such adjacency requirement: they always fall back to the nearest preceding point-cloud output, or Stage 0's buffered clip if none of the earlier stages produced one.
