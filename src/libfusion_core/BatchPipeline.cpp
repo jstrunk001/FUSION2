@@ -43,7 +43,7 @@ BatchPipeline::BatchPipeline(TileGridSpec gridSpec, PipelineJobOptions jobOption
 }
 
 bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& tile, const PipelineJobOptions& opts)>& tileTask) {
-    std::cout << "[ltktools BatchPipeline] Starting batch processing for " << m_tiles.size()
+    std::cout << "[BatchPipeline] Starting batch processing for " << m_tiles.size()
               << " tiles with " << m_options.numThreads << " parallel workers...\n";
 
     std::atomic<size_t> completedTiles{0};
@@ -71,7 +71,7 @@ bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& til
                 }
 
                 size_t comp = completedTiles.fetch_add(1) + 1;
-                std::cout << "[ltktools BatchPipeline] Progress: " << comp << "/" << totalTiles
+                std::cout << "[BatchPipeline] Progress: " << comp << "/" << totalTiles
                           << " (" << (comp * 100 / totalTiles) << "%) completed.\n";
             }
         });
@@ -81,19 +81,19 @@ bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& til
         if (worker.joinable()) worker.join();
     }
 
-    std::cout << "[ltktools BatchPipeline] All tile tasks finished. Processed " << m_tileRasterPaths.size() << " rasters.\n";
+    std::cout << "[BatchPipeline] All tile tasks finished. Processed " << m_tileRasterPaths.size() << " rasters.\n";
 
     // Standardized Strategy A: Build VRT across tile rasters
     if (m_options.generateVRT && !m_tileRasterPaths.empty()) {
         m_vrtPath = m_options.outputDir / "project_gridmetrics.vrt";
-        std::cout << "[ltktools BatchPipeline] Generating GDAL VRT at: " << m_vrtPath << "...\n";
+        std::cout << "[BatchPipeline] Generating GDAL VRT at: " << m_vrtPath << "...\n";
         bool vrtOk = fusion::raster::GDALRaster::BuildVRT(m_vrtPath, m_tileRasterPaths);
 
         if (vrtOk) {
-            std::cout << "[ltktools BatchPipeline] VRT successfully created.\n";
+            std::cout << "[BatchPipeline] VRT successfully created.\n";
             if (m_options.mergeGeoTIFF) {
                 std::filesystem::path mergedTif = m_options.outputDir / "project_gridmetrics_merged.tif";
-                std::cout << "[ltktools BatchPipeline] Merging VRT to global GeoTIFF: " << mergedTif << "...\n";
+                std::cout << "[BatchPipeline] Merging VRT to global GeoTIFF: " << mergedTif << "...\n";
                 fusion::raster::GDALRaster::MergeVRTToGeoTIFF(m_vrtPath, mergedTif);
             }
         }

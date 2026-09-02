@@ -54,9 +54,9 @@ function Invoke-WithRetry {
 }
 
 $tool_names = @(
-    "ltktools", "gridmetrics", "clipdata", "groundfilter", "canopymodel"
+    "gridmetrics", "clipdata", "groundfilter", "canopymodel"
   , "catalog", "canopymaxima", "treeseg", "cloudmetrics", "topometrics"
-  , "filterdata", "thindata", "returndensity"
+  , "filterdata", "thindata", "returndensity", "pipeline"
   )
 
 #1. read the project version out of CMakeLists.txt (single source of truth)
@@ -259,7 +259,7 @@ if ($Publish) {
     }
     & gh release create $release_tag @release_assets `
         --title "FUSION Update Tools v$bundle_version" `
-        --notes "Automated build bundle of all 13 CLI executables (gridmetrics, clipdata, groundfilter, canopymodel, catalog, canopymaxima, treeseg, cloudmetrics, topometrics, filterdata, thindata, returndensity, ltktools) and documentation manual."
+        --notes "Automated build bundle of all 13 CLI executables (gridmetrics, clipdata, groundfilter, canopymodel, catalog, canopymaxima, treeseg, cloudmetrics, topometrics, filterdata, thindata, returndensity, pipeline) and documentation manual."
     Write-Host "Published release: $release_tag"
 }
 

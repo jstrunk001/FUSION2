@@ -353,4 +353,39 @@ bool GDALRaster::ConvertToCOG(const std::filesystem::path& inputRasterPath,
     return false;
 }
 
+bool GDALRaster::CropToExtent(const std::filesystem::path& inputRasterPath,
+                               const std::filesystem::path& outputRasterPath,
+                               double minX, double minY, double maxX, double maxY) {
+    GDALDataset* inDS = static_cast<GDALDataset*>(GDALOpen(inputRasterPath.string().c_str(), GA_ReadOnly));
+    if (!inDS) return false;
+
+    // -projwin takes the upper-left and lower-right corners: (minX, maxY) and (maxX, minY).
+    std::string ulx = std::to_string(minX);
+    std::string uly = std::to_string(maxY);
+    std::string lrx = std::to_string(maxX);
+    std::string lry = std::to_string(minY);
+
+    char* argv[] = {
+        const_cast<char*>("-projwin"),
+        const_cast<char*>(ulx.c_str()), const_cast<char*>(uly.c_str()),
+        const_cast<char*>(lrx.c_str()), const_cast<char*>(lry.c_str()),
+        nullptr
+    };
+
+    GDALTranslateOptions* options = GDALTranslateOptionsNew(argv, nullptr);
+    int error = 0;
+    GDALDatasetH outDS = GDALTranslate(outputRasterPath.string().c_str(),
+                                       inDS,
+                                       options,
+                                       &error);
+    GDALTranslateOptionsFree(options);
+    GDALClose(inDS);
+
+    if (outDS) {
+        GDALClose(outDS);
+        return true;
+    }
+    return false;
+}
+
 } // namespace fusion::raster

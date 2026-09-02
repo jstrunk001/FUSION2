@@ -35,14 +35,49 @@ add_library(fusion_core STATIC
     src/libfusion_core/BatchPipeline.cpp
     src/libfusion_core/StatusMessenger.cpp
     src/libfusion_core/ExperimentalMetrics.cpp
+    src/libfusion_core/ProcessRunner.cpp
+    src/libfusion_core/StageRegistry.cpp
+    src/libfusion_core/PipelineState.cpp
 )
 
 target_link_libraries(fusion_core PUBLIC GDAL::GDAL)
 
-# Core Executables
-add_executable(ltktools src/tools/ltktools/ltktools.cpp)
-target_link_libraries(ltktools PRIVATE fusion_core)
+if(WIN32)
+    # When linking static GDAL/PROJ from MinGW/Rtools, resolve circular/transitive static references with linker group
+    target_link_libraries(fusion_core PUBLIC
+        -Wl,--start-group
+        iconv
+        z
+        bz2
+        zstd
+        lzma
+        lz4
+        deflate
+        Lerc
+        aec
+        webp
+        sharpyuv
+        bcrypt
+        ws2_32
+        crypt32
+        wldap32
+        secur32
+        ssl
+        crypto
+        nghttp2
+        ssh2
+        gcrypt
+        gpg-error
+        idn2
+        unistring
+        psl
+        brotlidec
+        brotlicommon
+        -Wl,--end-group
+    )
+endif()
 
+# Core Executables
 add_executable(gridmetrics src/tools/gridmetrics/gridmetrics.cpp)
 target_link_libraries(gridmetrics PRIVATE fusion_core)
 
@@ -79,3 +114,9 @@ target_link_libraries(thindata PRIVATE fusion_core)
 
 add_executable(returndensity src/tools/returndensity/returndensity.cpp)
 target_link_libraries(returndensity PRIVATE fusion_core)
+
+# Multi-tool batch pipeline orchestrator (tiles/buffers the input once and
+# chains any of the above tools per tile as child processes -- see
+# src/tools/pipeline/pipeline.cpp)
+add_executable(pipeline src/tools/pipeline/pipeline.cpp)
+target_link_libraries(pipeline PRIVATE fusion_core)

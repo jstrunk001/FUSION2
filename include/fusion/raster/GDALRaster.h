@@ -91,6 +91,13 @@ public:
                             const std::filesystem::path& outputCOGPath,
                             const std::string& compressOption = "DEFLATE");
 
+    // Crops a raster down to [minX,maxX] x [minY,maxY] in the raster's own
+    // georeferenced coordinates. Used to trim a buffered tile raster back to
+    // its core (unbuffered) extent before it's used downstream or mosaicked.
+    static bool CropToExtent(const std::filesystem::path& inputRasterPath,
+                            const std::filesystem::path& outputRasterPath,
+                            double minX, double minY, double maxX, double maxY);
+
 private:
     class Impl;
     std::unique_ptr<Impl> m_impl;
