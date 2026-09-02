@@ -84,8 +84,16 @@ public:
         return m_positionals;
     }
 
+    void SetPositionalArgsUsage(const std::string& usage) {
+        m_positionalArgsUsage = usage;
+    }
+
     void PrintHelp() const {
-        std::cout << "Usage: " << m_programName << " [options] <arguments>\n";
+        std::cout << "Usage: " << m_programName << " ";
+        if (!m_positionalArgsUsage.empty()) {
+            std::cout << m_positionalArgsUsage << " ";
+        }
+        std::cout << "[other /options]\n";
         std::cout << m_description << "\n\nOptions:\n";
         for (const auto& [name, desc] : m_flags) {
             std::cout << "  /" << name << "\t" << desc << "\n";
@@ -103,6 +111,7 @@ private:
 
     std::string m_programName;
     std::string m_description;
+    std::string m_positionalArgsUsage{"<arguments>"};
     std::unordered_map<std::string, std::string> m_flags;
     std::unordered_map<std::string, OptionMeta> m_options;
 

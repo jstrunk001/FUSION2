@@ -1,34 +1,112 @@
-// gridmetrics.cpp : Modernized GridMetrics Executable for FUSION Update
+// gridmetrics.cpp : Comprehensive GridMetrics Executable for FUSION Update
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/batch/StatusMessenger.h"
+#include "fusion/metrics/ExperimentalMetrics.h"
 
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <string>
+#include <sstream>
 #include <filesystem>
 #include <cmath>
 #include <algorithm>
 #include <numeric>
+#include <unordered_set>
+#include <map>
 
-struct MetricAccumulator {
+struct CellAccumulator {
     std::vector<float> elevations;
     std::vector<float> intensities;
+    std::vector<fusion::metrics::Point3D> cellPoints;
     int totalReturns{0};
     int firstReturns{0};
     int returnsAboveGround{0};
+    int returnsAboveMinHt{0};
+    int returnsAboveHeightCut{0};
+    std::vector<int> strataCounts;
+    std::vector<double> strataIntSums;
+    std::vector<int> strataIntCounts;
 };
 
+static std::vector<double> ParseFloatList(const std::string& str) {
+    std::vector<double> values;
+    std::stringstream ss(str);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) {
+            try {
+                values.push_back(std::stod(item));
+            } catch (...) {}
+        }
+    }
+    return values;
+}
+
+static std::unordered_set<int> ParseIntSet(const std::string& str) {
+    std::unordered_set<int> values;
+    std::stringstream ss(str);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) {
+            try {
+                values.insert(std::stoi(item));
+            } catch (...) {}
+        }
+    }
+    return values;
+}
+
+static float GetPercentile(const std::vector<float>& sortedData, double p) {
+    if (sortedData.empty()) return -9999.0f;
+    if (sortedData.size() == 1) return sortedData[0];
+    double idx = p * (sortedData.size() - 1);
+    size_t i0 = static_cast<size_t>(std::floor(idx));
+    size_t i1 = std::min(i0 + 1, sortedData.size() - 1);
+    double frac = idx - i0;
+    return static_cast<float>((1.0 - frac) * sortedData[i0] + frac * sortedData[i1]);
+}
+
+static float GetMode(const std::vector<float>& data, float binSize = 0.5f) {
+    if (data.empty()) return -9999.0f;
+    std::map<int, int> bins;
+    for (float v : data) {
+        int b = static_cast<int>(std::floor(v / binSize));
+        bins[b]++;
+    }
+    int maxCount = 0;
+    int maxBin = 0;
+    for (const auto& [b, cnt] : bins) {
+        if (cnt > maxCount) {
+            maxCount = cnt;
+            maxBin = b;
+        }
+    }
+    return (maxBin + 0.5f) * binSize;
+}
+
 int main(int argc, char* argv[]) {
-    fusion::cli::ArgumentParser parser("gridmetrics", "Computes elevation and intensity metrics grid from point clouds");
-    parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG)");
+    fusion::cli::ArgumentParser parser("gridmetrics", "Computes comprehensive canopy elevation and intensity metrics grid from point clouds");
+    parser.SetPositionalArgsUsage("<input.las/laz> [optional raster ground path]");
+    parser.AddOption("ground", "Path to ground surface DEM raster (GeoTIFF, ENVI, IMG)");
     parser.AddOption("cellsize", "Output grid cell size in project units", "10.0");
-    parser.AddOption("minht", "Minimum height above ground for metrics calculation", "2.0");
-    parser.AddOption("output-mode", "Output raster mode: multiband or singleband", "multiband");
-    parser.AddOption("outdir", "Output directory for rasters", ".");
+    parser.AddOption("minht", "Minimum height above ground for canopy metrics calculation", "2.0");
+    parser.AddOption("heightcut", "Height cutoff threshold for canopy cover calculations (defaults to minht)");
+    parser.AddOption("outlier", "Trim elevation outliers outside min,max values (e.g. -5,150)");
+    parser.AddOption("class", "Comma-separated point classifications to include (e.g. 2,3,4,5)");
+    parser.AddFlag("first", "Use only first returns for metric calculations");
+    parser.AddFlag("all", "Use all returns for canopy cover and metric calculations");
     parser.AddFlag("nointensity", "Skip computing intensity metrics");
+    parser.AddOption("strata", "Comma-separated height strata thresholds (e.g. 0.5,2.0,5.0,10.0,20.0)");
+    parser.AddOption("intstrata", "Comma-separated intensity strata height thresholds");
+    parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (m)", "20.0");
+    parser.AddFlag("exp", "Compute additional experimental metrics from RSForTools");
+    parser.AddOption("outroot", "Base root name for output CSV summary metrics tables");
+    parser.AddOption("outdir", "Output directory for rasters and CSV reports", ".");
+    parser.AddOption("output-mode", "Output raster mode: multiband or singleband", "multiband");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -45,19 +123,45 @@ int main(int argc, char* argv[]) {
     std::filesystem::path outDir = parser.GetOption("outdir").value_or(".");
     double cellSize = std::stod(parser.GetOption("cellsize").value_or("10.0"));
     double minHt = std::stod(parser.GetOption("minht").value_or("2.0"));
+    double heightCut = parser.GetOption("heightcut") ? std::stod(*parser.GetOption("heightcut")) : minHt;
+    double voxelSize = std::stod(parser.GetOption("voxelsize").value_or("20.0"));
+    bool enableExp = parser.HasFlag("exp");
     std::string outputMode = parser.GetOption("output-mode").value_or("multiband");
+    bool firstOnly = parser.HasFlag("first");
+    bool noIntensity = parser.HasFlag("nointensity");
+
+    double outlierMin = -99999.0, outlierMax = 99999.0;
+    bool hasOutlier = false;
+    if (auto outlierOpt = parser.GetOption("outlier")) {
+        auto vals = ParseFloatList(*outlierOpt);
+        if (vals.size() >= 2) {
+            outlierMin = vals[0];
+            outlierMax = vals[1];
+            hasOutlier = true;
+        }
+    }
+
+    std::unordered_set<int> validClasses;
+    if (auto classOpt = parser.GetOption("class")) {
+        validClasses = ParseIntSet(*classOpt);
+    }
+
+    std::vector<double> strata = parser.GetOption("strata") ? ParseFloatList(*parser.GetOption("strata")) : std::vector<double>{};
+    std::vector<double> intStrata = parser.GetOption("intstrata") ? ParseFloatList(*parser.GetOption("intstrata")) : strata;
 
     std::filesystem::create_directories(outDir);
 
     fusion::raster::GDALRaster groundRaster;
     bool hasGround = false;
+    std::string groundPathStr;
     if (auto groundPath = parser.GetOption("ground")) {
-        if (groundRaster.Open(*groundPath)) {
-            hasGround = true;
-            std::cout << "[GridMetrics] Loaded ground surface DEM: " << *groundPath << "\n";
-        } else {
-            std::cerr << "Warning: Could not open ground surface DEM raster: " << *groundPath << "\n";
-        }
+        groundPathStr = *groundPath;
+    } else if (posArgs.size() > 1 && std::filesystem::exists(posArgs[1])) {
+        groundPathStr = posArgs[1];
+    }
+    if (!groundPathStr.empty() && groundRaster.Open(groundPathStr)) {
+        hasGround = true;
+        std::cout << "[GridMetrics] Loaded ground surface DEM: " << groundPathStr << "\n";
     }
 
     fusion::lidar::LASReader lasReader;
@@ -75,10 +179,27 @@ int main(int argc, char* argv[]) {
     if (cols <= 0) cols = 1;
     if (rows <= 0) rows = 1;
 
-    std::vector<MetricAccumulator> grid(cols * rows);
+    std::vector<CellAccumulator> grid(cols * rows);
+    for (auto& cell : grid) {
+        if (!strata.empty()) {
+            cell.strataCounts.resize(strata.size() + 1, 0);
+        }
+        if (!intStrata.empty()) {
+            cell.strataIntSums.resize(intStrata.size() + 1, 0.0);
+            cell.strataIntCounts.resize(intStrata.size() + 1, 0);
+        }
+    }
 
     fusion::lidar::PointRecord pt;
     while (lasReader.ReadNextPoint(pt)) {
+        if (!validClasses.empty() && validClasses.find(pt.classification) == validClasses.end()) {
+            continue;
+        }
+
+        if (firstOnly && pt.returnNumber != 1) {
+            continue;
+        }
+
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
 
@@ -89,93 +210,284 @@ int main(int argc, char* argv[]) {
 
             double elevation = pt.z;
             if (hasGround) {
-                auto groundZ = groundRaster.GetElevation(pt.x, pt.y);
-                if (groundZ) {
-                    elevation -= *groundZ;
+                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
+                    elevation -= *gz;
                 }
             }
 
-            if (elevation >= minHt) {
-                cell.elevations.push_back(static_cast<float>(elevation));
-                cell.intensities.push_back(static_cast<float>(pt.intensity));
+            if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
+                continue;
+            }
+
+            if (enableExp) {
+                cell.cellPoints.push_back({pt.x, pt.y, elevation});
+            }
+
+            if (elevation >= 0.0) {
                 cell.returnsAboveGround++;
+            }
+
+            if (elevation >= heightCut) {
+                cell.returnsAboveHeightCut++;
+            }
+
+            if (!strata.empty()) {
+                size_t sIdx = 0;
+                while (sIdx < strata.size() && elevation >= strata[sIdx]) {
+                    sIdx++;
+                }
+                cell.strataCounts[sIdx]++;
+            }
+
+            if (!noIntensity && !intStrata.empty()) {
+                size_t sIdx = 0;
+                while (sIdx < intStrata.size() && elevation >= intStrata[sIdx]) {
+                    sIdx++;
+                }
+                cell.strataIntSums[sIdx] += pt.intensity;
+                cell.strataIntCounts[sIdx]++;
+            }
+
+            if (elevation >= minHt) {
+                cell.returnsAboveMinHt++;
+                cell.elevations.push_back(static_cast<float>(elevation));
+                if (!noIntensity) {
+                    cell.intensities.push_back(static_cast<float>(pt.intensity));
+                }
             }
         }
     }
     lasReader.Close();
 
-    std::vector<float> meanElev(cols * rows, -9999.0f);
-    std::vector<float> stdDevElev(cols * rows, -9999.0f);
-    std::vector<float> p95Elev(cols * rows, -9999.0f);
-    std::vector<float> canopyCover(cols * rows, -9999.0f);
-    std::vector<float> pointDensity(cols * rows, -9999.0f);
+    // Prepare metric output arrays
+    size_t numCells = cols * rows;
+    std::vector<float> bandMin(numCells, -9999.0f), bandMax(numCells, -9999.0f);
+    std::vector<float> bandMean(numCells, -9999.0f), bandStdDev(numCells, -9999.0f);
+    std::vector<float> bandVar(numCells, -9999.0f), bandCV(numCells, -9999.0f);
+    std::vector<float> bandSkew(numCells, -9999.0f), bandKurt(numCells, -9999.0f);
+    std::vector<float> bandCRR(numCells, -9999.0f), bandMode(numCells, -9999.0f);
+    std::vector<float> bandMedian(numCells, -9999.0f), bandIQR(numCells, -9999.0f);
+    std::vector<float> bandP01(numCells, -9999.0f), bandP05(numCells, -9999.0f);
+    std::vector<float> bandP10(numCells, -9999.0f), bandP20(numCells, -9999.0f);
+    std::vector<float> bandP25(numCells, -9999.0f), bandP30(numCells, -9999.0f);
+    std::vector<float> bandP40(numCells, -9999.0f), bandP50(numCells, -9999.0f);
+    std::vector<float> bandP60(numCells, -9999.0f), bandP70(numCells, -9999.0f);
+    std::vector<float> bandP75(numCells, -9999.0f), bandP80(numCells, -9999.0f);
+    std::vector<float> bandP90(numCells, -9999.0f), bandP95(numCells, -9999.0f);
+    std::vector<float> bandP99(numCells, -9999.0f);
+    std::vector<float> bandCover(numCells, -9999.0f), bandDensity(numCells, -9999.0f);
 
-    for (int i = 0; i < cols * rows; ++i) {
+    std::vector<float> bandIntMean(numCells, -9999.0f), bandIntStdDev(numCells, -9999.0f);
+
+    // Experimental metrics bands setup
+    std::vector<std::string> expNames;
+    std::map<std::string, std::vector<float>> expBands;
+    if (enableExp) {
+        expNames = fusion::metrics::GetExperimentalMetricsNames();
+        for (const auto& name : expNames) {
+            expBands[name] = std::vector<float>(numCells, -9999.0f);
+        }
+    }
+
+    for (size_t i = 0; i < numCells; ++i) {
         auto& cell = grid[i];
         if (!cell.elevations.empty()) {
-            double sum = std::accumulate(cell.elevations.begin(), cell.elevations.end(), 0.0);
-            double mean = sum / cell.elevations.size();
-            meanElev[i] = static_cast<float>(mean);
-
-            double sqSum = 0.0;
-            for (float val : cell.elevations) {
-                sqSum += (val - mean) * (val - mean);
-            }
-            stdDevElev[i] = static_cast<float>(std::sqrt(sqSum / cell.elevations.size()));
-
             std::vector<float> sortedElev = cell.elevations;
             std::sort(sortedElev.begin(), sortedElev.end());
-            size_t p95Idx = static_cast<size_t>(0.95 * (sortedElev.size() - 1));
-            p95Elev[i] = sortedElev[p95Idx];
+
+            size_t n = sortedElev.size();
+            double minV = sortedElev.front();
+            double maxV = sortedElev.back();
+            double sum = std::accumulate(sortedElev.begin(), sortedElev.end(), 0.0);
+            double mean = sum / n;
+
+            double sqSum = 0.0, cubeSum = 0.0, quadSum = 0.0;
+            for (float v : sortedElev) {
+                double diff = v - mean;
+                sqSum += diff * diff;
+                cubeSum += diff * diff * diff;
+                quadSum += diff * diff * diff * diff;
+            }
+
+            double var = (n > 1) ? (sqSum / (n - 1)) : 0.0;
+            double stdDev = std::sqrt(sqSum / n);
+            double cv = (mean != 0.0) ? (stdDev / mean) : 0.0;
+            double skew = (stdDev > 0.0) ? ((cubeSum / n) / std::pow(stdDev, 3.0)) : 0.0;
+            double kurt = (stdDev > 0.0) ? ((quadSum / n) / std::pow(stdDev, 4.0)) : 0.0;
+            double crr = (maxV > minV) ? ((mean - minV) / (maxV - minV)) : 0.0;
+
+            bandMin[i] = static_cast<float>(minV);
+            bandMax[i] = static_cast<float>(maxV);
+            bandMean[i] = static_cast<float>(mean);
+            bandStdDev[i] = static_cast<float>(stdDev);
+            bandVar[i] = static_cast<float>(var);
+            bandCV[i] = static_cast<float>(cv);
+            bandSkew[i] = static_cast<float>(skew);
+            bandKurt[i] = static_cast<float>(kurt);
+            bandCRR[i] = static_cast<float>(crr);
+
+            bandMode[i] = GetMode(sortedElev);
+            bandMedian[i] = GetPercentile(sortedElev, 0.50);
+            bandIQR[i] = GetPercentile(sortedElev, 0.75) - GetPercentile(sortedElev, 0.25);
+
+            bandP01[i] = GetPercentile(sortedElev, 0.01);
+            bandP05[i] = GetPercentile(sortedElev, 0.05);
+            bandP10[i] = GetPercentile(sortedElev, 0.10);
+            bandP20[i] = GetPercentile(sortedElev, 0.20);
+            bandP25[i] = GetPercentile(sortedElev, 0.25);
+            bandP30[i] = GetPercentile(sortedElev, 0.30);
+            bandP40[i] = GetPercentile(sortedElev, 0.40);
+            bandP50[i] = GetPercentile(sortedElev, 0.50);
+            bandP60[i] = GetPercentile(sortedElev, 0.60);
+            bandP70[i] = GetPercentile(sortedElev, 0.70);
+            bandP75[i] = GetPercentile(sortedElev, 0.75);
+            bandP80[i] = GetPercentile(sortedElev, 0.80);
+            bandP90[i] = GetPercentile(sortedElev, 0.90);
+            bandP95[i] = GetPercentile(sortedElev, 0.95);
+            bandP99[i] = GetPercentile(sortedElev, 0.99);
         }
 
-        if (cell.firstReturns > 0) {
-            canopyCover[i] = static_cast<float>(100.0 * cell.returnsAboveGround / cell.firstReturns);
+        int denom = firstOnly ? cell.firstReturns : cell.totalReturns;
+        if (denom > 0) {
+            bandCover[i] = static_cast<float>(100.0 * cell.returnsAboveHeightCut / denom);
         }
-        pointDensity[i] = static_cast<float>(cell.totalReturns / (cellSize * cellSize));
+        bandDensity[i] = static_cast<float>(cell.totalReturns / (cellSize * cellSize));
+
+        if (!noIntensity && !cell.intensities.empty()) {
+            double sumInt = std::accumulate(cell.intensities.begin(), cell.intensities.end(), 0.0);
+            double meanInt = sumInt / cell.intensities.size();
+            bandIntMean[i] = static_cast<float>(meanInt);
+
+            double sqInt = 0.0;
+            for (float iv : cell.intensities) {
+                sqInt += (iv - meanInt) * (iv - meanInt);
+            }
+            bandIntStdDev[i] = static_cast<float>(std::sqrt(sqInt / cell.intensities.size()));
+        }
+
+        if (enableExp && !cell.cellPoints.empty()) {
+            fusion::metrics::ExperimentalMetricsOptions opts;
+            opts.minHt = minHt;
+            opts.cellSize = cellSize;
+            opts.voxelSize = voxelSize;
+            auto expRes = fusion::metrics::ComputeExperimentalMetrics(cell.cellPoints, opts);
+            auto expMap = fusion::metrics::GetExperimentalMetricsAsMap(expRes);
+            for (const auto& name : expNames) {
+                expBands[name][i] = static_cast<float>(expMap[name]);
+            }
+        }
     }
 
     double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
-    std::filesystem::path outRasterPath = outDir / (inputPath.stem().string() + "_gridmetrics.tif");
+    std::string stem = inputPath.stem().string();
+    std::filesystem::path outRasterPath = outDir / (stem + "_gridmetrics.tif");
 
     fusion::raster::GDALRaster outRaster;
 
+    struct BandDef {
+        std::string name;
+        const std::vector<float>& data;
+    };
+
+    std::vector<BandDef> bandDefs = {
+        {"elev_min", bandMin}, {"elev_max", bandMax}, {"elev_mean", bandMean},
+        {"elev_stddev", bandStdDev}, {"elev_variance", bandVar}, {"elev_cv", bandCV},
+        {"elev_skewness", bandSkew}, {"elev_kurtosis", bandKurt}, {"elev_crr", bandCRR},
+        {"elev_mode", bandMode}, {"elev_median", bandMedian}, {"elev_iqr", bandIQR},
+        {"elev_p01", bandP01}, {"elev_p05", bandP05}, {"elev_p10", bandP10},
+        {"elev_p20", bandP20}, {"elev_p25", bandP25}, {"elev_p30", bandP30},
+        {"elev_p40", bandP40}, {"elev_p50", bandP50}, {"elev_p60", bandP60},
+        {"elev_p70", bandP70}, {"elev_p75", bandP75}, {"elev_p80", bandP80},
+        {"elev_p90", bandP90}, {"elev_p95", bandP95}, {"elev_p99", bandP99},
+        {"canopy_cover", bandCover}, {"point_density", bandDensity}
+    };
+
+    if (!noIntensity) {
+        bandDefs.push_back({"int_mean", bandIntMean});
+        bandDefs.push_back({"int_stddev", bandIntStdDev});
+    }
+
+    if (enableExp) {
+        for (const auto& name : expNames) {
+            bandDefs.push_back({"exp_" + name, expBands[name]});
+        }
+    }
+
     if (outputMode == "singleband") {
         std::cout << "[GridMetrics] Writing Single-band GeoTIFF rasters to: " << outDir << "...\n";
-
-        std::filesystem::path meanPath = outDir / (inputPath.stem().string() + "_elev_mean.tif");
-        outRaster.Create(meanPath, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0);
-        outRaster.SetBandDescription(1, "elev_mean");
-        outRaster.WriteBandData(1, meanElev);
-        outRaster.Close();
-
-        std::filesystem::path p95Path = outDir / (inputPath.stem().string() + "_elev_p95.tif");
-        outRaster.Create(p95Path, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0);
-        outRaster.SetBandDescription(1, "elev_p95");
-        outRaster.WriteBandData(1, p95Elev);
-        outRaster.Close();
+        for (const auto& bdef : bandDefs) {
+            std::filesystem::path bpath = outDir / (stem + "_" + bdef.name + ".tif");
+            if (outRaster.Create(bpath, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0)) {
+                outRaster.SetBandDescription(1, bdef.name);
+                outRaster.WriteBandData(1, bdef.data);
+                outRaster.Close();
+            }
+        }
     } else {
-        std::cout << "[GridMetrics] Writing Multi-band GeoTIFF raster to: " << outRasterPath << "...\n";
-        outRaster.Create(outRasterPath, cols, rows, 5, "Float32", "GTiff", "", geotransform, -9999.0);
+        std::cout << "[GridMetrics] Writing Multi-band GeoTIFF raster to: " << outRasterPath << " ("
+                  << bandDefs.size() << " bands)...\n";
+        if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, -9999.0)) {
+            for (size_t b = 0; b < bandDefs.size(); ++b) {
+                outRaster.SetBandDescription(static_cast<int>(b + 1), bandDefs[b].name);
+                outRaster.WriteBandData(static_cast<int>(b + 1), bandDefs[b].data);
+            }
+            outRaster.Close();
+        }
+    }
 
-        outRaster.SetBandDescription(1, "elev_mean");
-        outRaster.WriteBandData(1, meanElev);
+    // Export CSV Summary Report if requested
+    std::string outRootStr = parser.GetOption("outroot").value_or(stem);
+    std::filesystem::path csvPath = outDir / (outRootStr + "_grid_elevation_metrics.csv");
+    std::ofstream csv(csvPath);
+    if (csv.is_open()) {
+        std::cout << "[GridMetrics] Exporting CSV Elevation Metrics table to: " << csvPath << "...\n";
+        csv << "Col,Row,X,Y,TotalReturns,FirstReturns,ElevMin,ElevMax,ElevMean,ElevStdDev,ElevVar,ElevCV,ElevSkew,ElevKurt,ElevCRR,ElevMode,ElevMedian,ElevIQR,"
+            << "ElevP01,ElevP05,ElevP10,ElevP20,ElevP25,ElevP30,ElevP40,ElevP50,ElevP60,ElevP70,ElevP75,ElevP80,ElevP90,ElevP95,ElevP99,CanopyCover,PointDensity";
+        for (size_t s = 0; s < strata.size(); ++s) {
+            csv << ",StrataCnt_" << s;
+        }
+        if (enableExp) {
+            for (const auto& name : expNames) {
+                csv << "," << name;
+            }
+        }
+        csv << "\n";
 
-        outRaster.SetBandDescription(2, "elev_stddev");
-        outRaster.WriteBandData(2, stdDevElev);
+        for (int r = 0; r < rows; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                size_t idx = r * cols + c;
+                const auto& cell = grid[idx];
+                double x = header.minX + (c + 0.5) * cellSize;
+                double y = header.maxY - (r + 0.5) * cellSize;
 
-        outRaster.SetBandDescription(3, "elev_p95");
-        outRaster.WriteBandData(3, p95Elev);
+                csv << c << "," << r << "," << x << "," << y << ","
+                    << cell.totalReturns << "," << cell.firstReturns << ","
+                    << bandMin[idx] << "," << bandMax[idx] << "," << bandMean[idx] << ","
+                    << bandStdDev[idx] << "," << bandVar[idx] << "," << bandCV[idx] << ","
+                    << bandSkew[idx] << "," << bandKurt[idx] << "," << bandCRR[idx] << ","
+                    << bandMode[idx] << "," << bandMedian[idx] << "," << bandIQR[idx] << ","
+                    << bandP01[idx] << "," << bandP05[idx] << "," << bandP10[idx] << ","
+                    << bandP20[idx] << "," << bandP25[idx] << "," << bandP30[idx] << ","
+                    << bandP40[idx] << "," << bandP50[idx] << "," << bandP60[idx] << ","
+                    << bandP70[idx] << "," << bandP75[idx] << "," << bandP80[idx] << ","
+                    << bandP90[idx] << "," << bandP95[idx] << "," << bandP99[idx] << ","
+                    << bandCover[idx] << "," << bandDensity[idx];
 
-        outRaster.SetBandDescription(4, "canopy_cover");
-        outRaster.WriteBandData(4, canopyCover);
-
-        outRaster.SetBandDescription(5, "point_density");
-        outRaster.WriteBandData(5, pointDensity);
-
-        outRaster.Close();
+                for (size_t s = 0; s < cell.strataCounts.size(); ++s) {
+                    csv << "," << cell.strataCounts[s];
+                }
+                if (enableExp) {
+                    for (const auto& name : expNames) {
+                        csv << "," << expBands[name][idx];
+                    }
+                }
+                csv << "\n";
+            }
+        }
+        csv.close();
     }
 
     std::cout << "[GridMetrics] Grid metrics processing completed successfully.\n";
     return 0;
 }
+

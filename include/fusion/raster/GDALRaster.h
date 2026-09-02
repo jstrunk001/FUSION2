@@ -87,6 +87,10 @@ public:
                                  const std::filesystem::path& outputGeoTIFFPath,
                                  const std::string& compressOption = "LZW");
 
+    static bool ConvertToCOG(const std::filesystem::path& inputRasterPath,
+                            const std::filesystem::path& outputCOGPath,
+                            const std::string& compressOption = "DEFLATE");
+
 private:
     class Impl;
     std::unique_ptr<Impl> m_impl;

@@ -47,6 +47,15 @@ struct PipelineJobOptions {
     int numThreads{4};
     bool generateVRT{true};
     bool mergeGeoTIFF{false};
+    std::string groundPath;
+    double minHt{2.0};
+    double heightCut{2.0};
+    std::string outlier;
+    std::string pointClass;
+    bool firstOnly{false};
+    bool noIntensity{false};
+    std::string strata;
+    std::string intStrata;
 };
 
 class BatchPipeline {

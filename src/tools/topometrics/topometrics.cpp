@@ -10,6 +10,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("topometrics", "Computes Topographic Terrain Metrics (Slope, Aspect) from DEM GeoTIFF");
+    parser.SetPositionalArgsUsage("<input_dem.tif>");
     parser.AddOption("output", "Output multi-band GeoTIFF raster path", "topo_metrics.tif");
 
     if (!parser.Parse(argc, argv)) {

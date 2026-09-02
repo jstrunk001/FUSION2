@@ -10,6 +10,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("clipdata", "Clips LAS/LAZ point clouds by bounding box or spatial extents");
+    parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("extent", "Bounding box LLX,LLY,URX,URY");
     parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization");
     parser.AddOption("zmin", "Minimum height above ground or elevation");

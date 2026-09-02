@@ -78,6 +78,26 @@ fusion_update/
 
 ---
 
+### Build Profiles: Minimal (Default) vs Full GDAL
+
+FUSION Update provides two build configurations:
+
+1. **Minimal Standalone Profile (Default - Recommended for Distribution)**:
+   - Built against a tailored, minimal static GDAL with only essential remote sensing formats: **GeoTIFF**, **Cloud Optimized GeoTIFF (COG)**, and **VRT (Virtual Raster)**.
+   - Enables internal Deflate and LERC compression (ideal for floating-point Canopy Height Models and DEMs).
+   - Links static PROJ + SQLite3 for complete EPSG and coordinate reference system support.
+   - Omits heavy, unneeded dependencies (OpenBLAS, Poppler, MySQL, PostgreSQL, NetCDF, HDF5).
+   - Produces compact, self-contained executables (**~8–15 MB each**) with **zero external DLL dependencies**.
+   - Builds automatically when running `.\build.ps1` (or via `.\build_gdal_minimal.ps1`).
+
+2. **Full / Extended Multi-Format Profile**:
+   - Links a complete system or Rtools static GDAL installation with all 150+ raster/vector formats enabled (HDF5, NetCDF, PostGIS, etc.).
+   - Useful for specialized workflows requiring non-TIFF scientific raster formats.
+   - Produces larger standalone binaries (~108 MB stripped).
+   - Enabled by passing `.\build.ps1 -FullGDAL` or passing `-DGDAL_DIR=<path-to-full-gdal>` to CMake.
+
+---
+
 ### Quick Build (`build.ps1`)
 
 From inside the `fusion_update` directory, in PowerShell:
@@ -86,66 +106,44 @@ From inside the `fusion_update` directory, in PowerShell:
 .\build.ps1
 ```
 
-This configures CMake, compiles all 13 tools in Release mode, collects the
-resulting `.exe` files into `bin/`, and zips them into a versioned bundle at
-`dist/fusion_update_tools_v<version>-<timestamp>.zip`. If `dist/` already
-holds a bundle from a previous run, that older zip is moved into `archive/`
-first, so it isn't lost. Neither `dist/` nor `archive/` is tracked by git --
-see "Distributing built tools" below for where the bundle actually goes.
+This ensures the minimal static GDAL is ready (compiling it if not already present), configures CMake in Release mode, compiles all 13 tools, strips debug symbols, collects the resulting `.exe` files into `bin/`, and zips them into a versioned bundle at `dist/fusion_update_tools_v<version>-<timestamp>.zip`. If `dist/` already holds a bundle from a previous run, that older zip is moved into `archive/` first.
 
 Useful options:
-- `.\build.ps1 -VcpkgRoot "C:\path\to\vcpkg"` -- pass a vcpkg toolchain path
-  (same as the `-DCMAKE_TOOLCHAIN_FILE` flag below), or set the `VCPKG_ROOT`
-  environment variable once and omit the flag.
-- `.\build.ps1 -Reconfigure` -- wipe and re-run CMake configure (needed after
-  changing `CMakeLists.txt` dependencies, not needed for ordinary code
-  changes).
-- `.\build.ps1 -Publish` -- after building, publish the bundle as a GitHub
-  Release asset via `gh` (requires the GitHub CLI, authenticated with repo
-  access) and delete the previous `tools-v*` release. See "Distributing
-  built tools" below.
+- `.\build.ps1` -- build minimal, lightweight standalone tools (~8–15 MB each).
+- `.\build.ps1 -FullGDAL` -- build using full multi-format static GDAL (NetCDF, HDF, etc.).
+- `.\build.ps1 -GDALDir "C:\path\to\cmake\gdal"` -- use a custom user-provided GDAL CMake directory.
+- `.\build.ps1 -VcpkgRoot "C:\path\to\vcpkg"` -- pass a vcpkg toolchain path.
+- `.\build.ps1 -Reconfigure` -- wipe and re-run CMake configure.
+- `.\build.ps1 -Publish` -- after building, publish the bundle as a GitHub Release asset via `gh` and delete the previous `tools-v*` release.
 
 ### Manual Build (equivalent CMake commands)
 
-If you'd rather run CMake directly instead of `build.ps1`:
+If building manually with CMake:
 
-1. **Create and enter the build directory:**
-   ```bash
-   mkdir build && cd build
+1. **Build minimal GDAL (once):**
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\build_gdal_minimal.ps1
    ```
-   *(On Windows Command Prompt, run `mkdir build` followed by `cd build` if `&&` is not enabled).*
 
-2. **Generate build configuration with CMake:**
+2. **Generate build configuration with CMake pointing to minimal GDAL:**
    ```bash
-   cmake ..
+   cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DGDAL_DIR=deps/gdal_minimal/lib/cmake/gdal
    ```
-   *(Note: If building with `vcpkg` for dependencies, supply the toolchain path: `cmake .. -DCMAKE_TOOLCHAIN_FILE=[path-to-vcpkg]/scripts/buildsystems/vcpkg.cmake`)*
 
 3. **Compile all executables in Release mode:**
    ```bash
-   cmake --build . --config Release
+   cmake --build build --config Release --parallel
    ```
 
-Once compilation finishes, all 13 tool binaries (`gridmetrics.exe`, `clipdata.exe`, `groundfilter.exe`, `canopymodel.exe`, `ltktools.exe`, `canopymaxima.exe`, `treeseg.exe`, `cloudmetrics.exe`, `topometrics.exe`, `filterdata.exe`, `thindata.exe`, `returndensity.exe`, `catalog.exe`) will be available in the `build/` (or `build/Release/`) directory.
+Once compilation finishes, all 13 tool binaries will be available in `build/` (or `bin/` if using `build.ps1`).
 
 ---
 
 ### Distributing built tools
 
-The compiled executables are large (roughly 160 MB each, ~2 GB for all 13
-together), well past GitHub's 100 MB per-file limit for ordinary commits.
-Rather than committing the exes or a zip of them into the git tree, built
-bundles are published as **GitHub Release assets**:
+With the minimal static profile and symbol stripping, each tool executable is compact (~8–15 MB each, ~120–150 MB total for all 13 tools combined), with zero external DLL dependencies.
 
-- `build.ps1 -Publish` zips the current `bin/` contents, uploads the zip to
-  a new GitHub Release tagged `tools-v<version>-<timestamp>`, and deletes
-  the previous `tools-v*` release (both the release and its git tag) so
-  only the latest bundle is published at any time.
-- Every bundle `build.ps1` produces locally is still kept, either as the
-  current `dist/*.zip` or moved into `archive/*.zip` once superseded --
-  only the *published* copy on GitHub is replaced, not your local history
-  of them.
-- To get a previously built bundle, download the asset from the
-  repository's [Releases page](https://github.com/jstrunk001/FUSION2/releases)
-  rather than looking for it in the source tree.
+Built bundles are published as **GitHub Release assets**:
+- `build.ps1 -Publish` zips the current `bin/` contents, uploads the zip to a new GitHub Release tagged `tools-v<version>-<timestamp>`, and cleans up the previous release tag.
+- To download pre-built binaries, visit the repository's [Releases page](https://github.com/jstrunk001/FUSION2/releases).
 

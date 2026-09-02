@@ -2,6 +2,7 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/metrics/ExperimentalMetrics.h"
 
 #include <iostream>
 #include <fstream>
@@ -30,8 +31,12 @@ struct LidarStats {
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("cloudmetrics", "Computes Summary Metrics for Point Cloud Clips");
+    parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("output", "Output CSV file path", "cloud_metrics.csv");
     parser.AddOption("minht", "Minimum height cutoff for canopy metrics (m)", "2.0");
+    parser.AddOption("cellsize", "Grid cell size for 2D area/volume metrics (m)", "10.0");
+    parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (m)", "20.0");
+    parser.AddFlag("exp", "Compute additional experimental metrics from RSForTools");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -47,6 +52,9 @@ int main(int argc, char* argv[]) {
     std::filesystem::path inputPath = posArgs[0];
     std::string outputPath = parser.GetOption("output").value_or("cloud_metrics.csv");
     double minHt = std::stod(parser.GetOption("minht").value_or("2.0"));
+    double cellSize = std::stod(parser.GetOption("cellsize").value_or("10.0"));
+    double voxelSize = std::stod(parser.GetOption("voxelsize").value_or("20.0"));
+    bool enableExp = parser.HasFlag("exp");
 
     fusion::lidar::LASReader reader;
     if (!reader.Open(inputPath)) {
@@ -57,12 +65,16 @@ int main(int argc, char* argv[]) {
     std::cout << "[CloudMetrics] Processing point cloud metrics for: " << inputPath << "\n";
 
     std::vector<double> heights;
+    std::vector<fusion::metrics::Point3D> allPoints;
     fusion::lidar::PointRecord pt;
     uint64_t totalPts = 0;
     uint64_t ptsAboveMin = 0;
 
     while (reader.ReadNextPoint(pt)) {
         totalPts++;
+        if (enableExp) {
+            allPoints.push_back({pt.x, pt.y, pt.z});
+        }
         if (pt.z >= minHt) {
             heights.push_back(pt.z);
             ptsAboveMin++;
@@ -109,13 +121,30 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    fusion::metrics::ExperimentalMetricsResults expRes;
+    if (enableExp && !allPoints.empty()) {
+        fusion::metrics::ExperimentalMetricsOptions opts;
+        opts.minHt = minHt;
+        opts.cellSize = cellSize;
+        opts.voxelSize = voxelSize;
+        expRes = fusion::metrics::ComputeExperimentalMetrics(allPoints, opts);
+    }
+
     std::ofstream outFile(outputPath);
     if (!outFile.is_open()) {
         std::cerr << "Error: Failed to create output CSV file: " << outputPath << "\n";
         return 1;
     }
 
-    outFile << "Filename,TotalPoints,CanopyPoints,MinZ,MaxZ,MeanZ,StdDevZ,P05,P25,P50,P75,P95,P99,CanopyCoverPct,CRR\n";
+    outFile << "Filename,TotalPoints,CanopyPoints,MinZ,MaxZ,MeanZ,StdDevZ,P05,P25,P50,P75,P95,P99,CanopyCoverPct,CRR";
+    if (enableExp) {
+        auto expNames = fusion::metrics::GetExperimentalMetricsNames();
+        for (const auto& name : expNames) {
+            outFile << "," << name;
+        }
+    }
+    outFile << "\n";
+
     outFile << inputPath.filename().string() << ","
             << stats.totalPoints << ","
             << stats.pointsAboveMinHt << ","
@@ -130,11 +159,25 @@ int main(int argc, char* argv[]) {
             << stats.p95 << ","
             << stats.p99 << ","
             << stats.canopyCover << ","
-            << stats.canopyReliefRatio << "\n";
+            << stats.canopyReliefRatio;
+
+    if (enableExp) {
+        auto expMap = fusion::metrics::GetExperimentalMetricsAsMap(expRes);
+        auto expNames = fusion::metrics::GetExperimentalMetricsNames();
+        for (const auto& name : expNames) {
+            outFile << "," << expMap[name];
+        }
+    }
+    outFile << "\n";
     outFile.close();
 
     std::cout << "[CloudMetrics] Successfully computed metrics (" << totalPts << " total points).\n";
+    if (enableExp) {
+        std::cout << "[CloudMetrics] Experimental metrics calculated using cellSize=" << cellSize
+                  << "m, voxelSize=" << voxelSize << "m.\n";
+    }
     std::cout << "[CloudMetrics] Output written to: " << outputPath << "\n";
 
     return 0;
 }
+

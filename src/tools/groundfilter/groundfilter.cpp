@@ -11,6 +11,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("groundfilter", "Filters ground points from LAS/LAZ point cloud and generates GeoTIFF ground DEM");
+    parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("cellsize", "Output DEM cell size", "1.0");
     parser.AddOption("output-dem", "Output GeoTIFF ground DEM file path");
     parser.AddOption("output-las", "Output filtered ground LAS/LAZ file path");

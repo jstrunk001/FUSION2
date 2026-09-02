@@ -11,6 +11,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("catalog", "Summarizes LAS/LAZ point cloud acquisition stats and density rasters");
+    parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("density", "Output GeoTIFF point density raster cell size");
     parser.AddOption("output", "Output CSV summary report file path");
 

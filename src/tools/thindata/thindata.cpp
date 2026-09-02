@@ -10,6 +10,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("thindata", "Spatial Point Cloud Thinning / Decimation Tool");
+    parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("output", "Output thinned LAS/LAZ file path", "thinned_output.laz");
     parser.AddOption("cellsize", "Grid cell size for 2D spatial thinning (m)", "1.0");
 

@@ -105,6 +105,8 @@ bool GDALRaster::Create(const std::filesystem::path& filePath,
     if (driverName == "GTiff") {
         options = CSLSetNameValue(options, "COMPRESS", "LZW");
         options = CSLSetNameValue(options, "TILED", "YES");
+    } else if (driverName == "COG") {
+        options = CSLSetNameValue(options, "COMPRESS", "DEFLATE");
     }
 
     m_impl->dataset = driver->Create(filePath.string().c_str(), width, height, numBands, dt, options);
@@ -314,6 +316,35 @@ bool GDALRaster::MergeVRTToGeoTIFF(const std::filesystem::path& vrtPath,
                                        &error);
     GDALTranslateOptionsFree(options);
     GDALClose(vrtDS);
+
+    if (outDS) {
+        GDALClose(outDS);
+        return true;
+    }
+    return false;
+}
+
+bool GDALRaster::ConvertToCOG(const std::filesystem::path& inputRasterPath,
+                              const std::filesystem::path& outputCOGPath,
+                              const std::string& compressOption) {
+    GDALDataset* inDS = static_cast<GDALDataset*>(GDALOpen(inputRasterPath.string().c_str(), GA_ReadOnly));
+    if (!inDS) return false;
+
+    std::string compStr = "COMPRESS=" + (compressOption.empty() ? std::string("DEFLATE") : compressOption);
+    char* argv[] = {
+        const_cast<char*>("-of"), const_cast<char*>("COG"),
+        const_cast<char*>("-co"), const_cast<char*>(compStr.c_str()),
+        nullptr
+    };
+
+    GDALTranslateOptions* options = GDALTranslateOptionsNew(argv, nullptr);
+    int error = 0;
+    GDALDatasetH outDS = GDALTranslate(outputCOGPath.string().c_str(),
+                                       inDS,
+                                       options,
+                                       &error);
+    GDALTranslateOptionsFree(options);
+    GDALClose(inDS);
 
     if (outDS) {
         GDALClose(outDS);

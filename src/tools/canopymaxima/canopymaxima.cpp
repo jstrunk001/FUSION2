@@ -20,6 +20,7 @@ struct TreeTop {
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("canopymaxima", "Individual Tree Top Detection via Variable Window Local Maxima (VLM) on CHM GeoTIFF");
+    parser.SetPositionalArgsUsage("<input_chm.tif>");
     parser.AddOption("output", "Output CSV file path for tree tops", "tree_tops.csv");
     parser.AddOption("minht", "Minimum tree height threshold (m)", "2.0");
     parser.AddOption("window_a", "Window polynomial coefficient A (constant)", "0.5");

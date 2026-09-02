@@ -1,0 +1,35 @@
+project:
+  type: website
+  output-dir: output/html
+
+website:
+  title: "FUSION Documentation Suite"
+  sidebar:
+    style: "docked"
+    search: true
+    contents:
+      - text: "Overview & Architecture"
+        file: index.md
+      - text: "C++ Library API Reference"
+        file: API_REFERENCE.md
+      - text: "Lidar & Terrain Metrics Reference"
+        file: METRICS_REFERENCE.md
+      - text: "Executable Suite & CLI Reference"
+        file: CLI_TOOLS_REFERENCE.md
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-copy: true
+    html-math-method: katex
+  pdf:
+    documentclass: article
+    geometry:
+      - margin=1in
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    colorlinks: true

@@ -11,6 +11,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("returndensity", "Generates Point Density (pts/m2) and Return Ratio GeoTIFF Rasters");
+    parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("output", "Output multi-band GeoTIFF raster path", "density_metrics.tif");
     parser.AddOption("cellsize", "Output grid cell size (m)", "5.0");
 

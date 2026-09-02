@@ -21,6 +21,8 @@ param(
   , [string]$VcpkgRoot = $env:VCPKG_ROOT
   , [string]$BuildDir = "build"
   , [switch]$Reconfigure
+  , [switch]$FullGDAL
+  , [string]$GDALDir = ""
   )
 
 $ErrorActionPreference = "Stop"
@@ -85,8 +87,39 @@ if (-not $have_cmake -or -not $have_make) {
     $mingw_bin = Join-Path $rtools_root.FullName "x86_64-w64-mingw32.static.posix\bin"
     $usr_bin = Join-Path $rtools_root.FullName "usr\bin"
     $env:Path = "$mingw_bin;$usr_bin;$env:Path"
-    $gdal_dir_override = Join-Path $rtools_root.FullName "x86_64-w64-mingw32.static.posix\lib\cmake\gdal"
     Write-Host "cmake/make not on PATH -- using Rtools toolchain at $($rtools_root.FullName)"
+}
+
+# Determine GDAL directory
+if ($GDALDir) {
+    $gdal_dir_override = $GDALDir
+    Write-Host "Using user-specified GDAL directory: $gdal_dir_override"
+} elseif ($FullGDAL) {
+    $rtools_root = Get-ChildItem "C:\" -Directory -Filter "rtools*" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    $gdal_dir_override = Join-Path $rtools_root.FullName "x86_64-w64-mingw32.static.posix\lib\cmake\gdal"
+    Write-Host "Using Full Rtools static GDAL (multi-format profile): $gdal_dir_override"
+} else {
+    # Default: Minimal Static GDAL (lightweight, GeoTIFF / COG only)
+    $minimal_gdal_dir = Join-Path $repo_root "deps\gdal_minimal"
+    $minimal_cmake_dir = Join-Path $minimal_gdal_dir "lib\cmake\gdal"
+    if (-not (Test-Path $minimal_cmake_dir)) {
+        $minimal_cmake_dir = Join-Path $minimal_gdal_dir "lib64\cmake\gdal"
+    }
+    if (-not (Test-Path $minimal_cmake_dir)) {
+        Write-Host "Minimal static GDAL not found. Building it now via build_gdal_minimal.ps1..."
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $repo_root "build_gdal_minimal.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to build minimal static GDAL."
+        }
+        if (Test-Path (Join-Path $minimal_gdal_dir "lib\cmake\gdal")) {
+            $minimal_cmake_dir = Join-Path $minimal_gdal_dir "lib\cmake\gdal"
+        } elseif (Test-Path (Join-Path $minimal_gdal_dir "lib64\cmake\gdal")) {
+            $minimal_cmake_dir = Join-Path $minimal_gdal_dir "lib64\cmake\gdal"
+        }
+    }
+    $gdal_dir_override = $minimal_cmake_dir
+    Write-Host "Using Minimal Static GDAL (lightweight GeoTIFF/COG profile): $gdal_dir_override"
 }
 
 #3. configure the CMake build directory (only if missing, or -Reconfigure passed)
@@ -95,7 +128,7 @@ if ($Reconfigure -and (Test-Path $BuildDir)) {
     Remove-Item -Recurse -Force $BuildDir -Confirm:$false
 }
 if (-not (Test-Path $cache_path)) {
-    $configure_args = @("-S", ".", "-B", $BuildDir, "-G", "Unix Makefiles")
+    $configure_args = @("-S", ".", "-B", $BuildDir, "-G", "Unix Makefiles", "-DCMAKE_BUILD_TYPE=Release")
     if ($gdal_dir_override) {
         $configure_args += "-DGDAL_DIR=$gdal_dir_override"
     }
@@ -128,6 +161,48 @@ foreach ($tool_name in $tool_names) {
 }
 Write-Host "Copied $($tool_names.Count) executables into bin/."
 
+#5a. strip debug/relocation symbols from all executables in bin/
+$strip_cmd = Get-Command strip -ErrorAction SilentlyContinue
+if (-not $strip_cmd) {
+    $rtools_strip = Get-ChildItem "C:\rtools*" -Recurse -Filter "strip.exe" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($rtools_strip) { $strip_cmd = $rtools_strip.FullName }
+}
+if ($strip_cmd) {
+    Write-Host "Stripping symbols from executables in bin/..."
+    foreach ($tool_name in $tool_names) {
+        $exe_path = Join-Path "bin" "$tool_name.exe"
+        if (Test-Path $exe_path) {
+            Invoke-WithRetry { & $strip_cmd $exe_path }
+        }
+    }
+}
+
+#5b. render documentation (HTML website & PDF manual) via Quarto if available
+$pdf_doc_path = Join-Path "docs" "pdf\FUSION_Documentation.pdf"
+if (Get-Command quarto -ErrorAction SilentlyContinue) {
+    Write-Host "Rendering documentation (HTML & PDF) via Quarto..."
+    $docs_dir = Join-Path $repo_root "docs"
+    & quarto render $docs_dir --to html
+    
+    # Ensure docs/pdf directory exists
+    $pdf_dir = Join-Path $docs_dir "pdf"
+    if (-not (Test-Path $pdf_dir)) {
+        New-Item -ItemType Directory -Path $pdf_dir | Out-Null
+    }
+    
+    # Render PDF manual using Quarto's built-in Typst engine
+    & quarto render (Join-Path $docs_dir "index.md") --to typst --output "FUSION_Documentation.pdf"
+    $rendered_pdf = Join-Path $docs_dir "output\FUSION_Documentation.pdf"
+    if (Test-Path $rendered_pdf) {
+        Copy-Item $rendered_pdf $pdf_doc_path -Force
+        Remove-Item $rendered_pdf -Force -ErrorAction SilentlyContinue
+        Write-Host "Generated PDF manual at docs/pdf/FUSION_Documentation.pdf"
+    }
+} else {
+    Write-Host "Quarto not found -- skipping HTML/PDF documentation build."
+}
+
 #6. archive the previous bundle (if any) before making a new one
 if (-not (Test-Path "dist")) {
     New-Item -ItemType Directory -Path "dist" | Out-Null
@@ -141,18 +216,19 @@ foreach ($previous_bundle in $previous_bundles) {
     Write-Host "Archived previous bundle: archive/$($previous_bundle.Name)"
 }
 
-#7. zip the freshly built exes into the new versioned bundle, then verify
-#   the zip actually contains all 13 exes -- Compress-Archive can report a
-#   per-file error (e.g. a transient antivirus lock) without treating it as
-#   a terminating failure, so a "success" message alone isn't proof
+#7. zip the freshly built exes (and PDF manual if present) into the new versioned bundle
 $bundle_name = "fusion_update_tools_v$bundle_version.zip"
 $bundle_path = Join-Path "dist" $bundle_name
-$exe_paths = $tool_names | ForEach-Object { Join-Path "bin" "$_.exe" }
+$zip_paths = $tool_names | ForEach-Object { Join-Path "bin" "$_.exe" }
+if (Test-Path $pdf_doc_path) {
+    $zip_paths += $pdf_doc_path
+}
+
 Invoke-WithRetry {
     if (Test-Path $bundle_path) {
         Remove-Item $bundle_path -Force
     }
-    Compress-Archive -Path $exe_paths -DestinationPath $bundle_path -ErrorAction Stop
+    Compress-Archive -Path $zip_paths -DestinationPath $bundle_path -ErrorAction Stop
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -177,10 +253,15 @@ if ($Publish) {
         Write-Host "Deleting previous release: $existing_tag"
         & gh release delete $existing_tag --yes --cleanup-tag
     }
-    & gh release create $release_tag $bundle_path `
+    $release_assets = @($bundle_path)
+    if (Test-Path $pdf_doc_path) {
+        $release_assets += $pdf_doc_path
+    }
+    & gh release create $release_tag @release_assets `
         --title "FUSION Update Tools v$bundle_version" `
-        --notes "Automated build bundle of all 13 CLI executables (gridmetrics, clipdata, groundfilter, canopymodel, catalog, canopymaxima, treeseg, cloudmetrics, topometrics, filterdata, thindata, returndensity, ltktools)."
+        --notes "Automated build bundle of all 13 CLI executables (gridmetrics, clipdata, groundfilter, canopymodel, catalog, canopymaxima, treeseg, cloudmetrics, topometrics, filterdata, thindata, returndensity, ltktools) and documentation manual."
     Write-Host "Published release: $release_tag"
 }
+
 
 Write-Host "Done."

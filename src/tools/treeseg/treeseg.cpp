@@ -23,6 +23,7 @@ struct PixelNode {
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("treeseg", "Individual Tree Crown Watershed Segmentation on CHM GeoTIFF");
+    parser.SetPositionalArgsUsage("<input_chm.tif>");
     parser.AddOption("output_grid", "Output GeoTIFF raster path for tree segments", "crown_segments.tif");
     parser.AddOption("output_csv", "Output CSV summary table path", "crown_summary.csv");
     parser.AddOption("minht", "Minimum height cutoff for segmentation (m)", "2.0");

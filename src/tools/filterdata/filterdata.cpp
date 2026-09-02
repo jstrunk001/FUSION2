@@ -10,6 +10,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("filterdata", "Point Cloud Filtering Tool (Elevation, Return Type, Scan Angle)");
+    parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("output", "Output filtered LAS/LAZ file path", "filtered_output.laz");
     parser.AddOption("minz", "Minimum Z elevation threshold");
     parser.AddOption("maxz", "Maximum Z elevation threshold");

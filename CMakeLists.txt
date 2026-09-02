@@ -4,6 +4,22 @@ project(FUSIONUpdate VERSION 5.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:Release>:-ffunction-sections>
+        $<$<CONFIG:Release>:-fdata-sections>
+    )
+    add_link_options(
+        $<$<CONFIG:Release>:-Wl,--gc-sections>
+        $<$<CONFIG:Release>:-s>
+    )
+endif()
+
 # Find GDAL using CMake Config mode to automatically pull in static dependencies
 find_package(GDAL CONFIG REQUIRED)
 
@@ -18,6 +34,7 @@ add_library(fusion_core STATIC
     src/libfusion_core/LASPointCloud.cpp
     src/libfusion_core/BatchPipeline.cpp
     src/libfusion_core/StatusMessenger.cpp
+    src/libfusion_core/ExperimentalMetrics.cpp
 )
 
 target_link_libraries(fusion_core PUBLIC GDAL::GDAL)
