@@ -27,6 +27,30 @@ $ErrorActionPreference = "Stop"
 $repo_root = $PSScriptRoot
 Set-Location $repo_root
 
+# a freshly written .exe is sometimes briefly locked by antivirus real-time
+# scanning right after the file handle closes, which makes an immediate
+# Copy-Item or Compress-Archive read fail with "used by another process" --
+# this retries a few times with a short pause instead of failing the build
+function Invoke-WithRetry {
+    param(
+        [scriptblock]$Action
+      , [int]$MaxAttempts = 5
+      , [int]$DelaySeconds = 2
+      )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            & $Action
+            return
+        } catch {
+            if ($attempt -eq $MaxAttempts) {
+                throw
+            }
+            Write-Host "  (attempt $attempt failed: $($_.Exception.Message) -- retrying)"
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
 $tool_names = @(
     "ltktools", "gridmetrics", "clipdata", "groundfilter", "canopymodel"
   , "catalog", "canopymaxima", "treeseg", "cloudmetrics", "topometrics"
@@ -44,13 +68,37 @@ $build_stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $bundle_version = "$project_version-$build_stamp"
 Write-Host "Building FUSION Update tools v$bundle_version"
 
-#2. configure the CMake build directory (only if missing, or -Reconfigure passed)
+#2. make sure cmake/gcc/make are reachable -- on this machine GDAL is built
+#   into the Rtools mingw toolchain rather than a system-wide install, and
+#   Rtools is normally only put on PATH by an active R session, not by a
+#   plain terminal. Fall back to searching for it if the tools aren't
+#   already on PATH (e.g. someone installs a standalone toolchain later).
+$have_cmake = Get-Command cmake -ErrorAction SilentlyContinue
+$have_make = Get-Command make -ErrorAction SilentlyContinue
+$gdal_dir_override = $null
+if (-not $have_cmake -or -not $have_make) {
+    $rtools_root = Get-ChildItem "C:\" -Directory -Filter "rtools*" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $rtools_root) {
+        throw "cmake/make not found on PATH, and no Rtools install found under C:\ to fall back to."
+    }
+    $mingw_bin = Join-Path $rtools_root.FullName "x86_64-w64-mingw32.static.posix\bin"
+    $usr_bin = Join-Path $rtools_root.FullName "usr\bin"
+    $env:Path = "$mingw_bin;$usr_bin;$env:Path"
+    $gdal_dir_override = Join-Path $rtools_root.FullName "x86_64-w64-mingw32.static.posix\lib\cmake\gdal"
+    Write-Host "cmake/make not on PATH -- using Rtools toolchain at $($rtools_root.FullName)"
+}
+
+#3. configure the CMake build directory (only if missing, or -Reconfigure passed)
 $cache_path = Join-Path $BuildDir "CMakeCache.txt"
 if ($Reconfigure -and (Test-Path $BuildDir)) {
     Remove-Item -Recurse -Force $BuildDir -Confirm:$false
 }
 if (-not (Test-Path $cache_path)) {
-    $configure_args = @("-S", ".", "-B", $BuildDir)
+    $configure_args = @("-S", ".", "-B", $BuildDir, "-G", "Unix Makefiles")
+    if ($gdal_dir_override) {
+        $configure_args += "-DGDAL_DIR=$gdal_dir_override"
+    }
     if ($VcpkgRoot) {
         $toolchain_file = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
         $configure_args += "-DCMAKE_TOOLCHAIN_FILE=$toolchain_file"
@@ -59,11 +107,11 @@ if (-not (Test-Path $cache_path)) {
     & cmake @configure_args
 }
 
-#3. compile all 13 tool executables in Release mode
+#4. compile all 13 tool executables in Release mode
 Write-Host "Compiling (Release)..."
 & cmake --build $BuildDir --config Release --parallel
 
-#4. collect the built exes into a flat bin/ folder, regardless of whether
+#5. collect the built exes into a flat bin/ folder, regardless of whether
 #   the generator is single-config (exe lands in build/) or multi-config
 #   (exe lands in build/Release/)
 if (-not (Test-Path "bin")) {
@@ -75,11 +123,12 @@ foreach ($tool_name in $tool_names) {
     if (-not $found_exe) {
         throw "Build did not produce $tool_name.exe -- check the compile output above."
     }
-    Copy-Item $found_exe.FullName (Join-Path "bin" "$tool_name.exe") -Force
+    $destination_path = Join-Path "bin" "$tool_name.exe"
+    Invoke-WithRetry { Copy-Item $found_exe.FullName $destination_path -Force }
 }
 Write-Host "Copied $($tool_names.Count) executables into bin/."
 
-#5. archive the previous bundle (if any) before making a new one
+#6. archive the previous bundle (if any) before making a new one
 if (-not (Test-Path "dist")) {
     New-Item -ItemType Directory -Path "dist" | Out-Null
 }
@@ -92,14 +141,32 @@ foreach ($previous_bundle in $previous_bundles) {
     Write-Host "Archived previous bundle: archive/$($previous_bundle.Name)"
 }
 
-#6. zip the freshly built exes into the new versioned bundle
+#7. zip the freshly built exes into the new versioned bundle, then verify
+#   the zip actually contains all 13 exes -- Compress-Archive can report a
+#   per-file error (e.g. a transient antivirus lock) without treating it as
+#   a terminating failure, so a "success" message alone isn't proof
 $bundle_name = "fusion_update_tools_v$bundle_version.zip"
 $bundle_path = Join-Path "dist" $bundle_name
 $exe_paths = $tool_names | ForEach-Object { Join-Path "bin" "$_.exe" }
-Compress-Archive -Path $exe_paths -DestinationPath $bundle_path -Force
-Write-Host "Created bundle: dist/$bundle_name"
+Invoke-WithRetry {
+    if (Test-Path $bundle_path) {
+        Remove-Item $bundle_path -Force
+    }
+    Compress-Archive -Path $exe_paths -DestinationPath $bundle_path -ErrorAction Stop
+}
 
-#7. publish to GitHub Releases, replacing the previous release, if -Publish was passed
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip_reader = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $bundle_path))
+$zipped_names = $zip_reader.Entries | ForEach-Object { $_.Name }
+$zip_reader.Dispose()
+$expected_names = $tool_names | ForEach-Object { "$_.exe" }
+$missing_names = $expected_names | Where-Object { $zipped_names -notcontains $_ }
+if ($missing_names.Count -gt 0) {
+    throw "Bundle is missing executables: $($missing_names -join ', ') -- not publishing an incomplete zip."
+}
+Write-Host "Created bundle: dist/$bundle_name (verified all $($tool_names.Count) executables present)"
+
+#8. publish to GitHub Releases, replacing the previous release, if -Publish was passed
 if ($Publish) {
     Write-Host "Publishing dist/$bundle_name to GitHub Releases..."
     $release_tag = "tools-v$bundle_version"
