@@ -18,15 +18,18 @@ struct PointRecord {
     uint8_t returnNumber{1};
     uint8_t numberOfReturns{1};
     uint8_t classification{0};
-    int8_t scanAngle{0};
+    int16_t scanAngle{0};
     uint16_t pointSourceID{0};
     double gpsTime{0.0};
     uint16_t red{0};
     uint16_t green{0};
     uint16_t blue{0};
+    uint16_t nir{0};
     bool withheld{false};
     bool keypoint{false};
     bool synthetic{false};
+    bool overlap{false};
+    uint8_t scannerChannel{0};
 };
 
 struct LASHeaderInfo {
@@ -37,6 +40,12 @@ struct LASHeaderInfo {
     double maxY{0.0};
     double minZ{0.0};
     double maxZ{0.0};
+    double xScaleFactor{0.001};
+    double yScaleFactor{0.001};
+    double zScaleFactor{0.001};
+    double xOffset{0.0};
+    double yOffset{0.0};
+    double zOffset{0.0};
     uint8_t pointFormat{0};
     uint8_t versionMajor{1};
     uint8_t versionMinor{2};

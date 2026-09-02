@@ -16,3 +16,8 @@ vcpkg/
 # System / OS
 .DS_Store
 Thumbs.db
+
+# Rendered Quarto output (regenerates from tests/R/*.qmd source)
+tests/docs/
+tests/fusion_evaluation_report_files/
+tests/*.rmarkdown
