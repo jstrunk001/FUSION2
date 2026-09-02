@@ -9,6 +9,11 @@ out/
 *.user
 *.suo
 
+# build.ps1 output -- zipped tool bundles are published to GitHub Releases,
+# not committed (see README.md "Building" section)
+dist/
+archive/
+
 # Dependencies
 vcpkg_installed/
 vcpkg/

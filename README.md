@@ -14,8 +14,20 @@ GDAL-based raster handling & native LAS/LAZ point cloud support update to the **
    - **`canopymaxima`**: Variable Window Local Maxima (VLM) individual tree top detector on CHM rasters.
    - **`treeseg`**: Watershed region-growing individual tree crown segmentation and per-tree point clipping.
 4. **Comprehensive Lidar & Terrain Analytics Suite**:
-   - Includes modernized executables for grid metrics, plot clip metrics, topographic derivatives, point filtering, decimation, density mapping, and tile-based batch processing.
-5. **Batch Processing Toolkit (`ltktools`)**:
+   - `gridmetrics.exe` generates rasters of point clouds statistics like 90th percentile height and proportion of returns above 2 meters.
+   - `cloudmetrics.exe` computes statistical elevation, percentile, canopy cover, canopy relief ratio, and intensity metrics for point cloud files or plot boundaries.
+   - `canopymodel.exe` interpolates point clouds to create Canopy Height Models (CHM) saved as GeoTIFF rasters with optional DEM height normalization.
+   - `canopymaxima.exe` detects individual tree tops on CHM rasters using Variable Window Local Maxima (VLM) filtering with height-dependent window sizes.
+   - `treeseg.exe` performs watershed region-growing individual tree crown segmentation on CHM rasters and outputs crown segment rasters and tabular crown metrics.
+   - `groundfilter.exe` filters ground returns from point cloud files and generates a bare-earth ground Digital Elevation Model (DEM) GeoTIFF raster.
+   - `clipdata.exe` clips point cloud data by spatial bounding box extents, height thresholds above ground, or elevation ranges.
+   - `filterdata.exe` filters point clouds by elevation ranges, return numbers (e.g. first returns), scan angles, or specific point attributes.
+   - `thindata.exe` thins and decimates point cloud data by spatially sub-sampling points within a user-defined grid cell size.
+   - `returndensity.exe` calculates pulse density (pts/m²) and return type ratio rasters (e.g., proportion of ground or first returns) saved as GeoTIFFs.
+   - `topometrics.exe` calculates topographic terrain derivatives (slope and aspect rasters) directly from input DEM GeoTIFFs.
+   - `catalog.exe` scans point cloud directories to produce summary reports of point counts, acquisition extents, and spatial density rasters.
+   - `ltktools.exe` automates tile-based batch processing with spatial buffer management, parallel execution across CPU cores, status monitoring, and GDAL Virtual Raster (`.vrt`) aggregation.
+5. **Batch Processing Toolkit (`ltktools.exe`)**:
    - Configurable tiling engine with spatial buffer management.
    - Parallel multi-process task execution across CPU cores.
    - Real-time status monitor tracking job progress and handling resume/restarts.
@@ -26,6 +38,7 @@ GDAL-based raster handling & native LAS/LAZ point cloud support update to the **
 ```
 fusion_update/
 ├── CMakeLists.txt              # CMake build configuration
+├── build.ps1                   # Configure, compile, bundle (and optionally publish) all tools
 ├── vcpkg.json                  # C++ dependencies (GDAL, LASlib, LASzip)
 ├── include/
 │   └── fusion/
@@ -65,25 +78,36 @@ fusion_update/
 
 ---
 
-### Step-by-Step Compilation Guide
+### Quick Build (`build.ps1`)
 
-#### Step 1: Download or Clone the Repository
-- **Option A (Download ZIP)**: 
-  1. Click **Code** > **Download ZIP** on GitHub.
-  2. Extract the downloaded `.zip` file to your target directory.
-- **Option B (Git Clone)**:
-  ```bash
-  git clone https://github.com/username/fusion_update.git
-  ```
+From inside the `fusion_update` directory, in PowerShell:
 
-#### Step 2: Open Command Line and Navigate to the Directory
-Open your Command Prompt / PowerShell (Windows) or Terminal (Linux/macOS) and navigate into the extracted project directory:
-```bash
-cd fusion_update
+```powershell
+.\build.ps1
 ```
 
-#### Step 3: Run the 3 Compilation Commands
-From inside the `fusion_update` directory, run the following 3 standard CMake commands:
+This configures CMake, compiles all 13 tools in Release mode, collects the
+resulting `.exe` files into `bin/`, and zips them into a versioned bundle at
+`dist/fusion_update_tools_v<version>-<timestamp>.zip`. If `dist/` already
+holds a bundle from a previous run, that older zip is moved into `archive/`
+first, so it isn't lost. Neither `dist/` nor `archive/` is tracked by git --
+see "Distributing built tools" below for where the bundle actually goes.
+
+Useful options:
+- `.\build.ps1 -VcpkgRoot "C:\path\to\vcpkg"` -- pass a vcpkg toolchain path
+  (same as the `-DCMAKE_TOOLCHAIN_FILE` flag below), or set the `VCPKG_ROOT`
+  environment variable once and omit the flag.
+- `.\build.ps1 -Reconfigure` -- wipe and re-run CMake configure (needed after
+  changing `CMakeLists.txt` dependencies, not needed for ordinary code
+  changes).
+- `.\build.ps1 -Publish` -- after building, publish the bundle as a GitHub
+  Release asset via `gh` (requires the GitHub CLI, authenticated with repo
+  access) and delete the previous `tools-v*` release. See "Distributing
+  built tools" below.
+
+### Manual Build (equivalent CMake commands)
+
+If you'd rather run CMake directly instead of `build.ps1`:
 
 1. **Create and enter the build directory:**
    ```bash
@@ -102,8 +126,26 @@ From inside the `fusion_update` directory, run the following 3 standard CMake co
    cmake --build . --config Release
    ```
 
+Once compilation finishes, all 13 tool binaries (`gridmetrics.exe`, `clipdata.exe`, `groundfilter.exe`, `canopymodel.exe`, `ltktools.exe`, `canopymaxima.exe`, `treeseg.exe`, `cloudmetrics.exe`, `topometrics.exe`, `filterdata.exe`, `thindata.exe`, `returndensity.exe`, `catalog.exe`) will be available in the `build/` (or `build/Release/`) directory.
+
 ---
 
-### Output Binaries
-Once compilation finishes, all 13 tool binaries (`gridmetrics`, `clipdata`, `groundfilter`, `canopymodel`, `ltktools`, `canopymaxima`, `treeseg`, `cloudmetrics`, `topometrics`, `filterdata`, `thindata`, `returndensity`, `catalog`) will be available in the `build/` (or `build/Release/`) directory.
+### Distributing built tools
+
+The compiled executables are large (roughly 160 MB each, ~2 GB for all 13
+together), well past GitHub's 100 MB per-file limit for ordinary commits.
+Rather than committing the exes or a zip of them into the git tree, built
+bundles are published as **GitHub Release assets**:
+
+- `build.ps1 -Publish` zips the current `bin/` contents, uploads the zip to
+  a new GitHub Release tagged `tools-v<version>-<timestamp>`, and deletes
+  the previous `tools-v*` release (both the release and its git tag) so
+  only the latest bundle is published at any time.
+- Every bundle `build.ps1` produces locally is still kept, either as the
+  current `dist/*.zip` or moved into `archive/*.zip` once superseded --
+  only the *published* copy on GitHub is replaced, not your local history
+  of them.
+- To get a previously built bundle, download the asset from the
+  repository's [Releases page](https://github.com/jstrunk001/FUSION2/releases)
+  rather than looking for it in the source tree.
 
