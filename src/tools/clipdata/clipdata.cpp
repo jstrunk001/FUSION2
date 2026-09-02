@@ -13,8 +13,8 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("extent", "Bounding box LLX,LLY,URX,URY");
     parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization");
-    parser.AddOption("zmin", "Minimum height above ground or elevation");
-    parser.AddOption("zmax", "Maximum height above ground or elevation");
+    parser.AddOption("minz", "Minimum height above ground or elevation");
+    parser.AddOption("maxz", "Maximum height above ground or elevation");
     parser.AddOption("output", "Output LAS/LAZ file path");
 
     if (!parser.Parse(argc, argv)) {
@@ -44,8 +44,8 @@ int main(int argc, char* argv[]) {
     }
 
     double zMin = -1e9, zMax = 1e9;
-    if (auto zm = parser.GetOption("zmin")) zMin = std::stod(*zm);
-    if (auto zm = parser.GetOption("zmax")) zMax = std::stod(*zm);
+    if (auto zm = parser.GetOption("minz")) zMin = std::stod(*zm);
+    if (auto zm = parser.GetOption("maxz")) zMax = std::stod(*zm);
 
     fusion::raster::GDALRaster groundRaster;
     bool hasGround = false;

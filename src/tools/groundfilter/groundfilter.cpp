@@ -13,8 +13,8 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("groundfilter", "Filters ground points from LAS/LAZ point cloud and generates GeoTIFF ground DEM");
     parser.SetPositionalArgsUsage("<input.las/laz>");
     parser.AddOption("cellsize", "Output DEM cell size", "1.0");
-    parser.AddOption("output-dem", "Output GeoTIFF ground DEM file path");
-    parser.AddOption("output-las", "Output filtered ground LAS/LAZ file path");
+    parser.AddOption("output-raster", "Output GeoTIFF ground DEM file path");
+    parser.AddOption("output-points", "Output filtered ground LAS/LAZ file path");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (auto outDem = parser.GetOption("output-dem")) {
+    if (auto outDem = parser.GetOption("output-raster")) {
         double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
         fusion::raster::GDALRaster demRaster;
         if (demRaster.Create(*outDem, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0)) {

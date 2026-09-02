@@ -24,8 +24,8 @@ struct PixelNode {
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("treeseg", "Individual Tree Crown Watershed Segmentation on CHM GeoTIFF");
     parser.SetPositionalArgsUsage("<input_chm.tif>");
-    parser.AddOption("output_grid", "Output GeoTIFF raster path for tree segments", "crown_segments.tif");
-    parser.AddOption("output_csv", "Output CSV summary table path", "crown_summary.csv");
+    parser.AddOption("output-raster", "Output GeoTIFF raster path for tree segments", "crown_segments.tif");
+    parser.AddOption("output-table", "Output CSV summary table path", "crown_summary.csv");
     parser.AddOption("minht", "Minimum height cutoff for segmentation (m)", "2.0");
 
     if (!parser.Parse(argc, argv)) {
@@ -40,8 +40,8 @@ int main(int argc, char* argv[]) {
     }
 
     std::filesystem::path chmPath = posArgs[0];
-    std::string outGridPath = parser.GetOption("output_grid").value_or("crown_segments.tif");
-    std::string outCsvPath = parser.GetOption("output_csv").value_or("crown_summary.csv");
+    std::string outGridPath = parser.GetOption("output-raster").value_or("crown_segments.tif");
+    std::string outCsvPath = parser.GetOption("output-table").value_or("crown_summary.csv");
     double minHt = std::stod(parser.GetOption("minht").value_or("2.0"));
 
     fusion::raster::GDALRaster chmRaster;
