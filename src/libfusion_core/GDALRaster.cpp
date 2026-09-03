@@ -9,8 +9,21 @@
 #include <algorithm>
 #include <iostream>
 #include <atomic>
+#include <mutex>
 
 namespace fusion::raster {
+
+// GDALAllRegister() must run before any GDAL entry point is used, but
+// several GDALRaster methods (BuildVRT, MergeVRTToGeoTIFF, ConvertToCOG,
+// CropToExtent) are static and callable without ever constructing a
+// GDALRaster instance -- e.g. pipeline.cpp's orchestrator process, which
+// only ever calls these static helpers directly. Route every entry point
+// through this so registration happens exactly once regardless of whether
+// an instance was ever constructed in the calling process.
+static void EnsureRegistered() {
+    static std::once_flag registeredOnce;
+    std::call_once(registeredOnce, []() { GDALAllRegister(); });
+}
 
 // Recognized single-tile raster file extensions when a directory is passed
 // to Open() in place of one file -- e.g. a folder of DTM tiles covering a
@@ -56,7 +69,7 @@ public:
 };
 
 GDALRaster::GDALRaster() : m_impl(std::make_unique<Impl>()) {
-    GDALAllRegister();
+    EnsureRegistered();
 }
 
 GDALRaster::~GDALRaster() = default;
@@ -322,6 +335,7 @@ bool GDALRaster::WriteBandData(int bandIdx, const std::vector<float>& buffer) {
 bool GDALRaster::BuildVRT(const std::filesystem::path& outputVRTPath,
                            const std::vector<std::filesystem::path>& inputRasterPaths,
                            bool relativePaths) {
+    EnsureRegistered();
     if (inputRasterPaths.empty()) return false;
 
     std::vector<char*> inputFiles;
@@ -353,6 +367,7 @@ bool GDALRaster::BuildVRT(const std::filesystem::path& outputVRTPath,
 bool GDALRaster::MergeVRTToGeoTIFF(const std::filesystem::path& vrtPath,
                                     const std::filesystem::path& outputGeoTIFFPath,
                                     const std::string& compressOption) {
+    EnsureRegistered();
     GDALDataset* vrtDS = static_cast<GDALDataset*>(GDALOpen(vrtPath.string().c_str(), GA_ReadOnly));
     if (!vrtDS) return false;
 
@@ -380,6 +395,7 @@ bool GDALRaster::MergeVRTToGeoTIFF(const std::filesystem::path& vrtPath,
 bool GDALRaster::ConvertToCOG(const std::filesystem::path& inputRasterPath,
                               const std::filesystem::path& outputCOGPath,
                               const std::string& compressOption) {
+    EnsureRegistered();
     GDALDataset* inDS = static_cast<GDALDataset*>(GDALOpen(inputRasterPath.string().c_str(), GA_ReadOnly));
     if (!inDS) return false;
 
@@ -409,6 +425,7 @@ bool GDALRaster::ConvertToCOG(const std::filesystem::path& inputRasterPath,
 bool GDALRaster::CropToExtent(const std::filesystem::path& inputRasterPath,
                                const std::filesystem::path& outputRasterPath,
                                double minX, double minY, double maxX, double maxY) {
+    EnsureRegistered();
     GDALDataset* inDS = static_cast<GDALDataset*>(GDALOpen(inputRasterPath.string().c_str(), GA_ReadOnly));
     if (!inDS) return false;
 

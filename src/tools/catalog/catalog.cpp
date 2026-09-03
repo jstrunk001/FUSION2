@@ -1,6 +1,7 @@
 // catalog.cpp : Modernized Catalog Executable for FUSION Update
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/lidar/InputResolver.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/LASPointCloud.h"
 
@@ -26,17 +27,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::vector<std::filesystem::path> files;
-    std::filesystem::path inputPath = posArgs[0];
-
-    if (std::filesystem::is_directory(inputPath)) {
-        for (const auto& entry : std::filesystem::directory_iterator(inputPath)) {
-            if (entry.path().extension() == ".las" || entry.path().extension() == ".laz") {
-                files.push_back(entry.path());
-            }
-        }
-    } else {
-        files.push_back(inputPath);
+    auto files = fusion::lidar::ResolveInputFiles(posArgs);
+    if (files.empty()) {
+        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
+        return 1;
     }
 
     std::cout << "[Catalog] Cataloging " << files.size() << " point cloud file(s)...\n";

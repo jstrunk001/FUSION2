@@ -3,6 +3,8 @@
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/lidar/InputResolver.h"
+#include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/batch/BatchPipeline.h"
 #include "fusion/batch/StatusMessenger.h"
@@ -464,14 +466,20 @@ int main(int argc, char* argv[]) {
         std::cout << "[GridMetrics] Loaded ground surface DEM: " << groundPathStr << "\n";
     }
 
-    fusion::lidar::LASReader lasReader;
-    if (!lasReader.Open(inputPath)) {
-        std::cerr << "Error: Failed to open point cloud file: " << inputPath << "\n";
+    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+    if (inputFiles.empty()) {
+        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
+        return 1;
+    }
+
+    fusion::lidar::MergedPointCloudReader lasReader;
+    if (!lasReader.Open(inputFiles)) {
+        std::cerr << "Error: Failed to open point cloud file(s).\n";
         return 1;
     }
 
     const auto& header = lasReader.GetHeader();
-    std::cout << "[GridMetrics] Processing Point Cloud: " << inputPath.filename().string()
+    std::cout << "[GridMetrics] Processing Point Cloud: " << (inputFiles.size() == 1 ? inputFiles[0].filename().string() : ("merged " + std::to_string(inputFiles.size()) + " files"))
               << " (" << header.pointCount << " points)\n";
 
     int cols = static_cast<int>(std::ceil((header.maxX - header.minX) / cellSize));
@@ -679,7 +687,10 @@ int main(int argc, char* argv[]) {
     }
 
     double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
-    std::string stem = inputPath.stem().string();
+    std::string stem = (inputFiles.size() == 1) ? inputFiles[0].stem().string() : "merged_gridmetrics";
+    if (auto outRoot = parser.GetOption("outroot")) {
+        stem = *outRoot;
+    }
     std::filesystem::path outRasterPath = outDir / (stem + "_gridmetrics.tif");
 
     fusion::raster::GDALRaster outRaster;

@@ -59,14 +59,15 @@ Tiles and buffers every LAS/LAZ file in the input directory, computes the same g
 ---
 
 ### 2. `cloudmetrics.exe`
-Computes summary canopy, elevation, and intensity metrics for a single point cloud clip.
+Computes summary canopy, elevation, and intensity metrics for a single point cloud file or an entire directory of point clouds. Supports height normalization via a ground DTM raster file or a directory of DTM tiles.
 
 ```bash
-cloudmetrics <input.las/laz> [other /options]
+cloudmetrics <input.las/laz or directory> [optional ground DTM file or directory] [other /options]
 ```
 
 #### Options & Flags
 - `/output:<path>`: Output CSV file path (default: `cloud_metrics.csv`).
+- `/ground:<path>`: Path to ground DEM raster for height normalization (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly via an in-memory VRT. May also be supplied as an unflagged second positional argument.
 - `/minht:<val>`: Minimum height cutoff for canopy metrics, in meters (default: `2.0`).
 - `/cellsize:<val>`: Grid cell size for 2D area/volume metrics, in meters (default: `10.0`).
 - `/voxelsize:<val>`: 3D voxel resolution for voxel volume metrics, in meters (default: `20.0`).
@@ -75,10 +76,10 @@ cloudmetrics <input.las/laz> [other /options]
 ---
 
 ### 3. `canopymodel.exe`
-Interpolates point cloud data to create a continuous Digital Canopy Height Model (CHM) GeoTIFF raster.
+Interpolates point cloud data to create a continuous Digital Canopy Height Model (CHM) GeoTIFF raster. Accepts a single `.las`/`.laz` file or an entire directory of point clouds.
 
 ```bash
-canopymodel <input.las/laz> [other /options]
+canopymodel <input.las/laz or directory> [other /options]
 ```
 
 `/output` is required — the tool errors out if it is not given.
@@ -86,7 +87,7 @@ canopymodel <input.las/laz> [other /options]
 #### Options & Flags
 - `/output:<path>`: Output GeoTIFF CHM file path. **Required.**
 - `/cellsize:<val>`: Output CHM cell size (default: `1.0`).
-- `/ground:<path>`: Path to ground DEM raster for height normalization.
+- `/ground:<path>`: Path to ground DEM raster file for height normalization, or a directory of DTM tiles to mosaic on the fly.
 - `/slope`: Normalize heights perpendicular to the local terrain slope plane.
 - `/smooth:<n>`: Spatial smoothing window size (e.g. `/smooth:3` for a 3x3 filter).
 
@@ -124,10 +125,10 @@ treeseg <input_chm.tif> [other /options]
 ---
 
 ### 6. `groundfilter.exe`
-Filters ground points from a LAS/LAZ point cloud and generates a bare-earth GeoTIFF DEM.
+Filters ground points from a LAS/LAZ point cloud file or directory and generates a bare-earth GeoTIFF DEM.
 
 ```bash
-groundfilter <input.las/laz> [other /options]
+groundfilter <input.las/laz or directory> [other /options]
 ```
 
 #### Options & Flags
@@ -138,10 +139,10 @@ groundfilter <input.las/laz> [other /options]
 ---
 
 ### 7. `clipdata.exe`
-Subsets point cloud data by 2D spatial extent or height range, with optional height normalization.
+Subsets point cloud data from a file or directory by 2D spatial extent or height range, with optional height normalization.
 
 ```bash
-clipdata <input.las/laz> [other /options]
+clipdata <input.las/laz or directory> [other /options]
 ```
 
 `/output` is required — the tool errors out if it is not given.
@@ -149,17 +150,17 @@ clipdata <input.las/laz> [other /options]
 #### Options & Flags
 - `/output:<path>`: Output LAS/LAZ file path. **Required.**
 - `/extent:<LLX,LLY,URX,URY>`: Bounding box to clip to.
-- `/ground:<path>`: Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization.
+- `/ground:<path>`: Path to ground surface raster (GeoTIFF, ENVI, IMG) or directory of DTM tiles for height normalization.
 - `/minz:<val>`: Minimum height above ground (or elevation, if no `/ground` given). Renamed from `/zmin`.
 - `/maxz:<val>`: Maximum height above ground (or elevation, if no `/ground` given). Renamed from `/zmax`.
 
 ---
 
 ### 8. `filterdata.exe`
-Filters a point cloud by elevation range, return number, or classification.
+Filters a point cloud file or directory by elevation range, return number, or classification.
 
 ```bash
-filterdata <input.las/laz> [other /options]
+filterdata <input.las/laz or directory> [other /options]
 ```
 
 #### Options & Flags
@@ -172,10 +173,10 @@ filterdata <input.las/laz> [other /options]
 ---
 
 ### 9. `thindata.exe`
-Spatially thins a point cloud by keeping a single point per grid cell.
+Spatially thins a point cloud file or directory by keeping a single point per grid cell.
 
 ```bash
-thindata <input.las/laz> [other /options]
+thindata <input.las/laz or directory> [other /options]
 ```
 
 #### Options & Flags
@@ -185,10 +186,10 @@ thindata <input.las/laz> [other /options]
 ---
 
 ### 10. `returndensity.exe`
-Calculates pulse density (pts/m²) and return-type ratio rasters, saved as a multi-band GeoTIFF.
+Calculates pulse density (pts/m²) and return-type ratio rasters from a point cloud file or directory, saved as a multi-band GeoTIFF.
 
 ```bash
-returndensity <input.las/laz> [other /options]
+returndensity <input.las/laz or directory> [other /options]
 ```
 
 #### Options & Flags

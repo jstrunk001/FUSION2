@@ -16,6 +16,7 @@
 #include "fusion/batch/StageRegistry.h"
 #include "fusion/batch/PipelineState.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/LASPointCloud.h"
 
 #include <iostream>
@@ -119,49 +120,50 @@ static bool ValidatePipeline(const std::vector<std::string>& stageNames, std::st
     return true;
 }
 
-// Buffered spatial clip of every overlapping LAS/LAZ file in inputDir into
-// one per-tile point cloud (Stage 0). Every point-cloud-input stage in the
-// pipeline reads from this file (or a later filterdata/thindata stage's
-// output) rather than re-scanning the whole input directory itself.
-static bool MaterializeTileClip(const std::filesystem::path& inputDir,
+// Resolves /input into the concrete list of LAS/LAZ files to scan: every
+// .las/.laz file in inputPath if it's a directory, or just inputPath itself
+// if it's a single point cloud file.
+static std::vector<std::filesystem::path> CollectPointCloudFiles(const std::filesystem::path& inputPath) {
+    return fusion::lidar::ResolveInputFiles({inputPath.string()});
+}
+
+// Buffered spatial clip of every overlapping LAS/LAZ file under inputPath
+// (a directory of tiles, or a single point cloud file) into one per-tile
+// point cloud (Stage 0). Every point-cloud-input stage in the pipeline
+// reads from this file (or a later filterdata/thindata stage's output)
+// rather than re-scanning the whole input itself.
+static bool MaterializeTileClip(const std::filesystem::path& inputPath,
                                  const fusion::batch::TileInfo& tile,
                                  const std::filesystem::path& outPath) {
     fusion::lidar::LASHeaderInfo outHeader;
     bool haveHeader = false;
     std::vector<fusion::lidar::PointRecord> matched;
 
-    if (std::filesystem::exists(inputDir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(inputDir)) {
-            if (!entry.is_regular_file()) continue;
-            std::string ext = entry.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            if (ext != ".las" && ext != ".laz") continue;
+    for (const auto& filePath : CollectPointCloudFiles(inputPath)) {
+        fusion::lidar::LASReader reader;
+        if (!reader.Open(filePath)) continue;
 
-            fusion::lidar::LASReader reader;
-            if (!reader.Open(entry.path())) continue;
+        const auto& header = reader.GetHeader();
+        if (header.maxX < tile.bufferedMinX || header.minX > tile.bufferedMaxX ||
+            header.maxY < tile.bufferedMinY || header.minY > tile.bufferedMaxY) {
+            reader.Close();
+            continue;
+        }
 
-            const auto& header = reader.GetHeader();
-            if (header.maxX < tile.bufferedMinX || header.minX > tile.bufferedMaxX ||
-                header.maxY < tile.bufferedMinY || header.minY > tile.bufferedMaxY) {
-                reader.Close();
+        if (!haveHeader) {
+            outHeader = header;
+            haveHeader = true;
+        }
+
+        fusion::lidar::PointRecord pt;
+        while (reader.ReadNextPoint(pt)) {
+            if (pt.x < tile.bufferedMinX || pt.x > tile.bufferedMaxX ||
+                pt.y < tile.bufferedMinY || pt.y > tile.bufferedMaxY) {
                 continue;
             }
-
-            if (!haveHeader) {
-                outHeader = header;
-                haveHeader = true;
-            }
-
-            fusion::lidar::PointRecord pt;
-            while (reader.ReadNextPoint(pt)) {
-                if (pt.x < tile.bufferedMinX || pt.x > tile.bufferedMaxX ||
-                    pt.y < tile.bufferedMinY || pt.y > tile.bufferedMaxY) {
-                    continue;
-                }
-                matched.push_back(pt);
-            }
-            reader.Close();
+            matched.push_back(pt);
         }
+        reader.Close();
     }
 
     if (!haveHeader) {
@@ -278,7 +280,7 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("pipeline", "Multi-tool batch pipeline: tiles/buffers the input once and chains any of the FUSION tools per tile");
     parser.AddOption("pipeline", "Comma-separated ordered list of stages to chain per tile, e.g. groundfilter,canopymodel,canopymaxima");
     parser.AddOption("tool", "Shorthand for a single-stage /pipeline:<name>");
-    parser.AddOption("input", "Input directory containing LAS/LAZ files");
+    parser.AddOption("input", "Input directory of LAS/LAZ files, or a single LAS/LAZ file");
     parser.AddOption("output", "Output directory for finalized rasters/tables");
     parser.AddOption("extent", "Project extent LLX,LLY,URX,URY");
     parser.AddOption("tilesize", "Tile width,height in project units", "1000,1000");
@@ -307,7 +309,7 @@ int main(int argc, char* argv[]) {
         parser.PrintHelp();
         return 1;
     }
-    std::filesystem::path inputDir = *optInput;
+    std::filesystem::path inputPath = *optInput;
     std::filesystem::path outputDir = *optOutput;
 
     // 1. Resolve and validate the requested stage chain.
@@ -373,7 +375,7 @@ int main(int argc, char* argv[]) {
     }
 
     fusion::batch::PipelineJobOptions jobOpts;
-    jobOpts.inputPointCloudDir = inputDir;
+    jobOpts.inputPointCloudDir = inputPath;
     jobOpts.outputDir = outputDir;
     jobOpts.numThreads = std::stoi(parser.GetOption("threads").value_or("4"));
     jobOpts.generateVRT = false;
@@ -399,7 +401,7 @@ int main(int argc, char* argv[]) {
         bool clipReady = resume && clipState && clipState->status == StageStatus::Done && std::filesystem::exists(clipPath);
         if (!clipReady) {
             std::string startedAt = NowTimestamp();
-            bool ok = MaterializeTileClip(inputDir, tile, clipPath);
+            bool ok = MaterializeTileClip(inputPath, tile, clipPath);
             StageResult result;
             result.tile = tile.name;
             result.stage = "clip";

@@ -35,3 +35,10 @@ docs/output/html/
 docs/_site/
 docs/.quarto/
 
+# Temporary test scratch & outputs
+scratch/
+tile_*.tif
+*.vrt
+*.log
+LASzip-*/
+

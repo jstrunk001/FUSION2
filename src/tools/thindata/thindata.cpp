@@ -1,6 +1,8 @@
 // thindata.cpp : Modernized ThinData Executable for FUSION Update
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/lidar/InputResolver.h"
+#include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
 
 #include <iostream>
@@ -10,7 +12,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("thindata", "Spatial Point Cloud Thinning / Decimation Tool");
-    parser.SetPositionalArgsUsage("<input.las/laz>");
+    parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("output", "Output thinned LAS/LAZ file path", "thinned_output.laz");
     parser.AddOption("cellsize", "Grid cell size for 2D spatial thinning (m)", "1.0");
 
@@ -20,18 +22,23 @@ int main(int argc, char* argv[]) {
 
     const auto& posArgs = parser.GetPositionalArgs();
     if (posArgs.empty()) {
-        std::cerr << "Error: Input LAS/LAZ point cloud file is required.\n";
+        std::cerr << "Error: Input LAS/LAZ point cloud file or directory is required.\n";
         parser.PrintHelp();
         return 1;
     }
 
-    std::filesystem::path inputPath = posArgs[0];
+    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+    if (inputFiles.empty()) {
+        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
+        return 1;
+    }
+
     std::string outputPath = parser.GetOption("output").value_or("thinned_output.laz");
     double cellSize = std::stod(parser.GetOption("cellsize").value_or("1.0"));
 
-    fusion::lidar::LASReader reader;
-    if (!reader.Open(inputPath)) {
-        std::cerr << "Error: Failed to open input point cloud: " << inputPath << "\n";
+    fusion::lidar::MergedPointCloudReader reader;
+    if (!reader.Open(inputFiles)) {
+        std::cerr << "Error: Failed to open input point cloud(s).\n";
         return 1;
     }
 
@@ -41,7 +48,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "[ThinData] Thinning point cloud (cell size: " << cellSize << "m)... " << inputPath << "\n";
+    std::cout << "[ThinData] Thinning " << inputFiles.size() << " point cloud file(s) (cell size: " << cellSize << "m)...\n";
 
     fusion::lidar::PointRecord pt;
     uint64_t inCount = 0;

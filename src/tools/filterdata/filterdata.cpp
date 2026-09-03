@@ -2,6 +2,8 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"
+#include "fusion/lidar/InputResolver.h"
+#include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
 
 #include <iostream>
@@ -12,7 +14,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("filterdata", "Point Cloud Filtering Tool (Elevation, Return Type, Classification, Scan Angle)");
-    parser.SetPositionalArgsUsage("<input.las/laz>");
+    parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("output", "Output filtered LAS/LAZ file path", "filtered_output.laz");
     parser.AddOption("minz", "Minimum Z elevation threshold");
     parser.AddOption("maxz", "Maximum Z elevation threshold");
@@ -25,12 +27,17 @@ int main(int argc, char* argv[]) {
 
     const auto& posArgs = parser.GetPositionalArgs();
     if (posArgs.empty()) {
-        std::cerr << "Error: Input LAS/LAZ point cloud file is required.\n";
+        std::cerr << "Error: Input LAS/LAZ point cloud file or directory is required.\n";
         parser.PrintHelp();
         return 1;
     }
 
-    std::filesystem::path inputPath = posArgs[0];
+    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+    if (inputFiles.empty()) {
+        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
+        return 1;
+    }
+
     std::string outputPath = parser.GetOption("output").value_or("filtered_output.laz");
 
     std::optional<double> minZ;
@@ -45,9 +52,9 @@ int main(int argc, char* argv[]) {
     std::unordered_set<int> validClasses;
     if (auto opt = parser.GetOption("class")) validClasses = fusion::cli::ParseIntSet(*opt);
 
-    fusion::lidar::LASReader reader;
-    if (!reader.Open(inputPath)) {
-        std::cerr << "Error: Failed to open input point cloud: " << inputPath << "\n";
+    fusion::lidar::MergedPointCloudReader reader;
+    if (!reader.Open(inputFiles)) {
+        std::cerr << "Error: Failed to open input point cloud(s).\n";
         return 1;
     }
 
@@ -57,7 +64,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "[FilterData] Filtering point cloud: " << inputPath << "\n";
+    std::cout << "[FilterData] Filtering " << inputFiles.size() << " point cloud file(s)...\n";
 
     fusion::lidar::PointRecord pt;
     uint64_t inCount = 0;

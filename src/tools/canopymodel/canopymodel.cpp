@@ -2,6 +2,8 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/lidar/InputResolver.h"
+#include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
 
 #include <iostream>
@@ -11,7 +13,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("canopymodel", "Generates Canopy Height Model (CHM) GeoTIFF from point cloud");
-    parser.SetPositionalArgsUsage("<input.las/laz>");
+    parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("cellsize", "Output CHM cell size", "1.0");
     parser.AddOption("ground", "Path to ground DEM raster for height normalization, or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("output", "Output GeoTIFF CHM file path");
@@ -24,15 +26,20 @@ int main(int argc, char* argv[]) {
 
     const auto& posArgs = parser.GetPositionalArgs();
     if (posArgs.empty()) {
-        std::cerr << "Error: Input LAS/LAZ point cloud file is required.\n";
+        std::cerr << "Error: Input LAS/LAZ point cloud file or directory is required.\n";
         parser.PrintHelp();
         return 1;
     }
 
-    std::filesystem::path inputPath = posArgs[0];
     auto optOutput = parser.GetOption("output");
     if (!optOutput) {
         std::cerr << "Error: /output file parameter is required.\n";
+        return 1;
+    }
+
+    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+    if (inputFiles.empty()) {
+        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
         return 1;
     }
 
@@ -59,13 +66,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    fusion::lidar::LASReader reader;
-    if (!reader.Open(inputPath)) {
-        std::cerr << "Error: Failed to open input point cloud: " << inputPath << "\n";
+    fusion::lidar::MergedPointCloudReader reader;
+    if (!reader.Open(inputFiles)) {
+        std::cerr << "Error: Failed to open input point cloud(s).\n";
         return 1;
     }
 
-    const auto& header = reader.GetHeader();
+    const auto header = reader.GetHeader();
     int cols = static_cast<int>(std::ceil((header.maxX - header.minX) / cellSize));
     int rows = static_cast<int>(std::ceil((header.maxY - header.minY) / cellSize));
     if (cols <= 0) cols = 1;

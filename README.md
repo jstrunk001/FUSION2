@@ -4,12 +4,14 @@ GDAL-based raster handling & native LAS/LAZ point cloud support update to the **
 
 ## Key Features
 
-1. **Native GDAL Raster Infrastructure**:
+1. **Native GDAL Raster Infrastructure & Dynamic DTM Mosaics**:
    - Replaces legacy binary `.dtm` raster format with native GDAL dataset reading and writing.
    - Reads any GDAL-supported ground surface DEM (GeoTIFF `.tif`, ERDAS Imagine `.img`, ENVI, AAIGrid, etc.).
+   - Automatically mosaics directories of ground DTM raster tiles into in-memory virtual rasters (`.vrt`) on the fly across tools accepting ground DEM inputs (`cloudmetrics`, `canopymodel`, `gridmetrics`, `clipdata`, `pipeline`).
    - Outputs single-band or multi-band GeoTIFF rasters with GDAL band descriptions (e.g. `elev_mean`, `elev_p95`, `canopy_cover`, `point_density`).
-2. **Direct `.las` and `.laz` Point Cloud I/O**:
-   - Built-in reading and writing of standard `.las` (versions 1.0 - 1.4) and compressed `.laz` point cloud formats using `LASlib` / `LASzip`.
+2. **Direct `.las` and `.laz` Point Cloud I/O with Directory Streaming**:
+   - Built-in reading and writing of standard `.las` (versions 1.0 - 1.4) and compressed `.laz` point cloud formats using static `LASzip`.
+   - All point cloud tools (`cloudmetrics`, `canopymodel`, `gridmetrics`, `clipdata`, `groundfilter`, `returndensity`, `thindata`, `filterdata`, `catalog`, `pipeline`) accept individual `.las`/`.laz` files OR directories of point clouds with seamless multi-file streaming.
 3. **Individual Tree Detection & Crown Segmentation**:
    - **`canopymaxima`**: Variable Window Local Maxima (VLM) individual tree top detector on CHM rasters.
    - **`treeseg`**: Watershed region-growing individual tree crown segmentation and per-tree point clipping.

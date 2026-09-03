@@ -23,15 +23,29 @@ endif()
 # Find GDAL using CMake Config mode to automatically pull in static dependencies
 find_package(GDAL CONFIG REQUIRED)
 
+# LASzip has no exported CMake config (see build_laszip_minimal.ps1, which
+# vendors it the same way build_gdal_minimal.ps1 vendors GDAL) -- locate its
+# static libs and headers directly instead of find_package().
+set(LASZIP_MINIMAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/laszip_minimal")
+find_library(LASZIP_BASE_LIBRARY NAMES laszip3 PATHS "${LASZIP_MINIMAL_DIR}/lib" NO_DEFAULT_PATH)
+if(NOT LASZIP_BASE_LIBRARY)
+    message(FATAL_ERROR "Minimal static LASzip not found under ${LASZIP_MINIMAL_DIR} -- run build_laszip_minimal.ps1 first.")
+endif()
+
 # Include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${LASZIP_MINIMAL_DIR}/include
+    ${LASZIP_MINIMAL_DIR}/include/laszip
 )
 
 # Core static library
 add_library(fusion_core STATIC
     src/libfusion_core/GDALRaster.cpp
     src/libfusion_core/LASPointCloud.cpp
+    src/libfusion_core/InputResolver.cpp
+    src/libfusion_core/MergedPointCloudReader.cpp
+    src/libfusion_core/SpatialMask.cpp
     src/libfusion_core/BatchPipeline.cpp
     src/libfusion_core/StatusMessenger.cpp
     src/libfusion_core/ExperimentalMetrics.cpp
@@ -43,9 +57,15 @@ add_library(fusion_core STATIC
 target_link_libraries(fusion_core PUBLIC GDAL::GDAL)
 
 if(WIN32)
-    # When linking static GDAL/PROJ from MinGW/Rtools, resolve circular/transitive static references with linker group
+    # When linking static GDAL/PROJ from MinGW/Rtools, resolve circular/transitive static references with linker group.
+    # LASzip's laszip_api3 (references symbols defined in laszip3's
+    # laszip_dll.cpp) is folded into this same group rather than given its
+    # own -- a separate start-group/end-group pair here previously broke
+    # resolution of unrelated symbols (libcrypto's zlib/winsock refs) by
+    # splitting what GNU ld needs to treat as one atomic resolution pass.
     target_link_libraries(fusion_core PUBLIC
         -Wl,--start-group
+        ${LASZIP_BASE_LIBRARY}
         iconv
         z
         bz2

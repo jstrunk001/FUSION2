@@ -2,6 +2,8 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/lidar/InputResolver.h"
+#include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
 
 #include <iostream>
@@ -10,7 +12,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("clipdata", "Clips LAS/LAZ point clouds by bounding box or spatial extents");
-    parser.SetPositionalArgsUsage("<input.las/laz>");
+    parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("extent", "Bounding box LLX,LLY,URX,URY");
     parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization, or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("minz", "Minimum height above ground or elevation");
@@ -23,18 +25,23 @@ int main(int argc, char* argv[]) {
 
     const auto& posArgs = parser.GetPositionalArgs();
     if (posArgs.empty()) {
-        std::cerr << "Error: Input LAS/LAZ point cloud file is required.\n";
+        std::cerr << "Error: Input LAS/LAZ point cloud file or directory is required.\n";
         parser.PrintHelp();
         return 1;
     }
 
-    std::filesystem::path inputPath = posArgs[0];
     auto optOutput = parser.GetOption("output");
     if (!optOutput) {
         std::cerr << "Error: /output file parameter is required.\n";
         return 1;
     }
     std::filesystem::path outputPath = *optOutput;
+
+    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+    if (inputFiles.empty()) {
+        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
+        return 1;
+    }
 
     double minX = -1e9, minY = -1e9, maxX = 1e9, maxY = 1e9;
     if (auto ext = parser.GetOption("extent")) {
@@ -53,9 +60,9 @@ int main(int argc, char* argv[]) {
         hasGround = groundRaster.Open(*groundPath);
     }
 
-    fusion::lidar::LASReader reader;
-    if (!reader.Open(inputPath)) {
-        std::cerr << "Error: Failed to open input point cloud: " << inputPath << "\n";
+    fusion::lidar::MergedPointCloudReader reader;
+    if (!reader.Open(inputFiles)) {
+        std::cerr << "Error: Failed to open input point cloud(s).\n";
         return 1;
     }
 
@@ -65,7 +72,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "[ClipData] Clipping point cloud " << inputPath.filename().string() << " -> " << outputPath.filename().string() << "...\n";
+    std::cout << "[ClipData] Clipping " << inputFiles.size() << " point cloud file(s) -> " << outputPath.filename().string() << "...\n";
 
     fusion::lidar::PointRecord pt;
     uint64_t clippedCount = 0;

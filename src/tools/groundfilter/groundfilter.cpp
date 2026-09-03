@@ -2,6 +2,8 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/lidar/InputResolver.h"
+#include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
 
 #include <iostream>
@@ -11,7 +13,7 @@
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("groundfilter", "Filters ground points from LAS/LAZ point cloud and generates GeoTIFF ground DEM");
-    parser.SetPositionalArgsUsage("<input.las/laz>");
+    parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("cellsize", "Output DEM cell size", "1.0");
     parser.AddOption("output-raster", "Output GeoTIFF ground DEM file path");
     parser.AddOption("output-points", "Output filtered ground LAS/LAZ file path");
@@ -22,23 +24,30 @@ int main(int argc, char* argv[]) {
 
     const auto& posArgs = parser.GetPositionalArgs();
     if (posArgs.empty()) {
-        std::cerr << "Error: Input LAS/LAZ point cloud file is required.\n";
+        std::cerr << "Error: Input LAS/LAZ point cloud file or directory is required.\n";
         parser.PrintHelp();
         return 1;
     }
 
-    std::filesystem::path inputPath = posArgs[0];
-    double cellSize = std::stod(parser.GetOption("cellsize").value_or("1.0"));
-
-    fusion::lidar::LASReader reader;
-    if (!reader.Open(inputPath)) {
-        std::cerr << "Error: Failed to open input point cloud: " << inputPath << "\n";
+    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+    if (inputFiles.empty()) {
+        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
         return 1;
     }
 
-    const auto& header = reader.GetHeader();
+    double cellSize = std::stod(parser.GetOption("cellsize").value_or("1.0"));
+
+    fusion::lidar::MergedPointCloudReader reader;
+    if (!reader.Open(inputFiles)) {
+        std::cerr << "Error: Failed to open input point cloud(s).\n";
+        return 1;
+    }
+
+    const auto header = reader.GetHeader();
     int cols = static_cast<int>(std::ceil((header.maxX - header.minX) / cellSize));
     int rows = static_cast<int>(std::ceil((header.maxY - header.minY) / cellSize));
+    if (cols <= 0) cols = 1;
+    if (rows <= 0) rows = 1;
 
     std::vector<float> minElevGrid(cols * rows, 99999.0f);
 
