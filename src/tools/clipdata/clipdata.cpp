@@ -5,10 +5,83 @@
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/geom/SpatialMask.h"
+#include "fusion/geom/PolygonFeatureSet.h"
 
 #include <iostream>
 #include <filesystem>
 #include <sstream>
+#include <vector>
+#include <memory>
+
+// /multifile mode: streams the merged input once, routing each matched point
+// to a lazily-opened LASWriter for whichever polygon feature contains it.
+// Extracted into its own function so main()'s single-clip path (the common
+// case, unchanged from before /shape existed) stays simple to read.
+static int RunMultiFileClip(
+        fusion::lidar::MergedPointCloudReader& reader,
+        const fusion::geom::PolygonFeatureSet& featureSet,
+        const std::filesystem::path& outDir,
+        double minX, double minY, double maxX, double maxY,
+        double zMin, double zMax,
+        bool hasGround, fusion::raster::GDALRaster& groundRaster) {
+    std::filesystem::create_directories(outDir);
+
+    std::vector<std::unique_ptr<fusion::lidar::LASWriter>> writers(featureSet.FeatureCount());
+    std::vector<uint64_t> writtenCounts(featureSet.FeatureCount(), 0);
+
+    const auto& header = reader.GetHeader();
+
+    fusion::lidar::PointRecord pt;
+    uint64_t totalWritten = 0;
+    while (reader.ReadNextPoint(pt)) {
+        if (pt.x < minX || pt.x > maxX || pt.y < minY || pt.y > maxY) {
+            continue;
+        }
+
+        double elevation = pt.z;
+        if (hasGround) {
+            if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
+                elevation -= *gz;
+            }
+        }
+        if (elevation < zMin || elevation > zMax) {
+            continue;
+        }
+
+        size_t featureIdx = featureSet.FindContaining(pt.x, pt.y);
+        if (featureIdx == fusion::geom::PolygonFeatureSet::npos) {
+            continue;
+        }
+
+        auto& writer = writers[featureIdx];
+        if (!writer) {
+            writer = std::make_unique<fusion::lidar::LASWriter>();
+            std::filesystem::path outPath = outDir / (featureSet.Label(featureIdx) + ".laz");
+            if (!writer->Open(outPath, header)) {
+                std::cerr << "Error: Failed to create output point cloud: " << outPath << "\n";
+                writer.reset();
+                continue;
+            }
+        }
+
+        writer->WritePoint(pt);
+        writtenCounts[featureIdx]++;
+        totalWritten++;
+    }
+
+    uint64_t filesWritten = 0;
+    for (size_t i = 0; i < writers.size(); ++i) {
+        if (writers[i]) {
+            writers[i]->Close();
+            filesWritten++;
+        }
+    }
+
+    std::cout << "[ClipData] Wrote " << totalWritten << " point(s) across " << filesWritten
+              << " polygon output file(s) (of " << featureSet.FeatureCount() << " feature(s)) to " << outDir << "\n";
+    return 0;
+}
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("clipdata", "Clips LAS/LAZ point clouds by bounding box or spatial extents");
@@ -17,7 +90,11 @@ int main(int argc, char* argv[]) {
     parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization, or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("minz", "Minimum height above ground or elevation");
     parser.AddOption("maxz", "Maximum height above ground or elevation");
-    parser.AddOption("output", "Output LAS/LAZ file path");
+    parser.AddOption("output", "Output LAS/LAZ file path (single-clip mode), or output directory (/multifile mode)");
+    parser.AddOption("shape", "Polygon shapefile to clip against, in addition to (not instead of) /extent");
+    parser.AddFlag("multifile", "With /shape, write one output LAS/LAZ per polygon feature instead of one merged output");
+    parser.AddOption("field", "Attribute field used to name each /multifile output (<field-value>.laz); falls back to a zero-padded feature index when omitted or missing on a feature");
+    parser.AddFlag("outside", "Keep points outside every polygon instead of inside (single-clip mode only)");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -36,6 +113,33 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::filesystem::path outputPath = *optOutput;
+
+    bool multiFile = parser.HasFlag("multifile");
+    bool outsideFlag = parser.HasFlag("outside");
+    std::string fieldName = parser.GetOption("field").value_or("");
+
+    fusion::geom::SpatialMask mask;
+    fusion::geom::PolygonFeatureSet featureSet;
+    bool haveShape = false;
+    if (auto shapePath = parser.GetOption("shape")) {
+        if (multiFile) {
+            if (!featureSet.LoadShapefile(*shapePath, fieldName)) {
+                std::cerr << "Error: Failed to load polygon shapefile: " << *shapePath << "\n";
+                return 1;
+            }
+        } else {
+            if (!mask.LoadShapefile(*shapePath)) {
+                std::cerr << "Error: Failed to load polygon shapefile: " << *shapePath << "\n";
+                return 1;
+            }
+        }
+        haveShape = true;
+    }
+
+    if (multiFile && !haveShape) {
+        std::cerr << "Error: /multifile requires /shape.\n";
+        return 1;
+    }
 
     auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
     if (inputFiles.empty()) {
@@ -66,6 +170,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    if (multiFile) {
+        std::cout << "[ClipData] Clipping " << inputFiles.size() << " point cloud file(s) against "
+                  << featureSet.FeatureCount() << " polygon feature(s) -> " << outputPath << "...\n";
+        int rc = RunMultiFileClip(reader, featureSet, outputPath, minX, minY, maxX, maxY, zMin, zMax, hasGround, groundRaster);
+        reader.Close();
+        return rc;
+    }
+
     fusion::lidar::LASWriter writer;
     if (!writer.Open(outputPath, reader.GetHeader())) {
         std::cerr << "Error: Failed to create output point cloud: " << outputPath << "\n";
@@ -78,6 +190,11 @@ int main(int argc, char* argv[]) {
     uint64_t clippedCount = 0;
     while (reader.ReadNextPoint(pt)) {
         if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) {
+            bool inShape = !haveShape || (mask.Contains(pt.x, pt.y) != outsideFlag);
+            if (!inShape) {
+                continue;
+            }
+
             double elevation = pt.z;
             if (hasGround) {
                 if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
