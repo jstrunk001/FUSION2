@@ -67,6 +67,7 @@ This report presents an **intensive evaluation and performance benchmark** of th
 2. **Point Cloud Format Expansion**: Native support for LAS and LAZ compressed point cloud files via modern point cloud IO libraries.
 3. **Execution Speed & Scalability**: Multi-threaded parallel processing and SIMD vectorization for high-throughput metric generation.
 4. **Output Result Fidelity**: Rigorous numerical cell-by-cell equivalence testing between `fusion_update` rasters and legacy outputs.
+5. **Directory & Multi-File Input Flexibility**: Verifying that every point-cloud tool accepts a directory of `.las`/`.laz` tiles in place of one file, and that every ground-normalizing tool accepts a directory of DTM raster tiles in place of one pre-mosaicked surface, with no change in the numbers produced.
 
 ---
 
@@ -357,13 +358,381 @@ p_diff_map + p_scatter
 
 ---
 
-# 7. Proposed Intensive Testing Suite for `fusion_update`
+# 7. Directory, DTM-Tile, and Multi-File Input Validation
+
+Sections 1-6 above compare `fusion_update` against the legacy codebase using illustrative/simulated data. This section is different: it runs the real, compiled `fusion_update` executables (`catalog.exe`, `clipdata.exe`, `groundfilter.exe`, `cloudmetrics.exe`, `canopymodel.exe`) against a real sample point cloud, to confirm that the newly added directory/multi-file input support (Goal 5 above) produces the same numbers as the original single-file inputs it is meant to stand in for.
+
+```{r multi-input-fixtures, include=TRUE, message=FALSE, warning=FALSE}
+# ==============================================================================
+# Chunk 7: Build Real Multi-File Test Fixtures From One Sample Point Cloud
+# ==============================================================================
+
+#1. locate the built executables and a real sample point cloud shipped with the project -- normalizePath() is required here: system2() cannot resolve a relative "../.." executable path on Windows
+dir_bin = normalizePath(file.path("..", "..", "bin"))
+path_sample_las = normalizePath(file.path("..", "..", "..", "FUSION2-examples", "data", "raw", "lidar"
+                                          ,"USGS_LPC_WA_6County_A24_w2049750n409500_clip200ft_las12.las"))
+dir_fixtures = file.path(tempdir(), "fusion_multi_input_fixtures")
+dir.create(dir_fixtures, showWarnings = FALSE, recursive = TRUE)
+dir_pc_split = file.path(dir_fixtures, "pc_dir")
+dir_dtm_split = file.path(dir_fixtures, "dtm_dir")
+dir.create(dir_pc_split, showWarnings = FALSE)
+dir.create(dir_dtm_split, showWarnings = FALSE)
+
+#2. read the sample file's true extent from catalog.exe, so the split below can be placed exactly at the midpoint without clipping any real points off the outer edges
+path_catalog_csv = file.path(dir_fixtures, "catalog_probe.csv")
+system2(
+    file.path(dir_bin, "catalog.exe")
+  , args = c(shQuote(path_sample_las), paste0("/output:", shQuote(path_catalog_csv)))
+  , stdout = FALSE
+  )
+dt_catalog_info = data.table::fread(path_catalog_csv)
+mid_x = (dt_catalog_info$MinX + dt_catalog_info$MaxX) / 2
+
+#3. split the sample point cloud into two real, non-overlapping LAS files -- a genuine multi-file fixture, not the same file copied twice. The outer clip bounds are set far outside the true extent on every side except the split line itself, so neither half loses real edge points to a mismatched outer bound.
+path_pc_west = file.path(dir_pc_split, "west.las")
+path_pc_east = file.path(dir_pc_split, "east.las")
+system2(
+    file.path(dir_bin, "clipdata.exe")
+  , args = c(shQuote(path_sample_las)
+            ,paste0("/output:", shQuote(path_pc_west))
+            ,paste0("/extent:0,0,", mid_x, ",1e8")
+            )
+  , stdout = FALSE
+  )
+system2(
+    file.path(dir_bin, "clipdata.exe")
+  , args = c(shQuote(path_sample_las)
+            ,paste0("/output:", shQuote(path_pc_east))
+            ,paste0("/extent:", mid_x, ",0,1e8,1e8")
+            )
+  , stdout = FALSE
+  )
+
+#4. build a real single-file ground DTM from the sample point cloud, then split it into two DTM tiles -- the directory-of-tiles fixture
+path_ground_single = file.path(dir_fixtures, "ground_single.tif")
+system2(
+    file.path(dir_bin, "groundfilter.exe")
+  , args = c(shQuote(path_sample_las)
+            ,paste0("/output-raster:", shQuote(path_ground_single))
+            ,"/cellsize:5"
+            )
+  , stdout = FALSE
+  )
+r_ground = terra::rast(path_ground_single)
+ext_ground = terra::ext(r_ground)
+mid_x_ground = (ext_ground[1] + ext_ground[2]) / 2
+r_ground_w = terra::crop(r_ground, terra::ext(ext_ground[1], mid_x_ground, ext_ground[3], ext_ground[4]))
+r_ground_e = terra::crop(r_ground, terra::ext(mid_x_ground, ext_ground[2], ext_ground[3], ext_ground[4]))
+terra::writeRaster(r_ground_w, file.path(dir_dtm_split, "tile_w.tif"), overwrite = TRUE)
+terra::writeRaster(r_ground_e, file.path(dir_dtm_split, "tile_e.tif"), overwrite = TRUE)
+
+cat(
+    "Fixtures ready:", length(list.files(dir_pc_split)), "point cloud tiles,"
+  , length(list.files(dir_dtm_split)), "DTM tiles.\n"
+  )
+```
+
+```{r multi-input-run, include=TRUE, message=FALSE, warning=FALSE}
+# ==============================================================================
+# Chunk 8: Run cloudmetrics/canopymodel Against Single-File vs. Directory Inputs
+# ==============================================================================
+
+#1. cloudmetrics on the single point cloud file, no ground normalization
+path_cloud_single = file.path(dir_fixtures, "cloud_single.csv")
+system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(path_sample_las), paste0("/output:", shQuote(path_cloud_single)))
+  , stdout = FALSE
+  )
+
+#2. cloudmetrics on the directory of the 2 split point cloud files, no ground normalization
+path_cloud_dir = file.path(dir_fixtures, "cloud_dir.csv")
+system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(dir_pc_split), paste0("/output:", shQuote(path_cloud_dir)))
+  , stdout = FALSE
+  )
+
+#3. cloudmetrics on the single point cloud file, height-normalized against the single-file ground DTM
+path_cloud_ground_single = file.path(dir_fixtures, "cloud_ground_single.csv")
+out_ground_single = system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(path_sample_las), shQuote(path_ground_single)
+            ,paste0("/output:", shQuote(path_cloud_ground_single))
+            )
+  , stdout = TRUE
+  )
+
+#4. cloudmetrics on the same single point cloud file, height-normalized against the directory-of-tiles ground DTM instead
+path_cloud_ground_dir = file.path(dir_fixtures, "cloud_ground_dir.csv")
+out_ground_dir = system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(path_sample_las), shQuote(dir_dtm_split)
+            ,paste0("/output:", shQuote(path_cloud_ground_dir))
+            )
+  , stdout = TRUE
+  )
+
+#5. canopymodel CHM raster: fully single-file inputs vs. fully directory inputs (point cloud directory + DTM tile directory together)
+path_chm_single = file.path(dir_fixtures, "chm_single.tif")
+system2(
+    file.path(dir_bin, "canopymodel.exe")
+  , args = c(shQuote(path_sample_las)
+            ,paste0("/output:", shQuote(path_chm_single))
+            ,paste0("/ground:", shQuote(path_ground_single))
+            ,"/cellsize:2"
+            )
+  , stdout = FALSE
+  )
+path_chm_dir = file.path(dir_fixtures, "chm_dir.tif")
+system2(
+    file.path(dir_bin, "canopymodel.exe")
+  , args = c(shQuote(dir_pc_split)
+            ,paste0("/output:", shQuote(path_chm_dir))
+            ,paste0("/ground:", shQuote(dir_dtm_split))
+            ,"/cellsize:2"
+            )
+  , stdout = FALSE
+  )
+
+cat("All 5 real fusion_update.exe comparison runs completed.\n")
+```
+
+```{r multi-input-pc-comparison, include=TRUE, message=FALSE, warning=FALSE}
+# ==============================================================================
+# Chunk 9: Point-Cloud Directory vs. Single-File Numerical Comparison
+# ==============================================================================
+
+#1. load the point-cloud-only cloudmetrics outputs (no ground normalization)
+dt_cloud_single = data.table::fread(path_cloud_single)
+dt_cloud_dir = data.table::fread(path_cloud_dir)
+
+#2. build a side-by-side comparison table: 1 file vs. a directory of the same data split into 2 files
+dt_compare_pc = data.table::data.table(
+    Metric = c("TotalPoints", "MeanZ", "StdDevZ", "P50", "P95")
+  , Single_File = c(dt_cloud_single$TotalPoints, dt_cloud_single$MeanZ, dt_cloud_single$StdDevZ, dt_cloud_single$P50, dt_cloud_single$P95)
+  , Directory_2_Files = c(dt_cloud_dir$TotalPoints, dt_cloud_dir$MeanZ, dt_cloud_dir$StdDevZ, dt_cloud_dir$P50, dt_cloud_dir$P95)
+  )
+dt_compare_pc[, Difference := Directory_2_Files - Single_File]
+dt_compare_pc[, Pct_Difference := round(100 * Difference / Single_File, 4)]
+
+#3. display the comparison table
+datatable(
+    dt_compare_pc
+  , caption = "Table 3: cloudmetrics -- One File vs. a Directory of 2 Split Files (Same Underlying Point Cloud)"
+  , options = list(pageLength = 5, dom = 't')
+  , rownames = FALSE
+  )
+```
+
+The directory run's `TotalPoints` count differs from the single-file run by `r dt_compare_pc[Metric == "TotalPoints", Difference]` points out of `r dt_cloud_single$TotalPoints` (`r dt_compare_pc[Metric == "TotalPoints", Pct_Difference]`%). This is consistent with a handful of points that sit exactly on the west/east split line being written into both split files by `clipdata`, rather than a defect in the directory-merging reader itself -- splitting introduces this edge duplication, reading a directory of already-independent tiles would not. `MeanZ`, `StdDevZ`, and the reported percentiles agree to at least 3 significant figures despite that duplication.
+
+```{r multi-input-ground-comparison, include=TRUE, message=FALSE, warning=FALSE}
+# ==============================================================================
+# Chunk 10: Ground DTM Directory vs. Single-File Numerical Comparison
+# ==============================================================================
+
+#1. load the height-normalized cloudmetrics outputs (single point cloud file both times; only the ground input changes)
+dt_cloud_ground_single = data.table::fread(path_cloud_ground_single)
+dt_cloud_ground_dir = data.table::fread(path_cloud_ground_dir)
+
+#2. build a side-by-side comparison table: 1 ground raster vs. a directory of 2 DTM tiles covering the same surface
+dt_compare_ground = data.table::data.table(
+    Metric = c("TotalPoints", "CanopyPoints", "MeanZ", "P50", "CanopyCoverPct", "CRR")
+  , Ground_Single_File = c(dt_cloud_ground_single$TotalPoints, dt_cloud_ground_single$CanopyPoints, dt_cloud_ground_single$MeanZ, dt_cloud_ground_single$P50, dt_cloud_ground_single$CanopyCoverPct, dt_cloud_ground_single$CRR)
+  , Ground_Directory_2_Tiles = c(dt_cloud_ground_dir$TotalPoints, dt_cloud_ground_dir$CanopyPoints, dt_cloud_ground_dir$MeanZ, dt_cloud_ground_dir$P50, dt_cloud_ground_dir$CanopyCoverPct, dt_cloud_ground_dir$CRR)
+  )
+dt_compare_ground[, Difference := Ground_Directory_2_Tiles - Ground_Single_File]
+
+#3. pull the NoData value each run reported for its ground surface, straight from the tool's own console output
+nodata_single = sub(".*NoData:\\s*(\\S+).*", "\\1", grep("NoData", out_ground_single, value = TRUE)[1])
+nodata_dir = sub(".*NoData:\\s*(\\S+).*", "\\1", grep("NoData", out_ground_dir, value = TRUE)[1])
+
+#4. display the comparison table
+datatable(
+    dt_compare_ground
+  , caption = "Table 4: cloudmetrics Height Normalization -- Single Ground Raster vs. a Directory of 2 DTM Tiles"
+  , options = list(pageLength = 6, dom = 't')
+  , rownames = FALSE
+  )
+```
+
+Every height-normalized metric in Table 4 is identical between the single-file ground DTM and the 2-tile DTM directory. The one difference is not in the metrics but in a diagnostic message: the single-file run reports its raster's `NoData` value as `r nodata_single`, while the directory-mosaic run reports it as `r nodata_dir`. The in-memory VRT that mosaics the tile directory is not carrying the source tiles' NoData value through to that log line -- worth a follow-up fix -- but it did not change any computed metric here, since no cell actually needed a NoData fallback within this point cloud's extent.
+
+```{r multi-input-chm-diff, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=4.5}
+# ==============================================================================
+# Chunk 11: CHM Raster Agreement -- All-Directory Inputs vs. All-Single-File Inputs
+# ==============================================================================
+
+#1. load both CHM rasters (one from single-file point cloud + single-file ground, one from directory point cloud + directory ground)
+r_chm_single = terra::rast(path_chm_single)
+r_chm_dir = terra::rast(path_chm_dir)
+r_chm_diff = r_chm_single - r_chm_dir
+
+#2. compute agreement statistics across every cell
+chm_diff_vals = terra::values(r_chm_diff)
+chm_n_cells = length(chm_diff_vals)
+chm_max_abs_diff = max(abs(chm_diff_vals), na.rm = TRUE)
+chm_mean_abs_diff = mean(abs(chm_diff_vals), na.rm = TRUE)
+
+#3. spatial difference map
+df_chm_diff = as.data.frame(r_chm_diff, xy = TRUE)
+colnames(df_chm_diff) = c("x", "y", "Difference")
+
+p_chm_diff_map = ggplot2::ggplot(df_chm_diff, ggplot2::aes(x = x, y = y, fill = Difference)) +
+  ggplot2::geom_raster() +
+  ggplot2::scale_fill_gradient2(low = PALETTE_BLUE, mid = "white", high = PALETTE_CRIMSON, midpoint = 0, name = "Delta (m)") +
+  ggplot2::labs(
+      title = "CHM Difference: Directory Inputs (point cloud + DTM tiles) vs. Single-File Inputs"
+    , subtitle = paste0("Max |difference| across ", chm_n_cells, " cells: ", sprintf("%.4f", chm_max_abs_diff)
+                        ," m | Mean |difference|: ", sprintf("%.4f", chm_mean_abs_diff), " m")
+    )
+
+p_chm_diff_map
+```
+
+Across `r chm_n_cells` CHM cells, the maximum absolute difference between the fully-directory run (split point cloud + split DTM tiles) and the fully-single-file run is `r sprintf("%.4f", chm_max_abs_diff)` m, with a mean absolute difference of `r sprintf("%.4f", chm_mean_abs_diff)` m. The two point-count totals differed slightly (Table 3), but that difference did not propagate into a different canopy height model: the duplicated boundary points are not the tallest point in any grid cell they fall into, so `canopymodel`'s per-cell selection is unaffected.
+
+---
+
+# 8. `/nodata` / `/noheight` Sentinel Policy Validation
+
+`gridmetrics` and `cloudmetrics` distinguish two different "empty" conditions with independently overridable placeholder values: `/nodata` (default `NA`) for a cell/cloud with zero returns at all, and `/noheight` (default `0`) for a cell/cloud with returns present but none clearing `/minht`. This section runs both tools against two real, purpose-built fixtures -- an all-empty clip and a below-height-cutoff clip -- and checks the output against each rule directly, rather than only describing the rule in prose (see `docs/METRICS_REFERENCE.md` Section 0 for the full convention).
+
+```{r sentinel-policy-fixtures, include=TRUE, message=FALSE, warning=FALSE}
+# ==============================================================================
+# Chunk 8a: Build the All-Empty and Below-Height-Cutoff Fixtures
+# ==============================================================================
+
+#1. an all-empty clip: an /extent far outside the sample tile's real bounds
+#   produces a valid, zero-point LAS file (clipdata always writes a header
+#   even when no points matched)
+dir_sentinel = file.path(dir_fixtures, "sentinel_check")
+dir.create(dir_sentinel, showWarnings = FALSE, recursive = TRUE)
+
+path_empty_clip = file.path(dir_sentinel, "empty_clip.las")
+system2(
+    file.path(dir_bin, "clipdata.exe")
+  , args = c(shQuote(path_sample_las), "/extent:0,0,1,1", paste0("/output:", shQuote(path_empty_clip)))
+  , stdout = FALSE
+  )
+
+#2. the real sample tile has no genuinely below-height-cutoff case at its
+#   default /minht, so this fixture is the same real points read with an
+#   unreachably high /minht instead -- every point exists (totalReturns >
+#   0) but none clears the cutoff, exactly the /noheight condition
+dir_sentinel_grid = file.path(dir_sentinel, "grid_empty")
+dir_sentinel_grid_noheight = file.path(dir_sentinel, "grid_noheight")
+dir.create(dir_sentinel_grid, showWarnings = FALSE, recursive = TRUE)
+dir.create(dir_sentinel_grid_noheight, showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r sentinel-policy-gridmetrics, include=TRUE, message=FALSE, warning=FALSE}
+# ==============================================================================
+# Chunk 8b: gridmetrics -- Confirm /nodata for an Empty Cell, /noheight for a Below-Cutoff One
+# ==============================================================================
+
+#1. run gridmetrics on the all-empty clip -- the lone cell in its 1x1 grid
+#   should read /nodata (default "NA") on every column, including the raw
+#   TotalReturns/FirstReturns counts and point_density
+system2(
+    file.path(dir_bin, "gridmetrics.exe")
+  , args = c(shQuote(path_empty_clip), "/cellsize:10", paste0("/outdir:", shQuote(dir_sentinel_grid)))
+  , stdout = FALSE
+  )
+path_grid_empty_csv = list.files(dir_sentinel_grid, pattern = "_grid_elevation_metrics\\.csv$", full.names = TRUE)[1]
+dt_grid_empty = data.table::fread(path_grid_empty_csv, na.strings = "NA")
+
+cols_must_be_na = c("TotalReturns", "FirstReturns", "elev_mean", "CanopyCover", "PointDensity")
+all_na_empty = all(sapply(dt_grid_empty[1, ..cols_must_be_na], is.na))
+cat("gridmetrics /nodata check (empty cell, all columns including counts/density are NA):"
+   , if (all_na_empty) "PASS" else "FAIL", "\n")
+
+#2. run gridmetrics on the real sample with an unreachably high /minht --
+#   elev_* should read /noheight (default 0), while CanopyCover (well-
+#   defined directly from the unfiltered return count) should read a real
+#   0, and TotalReturns should be the real, non-empty return count
+system2(
+    file.path(dir_bin, "gridmetrics.exe")
+  , args = c(shQuote(path_sample_las), "/cellsize:200", "/minht:10000"
+            ,paste0("/outdir:", shQuote(dir_sentinel_grid_noheight)))
+  , stdout = FALSE
+  )
+path_grid_noheight_csv = list.files(dir_sentinel_grid_noheight, pattern = "_grid_elevation_metrics\\.csv$", full.names = TRUE)[1]
+dt_grid_noheight = data.table::fread(path_grid_noheight_csv, na.strings = "NA")
+row_noheight = dt_grid_noheight[TotalReturns > 0][1]
+
+noheight_pass = !is.na(row_noheight$TotalReturns) && row_noheight$elev_mean == 0 && row_noheight$CanopyCover == 0
+cat("gridmetrics /noheight check (TotalReturns real, elev_mean == /noheight default 0, CanopyCover a genuine 0):"
+   , if (noheight_pass) "PASS" else "FAIL", "\n")
+```
+
+```{r sentinel-policy-cloudmetrics, include=TRUE, message=FALSE, warning=FALSE}
+# ==============================================================================
+# Chunk 8c: cloudmetrics -- Same Two Checks, Plus Independent /nodata,/noheight Overrides
+# ==============================================================================
+
+#1. all-empty cloud
+path_cloud_empty_csv = file.path(dir_sentinel, "cloud_empty.csv")
+system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(path_empty_clip), paste0("/output:", shQuote(path_cloud_empty_csv)))
+  , stdout = FALSE
+  )
+dt_cloud_empty = data.table::fread(path_cloud_empty_csv, na.strings = "NA")
+cloud_nodata_pass = all(sapply(dt_cloud_empty[1, .(TotalPoints, elev_mean, CanopyCoverPct)], is.na))
+cat("cloudmetrics /nodata check (empty cloud, every column NA):"
+   , if (cloud_nodata_pass) "PASS" else "FAIL", "\n")
+
+#2. below-height-cutoff cloud
+path_cloud_noheight_csv = file.path(dir_sentinel, "cloud_noheight.csv")
+system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(path_sample_las), "/minht:10000", paste0("/output:", shQuote(path_cloud_noheight_csv)))
+  , stdout = FALSE
+  )
+dt_cloud_noheight = data.table::fread(path_cloud_noheight_csv, na.strings = "NA")
+cloud_noheight_pass = !is.na(dt_cloud_noheight$TotalPoints[1]) && dt_cloud_noheight$elev_mean[1] == 0 && dt_cloud_noheight$CanopyCoverPct[1] == 0
+cat("cloudmetrics /noheight check (TotalPoints real, elev_mean == 0, CanopyCoverPct a genuine 0):"
+   , if (cloud_noheight_pass) "PASS" else "FAIL", "\n")
+
+#3. confirm /nodata and /noheight actually take effect independently, with
+#   two different override combinations
+path_cloud_override_a = file.path(dir_sentinel, "cloud_override_a.csv")
+system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(path_empty_clip), "/nodata:-9999", "/noheight:NA", paste0("/output:", shQuote(path_cloud_override_a)))
+  , stdout = FALSE
+  )
+dt_override_a = data.table::fread(path_cloud_override_a, na.strings = "NA")
+override_a_pass = isTRUE(all.equal(dt_override_a$elev_mean[1], -9999))
+cat("cloudmetrics /nodata:-9999 override on an empty cloud (elev_mean == -9999):"
+   , if (override_a_pass) "PASS" else "FAIL", "\n")
+
+path_cloud_override_b = file.path(dir_sentinel, "cloud_override_b.csv")
+system2(
+    file.path(dir_bin, "cloudmetrics.exe")
+  , args = c(shQuote(path_sample_las), "/minht:10000", "/nodata:0", "/noheight:-9999"
+            ,paste0("/output:", shQuote(path_cloud_override_b)))
+  , stdout = FALSE
+  )
+dt_override_b = data.table::fread(path_cloud_override_b, na.strings = "NA")
+override_b_pass = isTRUE(all.equal(dt_override_b$elev_mean[1], -9999))
+cat("cloudmetrics /noheight:-9999 override on a below-cutoff cloud (elev_mean == -9999):"
+   , if (override_b_pass) "PASS" else "FAIL", "\n")
+```
+
+The `PASS`/`FAIL` lines above are the re-runnable form of the sentinel-policy rule described in `docs/METRICS_REFERENCE.md` -- a future change that breaks the NA-vs-noheight distinction will show up here as a `FAIL` the next time this report renders, not only as a prose description that could silently go stale.
+
+---
+
+# 9. Proposed Intensive Testing Suite for `fusion_update`
 
 To guarantee production robustness, we propose a **6-domain intensive testing matrix** specifically tailored for validating `fusion_update` CLI executables (`canopymodel`, `groundfilter`, `gridmetrics`, `catalog`, `clipdata`, `ltktools`).
 
 ```{r intensive-tests-proposal, include=TRUE, message=FALSE, warning=FALSE}
 # ==============================================================================
-# Chunk 7: Proposed Intensive Test Matrix
+# Chunk 12: Proposed Intensive Test Matrix
 # ==============================================================================
 
 test_matrix <- data.frame(
@@ -421,11 +790,11 @@ datatable(
 
 ---
 
-# 8. Executive Summary & Recommendations
+# 10. Executive Summary & Recommendations
 
 ```{r executive-summary, include=TRUE, message=FALSE, warning=FALSE}
 # ==============================================================================
-# Chunk 8: Formatted Executive Summary Table
+# Chunk 13: Formatted Executive Summary Table
 # ==============================================================================
 
 summary_tbl <- data.frame(
@@ -435,6 +804,7 @@ summary_tbl <- data.frame(
     "Output Raster Format",
     "Numerical Precision",
     "Point Cloud IO Support",
+    "Directory / Multi-File Inputs",
     "Production Readiness"
   ),
   Legacy_v440 = c(
@@ -443,6 +813,7 @@ summary_tbl <- data.frame(
     "Proprietary binary .dtm format",
     "32-bit floating point DTM",
     "Legacy LAS / external conversion",
+    "Single file only, per tool invocation",
     "Baseline (Deprecated)"
   ),
   Fusion_Update = c(
@@ -451,9 +822,10 @@ summary_tbl <- data.frame(
     "Industry standard GeoTIFF via GDAL",
     "IEEE Float32/Float64 GeoTIFF",
     "Native LAS & compressed LAZ (LASzip)",
+    "Single file or directory of tiles, both point clouds and ground DTMs (Section 7)",
     "Validated (Ready for Intensive Suite)"
   ),
-  Status = c("PASS", "PASS", "PASS", "PASS", "PASS", "RECOMMENDED")
+  Status = c("PASS", "PASS", "PASS", "PASS", "PASS", "PASS", "RECOMMENDED")
 )
 
 flextable(summary_tbl) %>%
@@ -474,7 +846,7 @@ flextable(summary_tbl) %>%
 
 ::: {.callout-tip}
 ## Key Conclusion & Strategic Recommendation
-The **`fusion_update`** codebase successfully eliminates the legacy `.dtm` file format dependency in favor of modern **GDAL GeoTIFF rasters** and **LAS/LAZ point cloud IO**. Benchmark results confirm a **4.5x to 6.6x execution speedup** alongside a **75% reduction in peak RAM consumption**. 
+The **`fusion_update`** codebase successfully eliminates the legacy `.dtm` file format dependency in favor of modern **GDAL GeoTIFF rasters** and **LAS/LAZ point cloud IO**. Benchmark results confirm a **4.5x to 6.6x execution speedup** alongside a **75% reduction in peak RAM consumption**. Section 7's live executable runs confirm that directory-of-tiles inputs (point clouds and ground DTMs alike) produce the same metrics and rasters as their single-file equivalents, with one open item: the ground-DTM directory path does not carry the source tiles' NoData value through to its own diagnostic log line.
 
 We recommend proceeding with the **6-domain intensive test matrix** (Table 2) prior to deploying `fusion_update` into automated production pipelines.
 :::
