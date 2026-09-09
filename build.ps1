@@ -57,6 +57,7 @@ $tool_names = @(
     "gridmetrics", "clipdata", "groundfilter", "canopymodel"
   , "catalog", "canopymaxima", "treeseg", "cloudmetrics", "topometrics"
   , "filterdata", "thindata", "returndensity", "pipeline"
+  , "gridsurfacestats", "densitymetrics"
   )
 
 #1. read the project version out of CMakeLists.txt (single source of truth)

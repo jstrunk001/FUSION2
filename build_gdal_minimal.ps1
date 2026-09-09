@@ -135,6 +135,12 @@ $configure_args = @(
   , "-DGDAL_USE_GTA=OFF"
   , "-DGDAL_USE_HDF4=OFF"
   , "-DGDAL_USE_HDF5=OFF"
+  # This Rtools 4.3 install's own hdf5-targets.cmake references a
+  # mirror_server.exe that isn't actually present (a corrupt/incomplete
+  # HDF5 package in the toolchain, unrelated to GDAL) -- GDAL_USE_HDF5=OFF
+  # above doesn't stop CheckDependentLibraries.cmake from still probing for
+  # it, so explicitly disable the find_package(HDF5) call itself.
+  , "-DCMAKE_DISABLE_FIND_PACKAGE_HDF5=ON"
   , "-DGDAL_USE_HEIF=OFF"
   , "-DGDAL_USE_HDFS=OFF"
   , "-DGDAL_USE_ICONV=OFF"
