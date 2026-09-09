@@ -1,4 +1,5 @@
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/lidar/COPCIndex.h"
 
 #include <fstream>
 #include <iostream>
@@ -90,6 +91,8 @@ public:
     laszip_header_struct* header{nullptr};
     laszip_point_struct* point{nullptr};
     uint64_t currentPointIndex{0};
+    bool isCOPC{false};
+    COPCIndex copcIndex;
 
     ~Impl() {
         CloseHandle();
@@ -172,6 +175,11 @@ bool LASReader::Open(const std::filesystem::path& filePath) {
 
     m_impl->currentPointIndex = 0;
 
+    m_impl->isCOPC = COPCIndex::IsCOPCFile(filePath);
+    if (m_impl->isCOPC) {
+        m_impl->isCOPC = m_impl->copcIndex.ReadIndex(filePath);
+    }
+
     return true;
 }
 
@@ -186,20 +194,14 @@ bool LASReader::IsOpen() const {
     return (m_impl && m_impl->handle != nullptr);
 }
 
-bool LASReader::ReadNextPoint(PointRecord& pt) {
-    if (!IsOpen() || m_impl->currentPointIndex >= m_header.pointCount) {
-        return false;
-    }
-
-    if (laszip_read_point(m_impl->handle) != 0) {
-        return false;
-    }
-
-    const laszip_point_struct& p = *m_impl->point;
-
-    pt.x = (p.X * m_header.xScaleFactor) + m_header.xOffset;
-    pt.y = (p.Y * m_header.yScaleFactor) + m_header.yOffset;
-    pt.z = (p.Z * m_header.zScaleFactor) + m_header.zOffset;
+// Maps the point laszip_read_point() just decoded into m_impl->point onto
+// a PointRecord. Shared by ReadNextPoint's plain sequential walk and
+// ReadPointsInExtent's chunk-seeking COPC path so the field mapping can't
+// drift between the two.
+static void DecodePointRecord(const laszip_point_struct& p, const LASHeaderInfo& header, PointRecord& pt) {
+    pt.x = (p.X * header.xScaleFactor) + header.xOffset;
+    pt.y = (p.Y * header.yScaleFactor) + header.yOffset;
+    pt.z = (p.Z * header.zScaleFactor) + header.zOffset;
     pt.intensity = p.intensity;
     pt.pointSourceID = p.point_source_ID;
     pt.gpsTime = p.gps_time;
@@ -208,7 +210,7 @@ bool LASReader::ReadNextPoint(PointRecord& pt) {
     pt.blue = p.rgb[2];
     pt.nir = p.rgb[3];
 
-    if (m_header.pointFormat >= 6) { // LAS 1.4 Point Formats 6 to 10 -- extended fields
+    if (header.pointFormat >= 6) { // LAS 1.4 Point Formats 6 to 10 -- extended fields
         pt.returnNumber = p.extended_return_number;
         pt.numberOfReturns = p.extended_number_of_returns;
         pt.classification = p.extended_classification;
@@ -229,9 +231,71 @@ bool LASReader::ReadNextPoint(PointRecord& pt) {
         pt.withheld = (p.withheld_flag != 0);
         pt.overlap = false;
     }
+}
+
+bool LASReader::ReadNextPoint(PointRecord& pt) {
+    if (!IsOpen() || m_impl->currentPointIndex >= m_header.pointCount) {
+        return false;
+    }
+
+    if (laszip_read_point(m_impl->handle) != 0) {
+        return false;
+    }
+
+    DecodePointRecord(*m_impl->point, m_header, pt);
 
     m_impl->currentPointIndex++;
     return true;
+}
+
+bool LASReader::IsCOPC() const {
+    return m_impl && m_impl->isCOPC;
+}
+
+void LASReader::ReadPointsInExtent(double minX, double minY, double maxX, double maxY,
+                                    const std::function<void(const PointRecord&)>& callback) {
+    if (!IsOpen()) {
+        return;
+    }
+
+    if (m_impl->isCOPC) {
+        // Query only the chunks whose own bounds overlap the extent, and
+        // seek straight to each one's starting point index -- laszip_seek_
+        // point() already knows how to jump to any point index inside a
+        // LAZ file's chunk table, so no manual byte-offset handling is
+        // needed here. A chunk's own bounds are a bounding box, so points
+        // inside a partially-overlapping chunk still need the exact x/y
+        // filter below.
+        auto chunks = m_impl->copcIndex.QueryChunks(minX, minY, maxX, maxY);
+        PointRecord pt;
+        for (const auto& chunk : chunks) {
+            if (laszip_seek_point(m_impl->handle, static_cast<laszip_I64>(chunk.startingPointIndex)) != 0) {
+                continue;
+            }
+            for (int32_t i = 0; i < chunk.pointCount; ++i) {
+                if (laszip_read_point(m_impl->handle) != 0) {
+                    break;
+                }
+                DecodePointRecord(*m_impl->point, m_header, pt);
+                if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) {
+                    callback(pt);
+                }
+            }
+        }
+        // Leave the reader positioned at a defined, reusable state for any
+        // caller that follows with a plain ReadNextPoint() loop.
+        Rewind();
+        return;
+    }
+
+    // Non-COPC fallback: today's plain sequential read, filtered inline.
+    Rewind();
+    PointRecord pt;
+    while (ReadNextPoint(pt)) {
+        if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) {
+            callback(pt);
+        }
+    }
 }
 
 void LASReader::Rewind() {
@@ -248,6 +312,14 @@ public:
     RawLASHeader rawHeader;
     uint64_t pointCount{0};
     bool isFormat6Plus{false};
+
+    // Running bounds of the points actually written, tracked independently
+    // of whatever bounds the caller's header (usually copied from the input
+    // file/merged reader) supplied to Open() -- patched into the header at
+    // Close() so a writer given fewer points than the whole input (e.g. one
+    // /multifile polygon output) reports its own true extent, not the input's.
+    double minX{0.0}, maxX{0.0}, minY{0.0}, maxY{0.0}, minZ{0.0}, maxZ{0.0};
+    bool haveBounds{false};
 
     ~Impl() {
         if (file.is_open()) {
@@ -304,11 +376,26 @@ bool LASWriter::Open(const std::filesystem::path& filePath, const LASHeaderInfo&
     size_t headerWriteSize = m_impl->isFormat6Plus ? sizeof(RawLASHeader) : 227;
     m_impl->file.write(reinterpret_cast<char*>(&m_impl->rawHeader), headerWriteSize);
     m_impl->pointCount = 0;
+    m_impl->haveBounds = false;
     return true;
 }
 
 bool LASWriter::WritePoint(const PointRecord& pt) {
     if (!m_impl->file.is_open()) return false;
+
+    if (!m_impl->haveBounds) {
+        m_impl->minX = m_impl->maxX = pt.x;
+        m_impl->minY = m_impl->maxY = pt.y;
+        m_impl->minZ = m_impl->maxZ = pt.z;
+        m_impl->haveBounds = true;
+    } else {
+        m_impl->minX = (std::min)(m_impl->minX, pt.x);
+        m_impl->maxX = (std::max)(m_impl->maxX, pt.x);
+        m_impl->minY = (std::min)(m_impl->minY, pt.y);
+        m_impl->maxY = (std::max)(m_impl->maxY, pt.y);
+        m_impl->minZ = (std::min)(m_impl->minZ, pt.z);
+        m_impl->maxZ = (std::max)(m_impl->maxZ, pt.z);
+    }
 
     if (m_impl->isFormat6Plus) {
         RawPointFormat6 rawPt6;
@@ -353,6 +440,14 @@ bool LASWriter::WritePoint(const PointRecord& pt) {
 
 void LASWriter::Close() {
     if (m_impl && m_impl->file.is_open()) {
+        if (m_impl->haveBounds) {
+            m_impl->rawHeader.minX = m_impl->minX;
+            m_impl->rawHeader.maxX = m_impl->maxX;
+            m_impl->rawHeader.minY = m_impl->minY;
+            m_impl->rawHeader.maxY = m_impl->maxY;
+            m_impl->rawHeader.minZ = m_impl->minZ;
+            m_impl->rawHeader.maxZ = m_impl->maxZ;
+        }
         if (m_impl->isFormat6Plus) {
             m_impl->rawHeader.extendedNumberOfPointRecords = m_impl->pointCount;
             m_impl->rawHeader.numberOfPointRecords = (m_impl->pointCount <= 0xFFFFFFFF) ? static_cast<uint32_t>(m_impl->pointCount) : 0;

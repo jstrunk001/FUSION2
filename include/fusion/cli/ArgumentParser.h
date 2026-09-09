@@ -68,6 +68,18 @@ public:
         return m_parsedFlags.find(lower) != m_parsedFlags.end();
     }
 
+    // True iff the caller actually passed /name:value (or -name value) on
+    // the command line, as opposed to GetOption() falling back to the
+    // registered default. Needed wherever two related options' *defaults*
+    // combine harmlessly but two explicit, conflicting values need to be
+    // surfaced rather than silently resolved (e.g. gridmetrics/cloudmetrics'
+    // /nodata vs /noheight -- see SentinelPolicy.h's ResolveRasterNoData).
+    bool WasExplicit(const std::string& name) const {
+        std::string lower = name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        return m_parsedOptions.find(lower) != m_parsedOptions.end();
+    }
+
     std::optional<std::string> GetOption(const std::string& name) const {
         std::string lower = name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);

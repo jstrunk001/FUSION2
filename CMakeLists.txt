@@ -46,6 +46,11 @@ add_library(fusion_core STATIC
     src/libfusion_core/InputResolver.cpp
     src/libfusion_core/MergedPointCloudReader.cpp
     src/libfusion_core/SpatialMask.cpp
+    src/libfusion_core/PolygonFeatureSet.cpp
+    src/libfusion_core/SurfaceStats.cpp
+    src/libfusion_core/PointCloudStats.cpp
+    src/libfusion_core/SpectralChannels.cpp
+    src/libfusion_core/COPCIndex.cpp
     src/libfusion_core/BatchPipeline.cpp
     src/libfusion_core/StatusMessenger.cpp
     src/libfusion_core/ExperimentalMetrics.cpp
@@ -63,6 +68,15 @@ if(WIN32)
     # own -- a separate start-group/end-group pair here previously broke
     # resolution of unrelated symbols (libcrypto's zlib/winsock refs) by
     # splitting what GNU ld needs to treat as one atomic resolution pass.
+    # deflate, nghttp2, psl, brotlidec, and brotlicommon are not present as
+    # static libraries in the current Rtools 4.3 toolchain (they were
+    # present under a previous Rtools 4.5 install this project was last
+    # built against) -- dropped from this group since GDAL is vendored with
+    # GDAL_USE_CURL=OFF/GDAL_USE_DEFLATE=OFF (see build_gdal_minimal.ps1),
+    # so libgdal.a itself never calls into them; PROJ's own curl usage
+    # (found transitively via find_dependency(PROJ CONFIG)) is limited to
+    # optional network grid downloads this project's local-file-only tools
+    # never trigger.
     target_link_libraries(fusion_core PUBLIC
         -Wl,--start-group
         ${LASZIP_BASE_LIBRARY}
@@ -72,7 +86,6 @@ if(WIN32)
         zstd
         lzma
         lz4
-        deflate
         Lerc
         aec
         webp
@@ -84,15 +97,11 @@ if(WIN32)
         secur32
         ssl
         crypto
-        nghttp2
         ssh2
         gcrypt
         gpg-error
         idn2
         unistring
-        psl
-        brotlidec
-        brotlicommon
         -Wl,--end-group
     )
 endif()
@@ -125,6 +134,12 @@ target_link_libraries(cloudmetrics PRIVATE fusion_core)
 
 add_executable(topometrics src/tools/topometrics/topometrics.cpp)
 target_link_libraries(topometrics PRIVATE fusion_core)
+
+add_executable(gridsurfacestats src/tools/gridsurfacestats/gridsurfacestats.cpp)
+target_link_libraries(gridsurfacestats PRIVATE fusion_core)
+
+add_executable(densitymetrics src/tools/densitymetrics/densitymetrics.cpp)
+target_link_libraries(densitymetrics PRIVATE fusion_core)
 
 add_executable(filterdata src/tools/filterdata/filterdata.cpp)
 target_link_libraries(filterdata PRIVATE fusion_core)

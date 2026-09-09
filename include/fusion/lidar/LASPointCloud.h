@@ -7,6 +7,7 @@
 #include <optional>
 #include <filesystem>
 #include <cstdint>
+#include <functional>
 
 namespace fusion::lidar {
 
@@ -73,6 +74,20 @@ public:
 
     bool ReadNextPoint(PointRecord& pt);
     void Rewind();
+
+    // True if the opened file carries a valid COPC (Cloud Optimized Point
+    // Cloud) info VLR -- detected at Open() time.
+    bool IsCOPC() const;
+
+    // Invokes callback once per point whose x/y falls in [minX,maxX] x
+    // [minY,maxY]. When IsCOPC() is true, uses the file's own COPC chunk
+    // index to seek (via laszip_seek_point) directly to the chunks that
+    // overlap the extent, skipping chunks that don't -- for a non-COPC
+    // file, falls back to a plain sequential read-and-filter over every
+    // point (today's existing pattern, just wrapped behind the same call).
+    // Rewinds the reader first, so it always scans from the start.
+    void ReadPointsInExtent(double minX, double minY, double maxX, double maxY,
+                             const std::function<void(const PointRecord&)>& callback);
 
 private:
     class Impl;

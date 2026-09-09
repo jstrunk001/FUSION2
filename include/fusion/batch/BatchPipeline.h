@@ -7,6 +7,7 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
+#include <limits>
 #include "fusion/raster/GDALRaster.h"
 
 namespace fusion::batch {
@@ -56,6 +57,15 @@ struct PipelineJobOptions {
     bool noIntensity{false};
     std::string strata;
     std::string intStrata;
+
+    // Resolved /nodata,/noheight sentinel values (see SentinelPolicy.h) --
+    // plain floats rather than a SentinelPolicy member so this header
+    // doesn't need to depend on fusion/metrics/SentinelPolicy.h; the
+    // gridmetrics batch/tiled tile task applies the same two-tier rule
+    // (nodataValue for a fully empty cell, noheightValue for a cell with
+    // returns but none clearing the height cutoff) as single-file mode.
+    float nodataValue{std::numeric_limits<float>::quiet_NaN()};
+    float noheightValue{0.0f};
 };
 
 class BatchPipeline {
