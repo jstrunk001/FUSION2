@@ -1,10 +1,16 @@
 // cloudmetrics.cpp : Modernized CloudMetrics Executable for FUSION Update
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ParseUtil.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/metrics/ExperimentalMetrics.h"
+#include "fusion/metrics/SurfaceStats.h"
+#include "fusion/metrics/SentinelPolicy.h"
+#include "fusion/metrics/PointCloudStats.h"
+#include "fusion/metrics/SpectralChannels.h"
+#include "fusion/geom/PolygonFeatureSet.h"
 
 #include <iostream>
 #include <fstream>
@@ -13,23 +19,206 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <sstream>
+#include <iomanip>
 
-struct LidarStats {
+// CSV output writes the literal text "NA" wherever a value resolved to an
+// NA sentinel, not the numeric NaN (Shared groundwork C) -- real computed
+// statistics in this domain are never themselves NaN, so a NaN value
+// uniquely identifies "this came from an NA-resolved /nodata or /noheight".
+static void WriteCSVDouble(std::ofstream& out, double value) {
+    if (std::isnan(value)) {
+        out << "NA";
+    } else {
+        out << value;
+    }
+}
+
+struct CloudStatsRow {
     uint64_t totalPoints{0};
     uint64_t pointsAboveMinHt{0};
-    double minZ{1e9};
-    double maxZ{-1e9};
-    double meanZ{0.0};
-    double stdDevZ{0.0};
-    double p05{0.0};
-    double p25{0.0};
-    double p50{0.0};
-    double p75{0.0};
-    double p95{0.0};
-    double p99{0.0};
     double canopyCover{0.0};
-    double canopyReliefRatio{0.0};
+    std::vector<float> elevVals; // PointStatBundleAsVector("elev_") order, or all-sentinel
+    float elevProfileArea{0.0f};
+    std::vector<float> intVals;  // same, for intensities
 };
+
+// Reduces one point set's already-height-filtered elevations (heights) and
+// intensities plus its unfiltered totalPts/ptsAboveMin counts into one CSV
+// row's worth of values. Shared by the single-cloud path (called once) and
+// /shape polygon mode (called once per feature) so the two modes can't
+// drift apart numerically. Applies Shared groundwork C's two-tier sentinel
+// rule: totalPts == 0 (nothing at all landed here) resolves every field,
+// including the counts themselves, to /nodata; totalPts > 0 but
+// heights.empty() (points exist but none clear /minht) resolves only the
+// height-filtered fields (elev_*, int_*, elev_profile_area) to /noheight --
+// canopyCover is well-defined directly from the unfiltered return count, so
+// it's never subject to /noheight.
+static CloudStatsRow ComputeCloudStats(
+        std::vector<double> heights, std::vector<double> intensities,
+        uint64_t totalPts, uint64_t ptsAboveMin,
+        size_t elevColCount, size_t intColCount,
+        const fusion::metrics::SentinelPolicy& policy) {
+    CloudStatsRow row;
+    row.totalPoints = totalPts;
+    row.pointsAboveMinHt = ptsAboveMin;
+
+    double ND = policy.nodata.value;
+    double NH = policy.noheight.value;
+    row.canopyCover = ND;
+    row.elevVals.assign(elevColCount, static_cast<float>(ND));
+    row.elevProfileArea = static_cast<float>(ND);
+    row.intVals.assign(intColCount, static_cast<float>(ND));
+
+    if (totalPts == 0) {
+        return row;
+    }
+
+    row.canopyCover = (static_cast<double>(ptsAboveMin) / totalPts) * 100.0;
+
+    if (!heights.empty()) {
+        std::vector<float> heightsF(heights.begin(), heights.end());
+        fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(heightsF);
+        row.elevVals = fusion::metrics::PointStatBundleAsVector(bundle);
+        row.elevProfileArea = fusion::metrics::ComputeProfileArea(bundle);
+    } else {
+        row.elevVals.assign(elevColCount, static_cast<float>(NH));
+        row.elevProfileArea = static_cast<float>(NH);
+    }
+
+    if (!intensities.empty()) {
+        std::vector<float> intensitiesF(intensities.begin(), intensities.end());
+        fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(intensitiesF);
+        row.intVals = fusion::metrics::PointStatBundleAsVector(bundle);
+    } else {
+        row.intVals.assign(intColCount, static_cast<float>(NH));
+    }
+
+    return row;
+}
+
+// Writes one CSV row's stat fields, starting from TotalPoints -- callers
+// write their own leading identity column(s) (Filename, or
+// FeatureIndex/Label) and the comma separating them from this row first.
+static void WriteCloudStatsRow(std::ofstream& outFile, const CloudStatsRow& row) {
+    if (row.totalPoints == 0) {
+        outFile << "NA,NA,";
+    } else {
+        outFile << row.totalPoints << "," << row.pointsAboveMinHt << ",";
+    }
+    WriteCSVDouble(outFile, row.canopyCover);
+    for (float v : row.elevVals) {
+        outFile << ",";
+        WriteCSVDouble(outFile, v);
+    }
+    outFile << ",";
+    WriteCSVDouble(outFile, row.elevProfileArea);
+    for (float v : row.intVals) {
+        outFile << ",";
+        WriteCSVDouble(outFile, v);
+    }
+}
+
+// /strata and /intstrata (item 6): both bucket points by elevation using
+// the shared fusion::metrics::AssignStratumIndex helper, identical bucket
+// boundary semantics to gridmetrics -- but /strata's buckets hold each
+// point's elevation (an elevation statistic bundle per bucket) while
+// /intstrata's buckets hold each point's intensity (an intensity statistic
+// bundle per bucket), so the two options can use independent threshold
+// lists and independent bucket counts.
+static void AssignToStrataBuckets(
+        double elevation, double intensity,
+        const std::vector<double>& strata, std::vector<std::vector<double>>& strataElevBuckets,
+        const std::vector<double>& intStrata, std::vector<std::vector<double>>& intStrataIntBuckets) {
+    if (!strata.empty()) {
+        strataElevBuckets[fusion::metrics::AssignStratumIndex(elevation, strata)].push_back(elevation);
+    }
+    if (!intStrata.empty()) {
+        intStrataIntBuckets[fusion::metrics::AssignStratumIndex(elevation, intStrata)].push_back(intensity);
+    }
+}
+
+static void WriteStrataHeader(std::ofstream& out, size_t numBuckets, const std::string& prefixBase,
+                               const std::vector<std::string>& statSuffixes) {
+    for (size_t s = 0; s < numBuckets; ++s) {
+        std::ostringstream label;
+        label << std::setw(2) << std::setfill('0') << s;
+        std::string prefix = prefixBase + label.str() + "_";
+        out << "," << prefix << "count," << prefix << "proportion";
+        for (const auto& suffix : statSuffixes) {
+            out << "," << prefix << suffix;
+        }
+    }
+}
+
+// cellEmpty (totalPts == 0 for the whole cloud/feature) forces every column
+// to /nodata, matching every other column in the row; otherwise each
+// bucket's count/proportion are always real (a return count is always
+// well-defined once the cloud/feature has data), and the bundle columns
+// are /noheight only for a bucket that itself has zero points.
+static void WriteStrataColumns(std::ofstream& out, const std::vector<std::vector<double>>& buckets,
+                                uint64_t totalPts, const std::vector<std::string>& statSuffixes,
+                                const fusion::metrics::SentinelPolicy& policy, bool cellEmpty) {
+    for (const auto& bucket : buckets) {
+        if (cellEmpty) {
+            out << ",NA,NA";
+            for (size_t k = 0; k < statSuffixes.size(); ++k) out << ",NA";
+            continue;
+        }
+        int count = static_cast<int>(bucket.size());
+        double proportion = static_cast<double>(count) / totalPts;
+        out << "," << count << "," << proportion;
+        if (count > 0) {
+            std::vector<float> valsF(bucket.begin(), bucket.end());
+            fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(valsF);
+            for (float v : fusion::metrics::PointStatBundleAsVector(bundle)) {
+                out << ",";
+                WriteCSVDouble(out, v);
+            }
+        } else {
+            for (size_t k = 0; k < statSuffixes.size(); ++k) {
+                out << ",";
+                WriteCSVDouble(out, policy.noheight.value);
+            }
+        }
+    }
+}
+
+// /rgb: (item 7) -- one full statistic bundle per selected spectral
+// channel, same call shape as elev_/int_ but looped over the channel list.
+// Applies the same /noheight-when-empty-but-not-nodata rule as int_.
+static void WriteSpectralHeader(std::ofstream& out, const std::vector<fusion::metrics::SpectralChannelSpec>& channels) {
+    for (const auto& spec : channels) {
+        for (const auto& name : fusion::metrics::PointStatBundleColumnNames(spec.prefix + "_")) {
+            out << "," << name;
+        }
+    }
+}
+
+static void WriteSpectralColumns(std::ofstream& out, const std::vector<fusion::metrics::SpectralChannelSpec>& channels,
+                                  const std::vector<std::vector<double>>& valuesByChannel,
+                                  size_t bundleColCount, const fusion::metrics::SentinelPolicy& policy, bool cellEmpty) {
+    for (size_t c = 0; c < channels.size(); ++c) {
+        if (cellEmpty) {
+            for (size_t k = 0; k < bundleColCount; ++k) out << ",NA";
+            continue;
+        }
+        const auto& vals = valuesByChannel[c];
+        if (!vals.empty()) {
+            std::vector<float> valsF(vals.begin(), vals.end());
+            fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(valsF);
+            for (float v : fusion::metrics::PointStatBundleAsVector(bundle)) {
+                out << ",";
+                WriteCSVDouble(out, v);
+            }
+        } else {
+            for (size_t k = 0; k < bundleColCount; ++k) {
+                out << ",";
+                WriteCSVDouble(out, policy.noheight.value);
+            }
+        }
+    }
+}
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("cloudmetrics", "Computes Summary Metrics for Point Cloud Clips");
@@ -40,6 +229,14 @@ int main(int argc, char* argv[]) {
     parser.AddOption("cellsize", "Grid cell size for 2D area/volume metrics (m)", "10.0");
     parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (m)", "20.0");
     parser.AddFlag("exp", "Compute additional experimental metrics from RSForTools");
+    parser.AddFlag("surfstats", "Compute surface area ratio, roughness, planimetric area, and 3D surface area from a /cellsize elevation grid (top-of-cloud max per cell). Not available with /shape.");
+    parser.AddOption("shape", "Polygon shapefile -- compute one metrics row per polygon feature instead of one row for the whole cloud");
+    parser.AddOption("field", "Attribute field used to label each /shape polygon's output row; falls back to a zero-padded feature index when omitted or missing on a feature");
+    parser.AddOption("nodata", "Value for a cloud/feature with zero points at all: NA, or a number such as 0, -9999, or inf", "NA");
+    parser.AddOption("noheight", "Value for height-dependent columns when points exist but none clear the height cutoff: NA, or a number such as 0, -9999, or inf", "0");
+    parser.AddOption("strata", "Comma-separated height strata thresholds (e.g. 0.5,2.0,5.0,10.0,20.0) -- same syntax as gridmetrics' /strata. Appends stratum_N_count/proportion plus a full elevation statistic bundle per bucket.");
+    parser.AddOption("intstrata", "Comma-separated height thresholds bucketing points the same way as /strata, but reporting an intensity statistic bundle per bucket instead of elevation (defaults to /strata's thresholds if omitted).");
+    parser.AddOption("rgb", "Comma-separated spectral channels to compute a statistic bundle for: R, G, B, N, or all (every channel the input file's LAS point format actually carries)");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -57,6 +254,20 @@ int main(int argc, char* argv[]) {
     double cellSize = std::stod(parser.GetOption("cellsize").value_or("10.0"));
     double voxelSize = std::stod(parser.GetOption("voxelsize").value_or("20.0"));
     bool enableExp = parser.HasFlag("exp");
+    bool enableSurfStats = parser.HasFlag("surfstats");
+    std::string fieldName = parser.GetOption("field").value_or("");
+
+    fusion::metrics::SentinelPolicy sentinel;
+    sentinel.nodata = fusion::metrics::ParseSentinelOption(parser.GetOption("nodata").value_or("NA"));
+    sentinel.noheight = fusion::metrics::ParseSentinelOption(parser.GetOption("noheight").value_or("0"));
+
+    std::vector<double> strata = parser.GetOption("strata") ? fusion::cli::ParseFloatList(*parser.GetOption("strata")) : std::vector<double>{};
+    std::vector<double> intStrata = parser.GetOption("intstrata") ? fusion::cli::ParseFloatList(*parser.GetOption("intstrata")) : strata;
+    size_t numStrataBuckets = strata.empty() ? 0 : strata.size() + 1;
+
+    std::vector<std::string> elevColNames = fusion::metrics::PointStatBundleColumnNames("elev_");
+    std::vector<std::string> intColNames = fusion::metrics::PointStatBundleColumnNames("int_");
+    std::vector<std::string> strataStatSuffixes = fusion::metrics::PointStatBundleColumnNames("");
 
     // 1. Resolve ground surface DTM (single file or directory of tiles)
     fusion::raster::GDALRaster groundRaster;
@@ -83,7 +294,18 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 2. Resolve input point cloud files and directories
+    // 2. Resolve polygon feature set, if /shape was given
+    fusion::geom::PolygonFeatureSet featureSet;
+    bool haveShape = false;
+    if (auto shapePath = parser.GetOption("shape")) {
+        if (!featureSet.LoadShapefile(*shapePath, fieldName)) {
+            std::cerr << "Error: Failed to load polygon shapefile: " << *shapePath << "\n";
+            return 1;
+        }
+        haveShape = true;
+    }
+
+    // 3. Resolve input point cloud files and directories
     auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
     if (inputFiles.empty()) {
         std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
@@ -96,10 +318,153 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // /rgb: -- a requested channel absent from the file's point format is a
+    // printed warning, never a hard failure, since a batch run over
+    // mixed-format tiles is a real, expected case.
+    fusion::metrics::SpectralChannelSelection spectralSelection;
+    if (auto rgbOpt = parser.GetOption("rgb")) {
+        spectralSelection = fusion::metrics::ParseSpectralChannels(*rgbOpt, reader.GetHeader().pointFormat);
+        for (const auto& token : spectralSelection.unknownTokens) {
+            std::cerr << "Warning: /rgb channel '" << token << "' is not available for LAS point format "
+                      << static_cast<int>(reader.GetHeader().pointFormat) << " -- skipped.\n";
+        }
+    }
+
+    std::ofstream outFile(outputPath);
+    if (!outFile.is_open()) {
+        std::cerr << "Error: Failed to create output CSV file: " << outputPath << "\n";
+        return 1;
+    }
+
+    auto expNames = enableExp ? fusion::metrics::GetExperimentalMetricsNames() : std::vector<std::string>{};
+
+    if (haveShape) {
+        std::cout << "[CloudMetrics] Processing point cloud metrics for " << inputFiles.size()
+                  << " file(s) against " << featureSet.FeatureCount() << " polygon feature(s)...\n";
+
+        // A point belongs to at most one feature, so this is one
+        // accumulator's worth of memory per point, not N -- the full,
+        // uncropped cloud is streamed exactly once.
+        std::vector<std::vector<double>> heightsByFeature(featureSet.FeatureCount());
+        std::vector<std::vector<double>> intensitiesByFeature(featureSet.FeatureCount());
+        std::vector<std::vector<fusion::metrics::Point3D>> pointsByFeature(
+            enableExp ? featureSet.FeatureCount() : 0);
+        std::vector<uint64_t> totalPtsByFeature(featureSet.FeatureCount(), 0);
+        std::vector<uint64_t> ptsAboveMinByFeature(featureSet.FeatureCount(), 0);
+        std::vector<std::vector<std::vector<double>>> strataElevBucketsByFeature(
+            featureSet.FeatureCount(), std::vector<std::vector<double>>(numStrataBuckets));
+        std::vector<std::vector<std::vector<double>>> intStrataIntBucketsByFeature(
+            featureSet.FeatureCount(), std::vector<std::vector<double>>(intStrata.empty() ? 0 : intStrata.size() + 1));
+        std::vector<std::vector<std::vector<double>>> spectralByFeature(
+            featureSet.FeatureCount(), std::vector<std::vector<double>>(spectralSelection.channels.size()));
+
+        fusion::lidar::PointRecord pt;
+        while (reader.ReadNextPoint(pt)) {
+            size_t featureIdx = featureSet.FindContaining(pt.x, pt.y);
+            if (featureIdx == fusion::geom::PolygonFeatureSet::npos) {
+                continue;
+            }
+
+            double h = pt.z;
+            if (hasGround) {
+                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
+                    h -= *gz;
+                }
+            }
+
+            totalPtsByFeature[featureIdx]++;
+            if (enableExp) {
+                pointsByFeature[featureIdx].push_back({pt.x, pt.y, h});
+            }
+            AssignToStrataBuckets(h, static_cast<double>(pt.intensity), strata, strataElevBucketsByFeature[featureIdx],
+                                   intStrata, intStrataIntBucketsByFeature[featureIdx]);
+            if (h >= minHt) {
+                heightsByFeature[featureIdx].push_back(h);
+                intensitiesByFeature[featureIdx].push_back(static_cast<double>(pt.intensity));
+                ptsAboveMinByFeature[featureIdx]++;
+                for (size_t ch = 0; ch < spectralSelection.channels.size(); ++ch) {
+                    spectralByFeature[featureIdx][ch].push_back(static_cast<double>(pt.*(spectralSelection.channels[ch].field)));
+                }
+            }
+        }
+        reader.Close();
+
+        outFile << "FeatureIndex,Label,TotalPoints,CanopyPoints,CanopyCoverPct";
+        for (const auto& name : elevColNames) outFile << "," << name;
+        outFile << ",elev_profile_area";
+        for (const auto& name : intColNames) outFile << "," << name;
+        WriteStrataHeader(outFile, numStrataBuckets, "stratum_", strataStatSuffixes);
+        WriteStrataHeader(outFile, intStrata.empty() ? 0 : intStrata.size() + 1, "intstratum_", strataStatSuffixes);
+        WriteSpectralHeader(outFile, spectralSelection.channels);
+        if (enableExp) {
+            for (const auto& name : expNames) {
+                outFile << "," << name;
+            }
+        }
+        outFile << "\n";
+
+        for (size_t f = 0; f < featureSet.FeatureCount(); ++f) {
+            CloudStatsRow row = ComputeCloudStats(
+                std::move(heightsByFeature[f]), std::move(intensitiesByFeature[f]),
+                totalPtsByFeature[f], ptsAboveMinByFeature[f],
+                elevColNames.size(), intColNames.size(), sentinel);
+
+            outFile << f << "," << featureSet.Label(f) << ",";
+            WriteCloudStatsRow(outFile, row);
+            bool featureEmpty = (totalPtsByFeature[f] == 0);
+            WriteStrataColumns(outFile, strataElevBucketsByFeature[f], totalPtsByFeature[f], strataStatSuffixes, sentinel, featureEmpty);
+            WriteStrataColumns(outFile, intStrataIntBucketsByFeature[f], totalPtsByFeature[f], strataStatSuffixes, sentinel, featureEmpty);
+            WriteSpectralColumns(outFile, spectralSelection.channels, spectralByFeature[f], strataStatSuffixes.size(), sentinel, featureEmpty);
+            if (enableExp) {
+                fusion::metrics::ExperimentalMetricsResults expRes;
+                if (!pointsByFeature[f].empty()) {
+                    fusion::metrics::ExperimentalMetricsOptions opts;
+                    opts.minHt = minHt;
+                    opts.cellSize = cellSize;
+                    opts.voxelSize = voxelSize;
+                    expRes = fusion::metrics::ComputeExperimentalMetrics(pointsByFeature[f], opts);
+                }
+                auto expMap = fusion::metrics::GetExperimentalMetricsAsMap(expRes);
+                for (const auto& name : expNames) {
+                    outFile << "," << expMap[name];
+                }
+            }
+            outFile << "\n";
+        }
+
+        outFile.close();
+        std::cout << "[CloudMetrics] Successfully computed metrics for " << featureSet.FeatureCount() << " polygon feature(s).\n";
+        if (hasGround) {
+            std::cout << "[CloudMetrics] Height normalization applied using ground DEM.\n";
+        }
+        std::cout << "[CloudMetrics] Output written to: " << outputPath << "\n";
+        return 0;
+    }
+
     std::cout << "[CloudMetrics] Processing point cloud metrics for " << inputFiles.size() << " file(s)...\n";
 
+    // /surfstats scratch grid: bins each point's height into a cols x rows
+    // grid (same col/row indexing idiom gridmetrics uses), tracking each
+    // cell's max height -- never written to disk, only used to feed
+    // ComputeSurfaceStatsGrid/SummarizeSurfaceStats below.
+    const auto& header = reader.GetHeader();
+    constexpr float kSurfNoValue = -3.0e38f; // private, reliably `==`-comparable marker -- see gridmetrics.cpp's identical use
+    int surfCols = 1, surfRows = 1;
+    std::vector<float> surfCellMax;
+    if (enableSurfStats) {
+        surfCols = static_cast<int>(std::ceil((header.maxX - header.minX) / cellSize));
+        surfRows = static_cast<int>(std::ceil((header.maxY - header.minY) / cellSize));
+        if (surfCols <= 0) surfCols = 1;
+        if (surfRows <= 0) surfRows = 1;
+        surfCellMax.assign(static_cast<size_t>(surfCols) * surfRows, kSurfNoValue);
+    }
+
     std::vector<double> heights;
+    std::vector<double> intensities;
     std::vector<fusion::metrics::Point3D> allPoints;
+    std::vector<std::vector<double>> strataElevBuckets(numStrataBuckets);
+    std::vector<std::vector<double>> intStrataIntBuckets(intStrata.empty() ? 0 : intStrata.size() + 1);
+    std::vector<std::vector<double>> spectralValues(spectralSelection.channels.size());
     fusion::lidar::PointRecord pt;
     uint64_t totalPts = 0;
     uint64_t ptsAboveMin = 0;
@@ -115,51 +480,36 @@ int main(int argc, char* argv[]) {
         if (enableExp) {
             allPoints.push_back({pt.x, pt.y, h});
         }
+        AssignToStrataBuckets(h, static_cast<double>(pt.intensity), strata, strataElevBuckets, intStrata, intStrataIntBuckets);
+        if (enableSurfStats) {
+            int col = static_cast<int>((pt.x - header.minX) / cellSize);
+            int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+            if (col >= 0 && col < surfCols && row >= 0 && row < surfRows) {
+                float& cellMax = surfCellMax[static_cast<size_t>(row) * surfCols + col];
+                cellMax = (cellMax == kSurfNoValue) ? static_cast<float>(h) : std::max(cellMax, static_cast<float>(h));
+            }
+        }
         if (h >= minHt) {
             heights.push_back(h);
+            intensities.push_back(static_cast<double>(pt.intensity));
             ptsAboveMin++;
+            for (size_t ch = 0; ch < spectralSelection.channels.size(); ++ch) {
+                spectralValues[ch].push_back(static_cast<double>(pt.*(spectralSelection.channels[ch].field)));
+            }
         }
     }
     reader.Close();
 
-    LidarStats stats;
-    stats.totalPoints = totalPts;
-    stats.pointsAboveMinHt = ptsAboveMin;
-
-    if (totalPts > 0) {
-        stats.canopyCover = (static_cast<double>(ptsAboveMin) / totalPts) * 100.0;
+    fusion::metrics::SurfaceStatsSummary surfSummary;
+    if (enableSurfStats) {
+        fusion::metrics::SurfaceStatsGrid surfGrid = fusion::metrics::ComputeSurfaceStatsGrid(
+            surfCellMax, surfCols, surfRows, cellSize, kSurfNoValue);
+        surfSummary = fusion::metrics::SummarizeSurfaceStats(surfGrid, surfCellMax, surfCols, surfRows, cellSize, kSurfNoValue);
     }
 
-    if (!heights.empty()) {
-        std::sort(heights.begin(), heights.end());
-        stats.minZ = heights.front();
-        stats.maxZ = heights.back();
-
-        double sum = std::accumulate(heights.begin(), heights.end(), 0.0);
-        stats.meanZ = sum / heights.size();
-
-        double sqSum = 0.0;
-        for (double h : heights) {
-            sqSum += (h - stats.meanZ) * (h - stats.meanZ);
-        }
-        stats.stdDevZ = std::sqrt(sqSum / heights.size());
-
-        auto getPercentile = [&](double pct) {
-            size_t idx = static_cast<size_t>(std::round(pct * (heights.size() - 1)));
-            return heights[std::min(idx, heights.size() - 1)];
-        };
-
-        stats.p05 = getPercentile(0.05);
-        stats.p25 = getPercentile(0.25);
-        stats.p50 = getPercentile(0.50);
-        stats.p75 = getPercentile(0.75);
-        stats.p95 = getPercentile(0.95);
-        stats.p99 = getPercentile(0.99);
-
-        if (stats.maxZ > stats.minZ) {
-            stats.canopyReliefRatio = (stats.meanZ - stats.minZ) / (stats.maxZ - stats.minZ);
-        }
-    }
+    CloudStatsRow row = ComputeCloudStats(
+        std::move(heights), std::move(intensities), totalPts, ptsAboveMin,
+        elevColNames.size(), intColNames.size(), sentinel);
 
     fusion::metrics::ExperimentalMetricsResults expRes;
     if (enableExp && !allPoints.empty()) {
@@ -170,15 +520,17 @@ int main(int argc, char* argv[]) {
         expRes = fusion::metrics::ComputeExperimentalMetrics(allPoints, opts);
     }
 
-    std::ofstream outFile(outputPath);
-    if (!outFile.is_open()) {
-        std::cerr << "Error: Failed to create output CSV file: " << outputPath << "\n";
-        return 1;
+    outFile << "Filename,TotalPoints,CanopyPoints,CanopyCoverPct";
+    for (const auto& name : elevColNames) outFile << "," << name;
+    outFile << ",elev_profile_area";
+    for (const auto& name : intColNames) outFile << "," << name;
+    WriteStrataHeader(outFile, numStrataBuckets, "stratum_", strataStatSuffixes);
+    WriteStrataHeader(outFile, intStrata.empty() ? 0 : intStrata.size() + 1, "intstratum_", strataStatSuffixes);
+    WriteSpectralHeader(outFile, spectralSelection.channels);
+    if (enableSurfStats) {
+        outFile << ",SurfaceAreaRatioMean,RoughnessMean,PlanimetricArea,SurfaceArea3D";
     }
-
-    outFile << "Filename,TotalPoints,CanopyPoints,MinZ,MaxZ,MeanZ,StdDevZ,P05,P25,P50,P75,P95,P99,CanopyCoverPct,CRR";
     if (enableExp) {
-        auto expNames = fusion::metrics::GetExperimentalMetricsNames();
         for (const auto& name : expNames) {
             outFile << "," << name;
         }
@@ -189,25 +541,22 @@ int main(int argc, char* argv[]) {
         ? inputFiles[0].filename().string()
         : ("merged_" + std::to_string(inputFiles.size()) + "_files");
 
-    outFile << fileLabel << ","
-            << stats.totalPoints << ","
-            << stats.pointsAboveMinHt << ","
-            << stats.minZ << ","
-            << stats.maxZ << ","
-            << stats.meanZ << ","
-            << stats.stdDevZ << ","
-            << stats.p05 << ","
-            << stats.p25 << ","
-            << stats.p50 << ","
-            << stats.p75 << ","
-            << stats.p95 << ","
-            << stats.p99 << ","
-            << stats.canopyCover << ","
-            << stats.canopyReliefRatio;
+    outFile << fileLabel << ",";
+    WriteCloudStatsRow(outFile, row);
+    {
+        bool cloudEmpty = (totalPts == 0);
+        WriteStrataColumns(outFile, strataElevBuckets, totalPts, strataStatSuffixes, sentinel, cloudEmpty);
+        WriteStrataColumns(outFile, intStrataIntBuckets, totalPts, strataStatSuffixes, sentinel, cloudEmpty);
+        WriteSpectralColumns(outFile, spectralSelection.channels, spectralValues, strataStatSuffixes.size(), sentinel, cloudEmpty);
+    }
+
+    if (enableSurfStats) {
+        outFile << "," << surfSummary.surfaceAreaRatioMean << "," << surfSummary.roughnessMean
+                << "," << surfSummary.planimetricArea << "," << surfSummary.surfaceArea3D;
+    }
 
     if (enableExp) {
         auto expMap = fusion::metrics::GetExperimentalMetricsAsMap(expRes);
-        auto expNames = fusion::metrics::GetExperimentalMetricsNames();
         for (const auto& name : expNames) {
             outFile << "," << expMap[name];
         }

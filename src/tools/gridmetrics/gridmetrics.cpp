@@ -9,6 +9,10 @@
 #include "fusion/batch/BatchPipeline.h"
 #include "fusion/batch/StatusMessenger.h"
 #include "fusion/metrics/ExperimentalMetrics.h"
+#include "fusion/metrics/SurfaceStats.h"
+#include "fusion/metrics/SentinelPolicy.h"
+#include "fusion/metrics/PointCloudStats.h"
+#include "fusion/metrics/SpectralChannels.h"
 
 #include <iostream>
 #include <fstream>
@@ -21,6 +25,8 @@
 #include <numeric>
 #include <unordered_set>
 #include <map>
+#include <iomanip>
+#include <array>
 
 struct CellAccumulator {
     std::vector<float> elevations;
@@ -31,14 +37,45 @@ struct CellAccumulator {
     int returnsAboveGround{0};
     int returnsAboveMinHt{0};
     int returnsAboveHeightCut{0};
-    std::vector<int> strataCounts;
+    // item 8: per-return-number counts (index 0..7 = return number 1..8,
+    // index 8 = "9 or higher") and cover-variant support counts, all
+    // computed directly from the unfiltered return set.
+    std::array<int, 9> returnNumberCounts{};
+    int returnsAboveMean{0};
+    int returnsAboveMode{0};
+    // One bucket per /strata threshold, plus one "above the last threshold"
+    // bucket (item 6: full per-stratum elevation values, not just a count --
+    // ComputePointStatBundle runs per non-empty bucket).
+    std::vector<std::vector<float>> strataElevations;
     std::vector<double> strataIntSums;
     std::vector<int> strataIntCounts;
+    // /rgb: (item 7) -- one entry per selected, format-carried spectral
+    // channel ("red","green","blue","nir"), populated in lockstep with
+    // elevations/intensities (same elevation >= /minht gate).
+    std::map<std::string, std::vector<float>> spectralValues;
 };
 
 using fusion::cli::ParseFloatList;
 using fusion::cli::ParseIntSet;
 
+// CSV output writes the literal text "NA" wherever a value resolved to an
+// NA sentinel, not the numeric NaN (Shared groundwork C) -- real computed
+// statistics in this domain are never themselves NaN, so a NaN value
+// uniquely identifies "this came from an NA-resolved /nodata or /noheight",
+// regardless of which of the two produced it.
+static void WriteCSVFloat(std::ofstream& csv, float value) {
+    if (std::isnan(value)) {
+        csv << "NA";
+    } else {
+        csv << value;
+    }
+}
+
+// Used only by RunBatchTiledMode below -- single-file mode's per-cell loop
+// in main() calls fusion::metrics::ComputePointStatBundle instead (item 5),
+// which owns an equivalent internal copy of this same logic. Batch/tiled
+// mode intentionally keeps the smaller, original metric set (see
+// TileCellAccumulator's comment), so it isn't switched over too.
 static float GetPercentile(const std::vector<float>& sortedData, double p) {
     if (sortedData.empty()) return -9999.0f;
     if (sortedData.size() == 1) return sortedData[0];
@@ -125,6 +162,12 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     if (auto s = parser.GetOption("strata")) jobOpts.strata = *s;
     if (auto is = parser.GetOption("intstrata")) jobOpts.intStrata = *is;
 
+    fusion::metrics::SentinelPolicy batchSentinel;
+    batchSentinel.nodata = fusion::metrics::ParseSentinelOption(parser.GetOption("nodata").value_or("NA"));
+    batchSentinel.noheight = fusion::metrics::ParseSentinelOption(parser.GetOption("noheight").value_or("0"));
+    jobOpts.nodataValue = batchSentinel.nodata.value;
+    jobOpts.noheightValue = batchSentinel.noheight.value;
+
     fusion::batch::StatusMessenger::Instance().SetLogFile(jobOpts.outputDir / "gridmetrics_batch.log");
     fusion::batch::StatusMessenger::Instance().SendStatus("Initializing gridmetrics batch/tiled pipeline...");
 
@@ -181,19 +224,19 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                         continue;
                     }
 
-                    fusion::lidar::PointRecord pt;
-                    while (reader.ReadNextPoint(pt)) {
-                        if (pt.x < tile.bufferedMinX || pt.x > tile.bufferedMaxX ||
-                            pt.y < tile.bufferedMinY || pt.y > tile.bufferedMaxY) {
-                            continue;
-                        }
-
+                    // COPC files (see LASReader::IsCOPC) seek straight to
+                    // the chunks overlapping this tile's buffered extent
+                    // instead of reading every point sequentially -- a
+                    // plain LAS/LAZ file falls back to that same sequential
+                    // read internally, so this call is correct either way.
+                    reader.ReadPointsInExtent(tile.bufferedMinX, tile.bufferedMinY, tile.bufferedMaxX, tile.bufferedMaxY,
+                                               [&](const fusion::lidar::PointRecord& pt) {
                         if (!validClasses.empty() && validClasses.find(pt.classification) == validClasses.end()) {
-                            continue;
+                            return;
                         }
 
                         if (opts.firstOnly && pt.returnNumber != 1) {
-                            continue;
+                            return;
                         }
 
                         int col = static_cast<int>((pt.x - tile.minX) / res);
@@ -212,7 +255,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                             }
 
                             if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
-                                continue;
+                                return;
                             }
 
                             if (elevation >= 0.0) cell.returnsAboveGround++;
@@ -226,32 +269,36 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                                 }
                             }
                         }
-                    }
+                    });
                     reader.Close();
                 }
             }
         }
 
         size_t numCells = cols * rows;
-        std::vector<float> bandMin(numCells, -9999.0f), bandMax(numCells, -9999.0f);
-        std::vector<float> bandMean(numCells, -9999.0f), bandStdDev(numCells, -9999.0f);
-        std::vector<float> bandVar(numCells, -9999.0f), bandCV(numCells, -9999.0f);
-        std::vector<float> bandSkew(numCells, -9999.0f), bandKurt(numCells, -9999.0f);
-        std::vector<float> bandCRR(numCells, -9999.0f), bandMode(numCells, -9999.0f);
-        std::vector<float> bandMedian(numCells, -9999.0f), bandIQR(numCells, -9999.0f);
-        std::vector<float> bandP01(numCells, -9999.0f), bandP05(numCells, -9999.0f);
-        std::vector<float> bandP10(numCells, -9999.0f), bandP20(numCells, -9999.0f);
-        std::vector<float> bandP25(numCells, -9999.0f), bandP30(numCells, -9999.0f);
-        std::vector<float> bandP40(numCells, -9999.0f), bandP50(numCells, -9999.0f);
-        std::vector<float> bandP60(numCells, -9999.0f), bandP70(numCells, -9999.0f);
-        std::vector<float> bandP75(numCells, -9999.0f), bandP80(numCells, -9999.0f);
-        std::vector<float> bandP90(numCells, -9999.0f), bandP95(numCells, -9999.0f);
-        std::vector<float> bandP99(numCells, -9999.0f);
-        std::vector<float> bandCover(numCells, -9999.0f), bandDensity(numCells, -9999.0f);
-        std::vector<float> bandIntMean(numCells, -9999.0f), bandIntStdDev(numCells, -9999.0f);
+        float ND = opts.nodataValue;
+        std::vector<float> bandMin(numCells, ND), bandMax(numCells, ND);
+        std::vector<float> bandMean(numCells, ND), bandStdDev(numCells, ND);
+        std::vector<float> bandVar(numCells, ND), bandCV(numCells, ND);
+        std::vector<float> bandSkew(numCells, ND), bandKurt(numCells, ND);
+        std::vector<float> bandCRR(numCells, ND), bandMode(numCells, ND);
+        std::vector<float> bandMedian(numCells, ND), bandIQR(numCells, ND);
+        std::vector<float> bandP01(numCells, ND), bandP05(numCells, ND);
+        std::vector<float> bandP10(numCells, ND), bandP20(numCells, ND);
+        std::vector<float> bandP25(numCells, ND), bandP30(numCells, ND);
+        std::vector<float> bandP40(numCells, ND), bandP50(numCells, ND);
+        std::vector<float> bandP60(numCells, ND), bandP70(numCells, ND);
+        std::vector<float> bandP75(numCells, ND), bandP80(numCells, ND);
+        std::vector<float> bandP90(numCells, ND), bandP95(numCells, ND);
+        std::vector<float> bandP99(numCells, ND);
+        std::vector<float> bandCover(numCells, ND), bandDensity(numCells, ND);
+        std::vector<float> bandIntMean(numCells, ND), bandIntStdDev(numCells, ND);
 
         for (size_t i = 0; i < numCells; ++i) {
             auto& cell = grid[i];
+            if (cell.totalReturns == 0) {
+                continue;
+            }
             if (!cell.elevations.empty()) {
                 std::vector<float> sortedElev = cell.elevations;
                 std::sort(sortedElev.begin(), sortedElev.end());
@@ -306,6 +353,14 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                 bandP90[i] = GetPercentile(sortedElev, 0.90);
                 bandP95[i] = GetPercentile(sortedElev, 0.95);
                 bandP99[i] = GetPercentile(sortedElev, 0.99);
+            } else {
+                float NH = opts.noheightValue;
+                bandMin[i] = bandMax[i] = bandMean[i] = bandStdDev[i] = NH;
+                bandVar[i] = bandCV[i] = bandSkew[i] = bandKurt[i] = bandCRR[i] = NH;
+                bandMode[i] = bandMedian[i] = bandIQR[i] = NH;
+                bandP01[i] = bandP05[i] = bandP10[i] = bandP20[i] = bandP25[i] = NH;
+                bandP30[i] = bandP40[i] = bandP50[i] = bandP60[i] = bandP70[i] = NH;
+                bandP75[i] = bandP80[i] = bandP90[i] = bandP95[i] = bandP99[i] = NH;
             }
 
             int denom = opts.firstOnly ? cell.firstReturns : cell.totalReturns;
@@ -314,16 +369,20 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
             }
             bandDensity[i] = static_cast<float>(cell.totalReturns / (res * res));
 
-            if (!opts.noIntensity && !cell.intensities.empty()) {
-                double sumInt = std::accumulate(cell.intensities.begin(), cell.intensities.end(), 0.0);
-                double meanInt = sumInt / cell.intensities.size();
-                bandIntMean[i] = static_cast<float>(meanInt);
+            if (!opts.noIntensity) {
+                if (!cell.intensities.empty()) {
+                    double sumInt = std::accumulate(cell.intensities.begin(), cell.intensities.end(), 0.0);
+                    double meanInt = sumInt / cell.intensities.size();
+                    bandIntMean[i] = static_cast<float>(meanInt);
 
-                double sqInt = 0.0;
-                for (float iv : cell.intensities) {
-                    sqInt += (iv - meanInt) * (iv - meanInt);
+                    double sqInt = 0.0;
+                    for (float iv : cell.intensities) {
+                        sqInt += (iv - meanInt) * (iv - meanInt);
+                    }
+                    bandIntStdDev[i] = static_cast<float>(std::sqrt(sqInt / cell.intensities.size()));
+                } else {
+                    bandIntMean[i] = bandIntStdDev[i] = opts.noheightValue;
                 }
-                bandIntStdDev[i] = static_cast<float>(std::sqrt(sqInt / cell.intensities.size()));
             }
         }
 
@@ -389,8 +448,14 @@ int main(int argc, char* argv[]) {
     parser.AddFlag("nointensity", "Skip computing intensity metrics");
     parser.AddOption("strata", "Comma-separated height strata thresholds (e.g. 0.5,2.0,5.0,10.0,20.0)");
     parser.AddOption("intstrata", "Comma-separated intensity strata height thresholds");
+    parser.AddFlag("strataraster", "With /strata, also append one return-density band per stratum bucket to the multiband output (density_stratum_NN)");
+    parser.AddOption("nodata", "Value for cells with zero returns at all: NA, or a number such as 0, -9999, or inf", "NA");
+    parser.AddOption("noheight", "Value for height-dependent bands (elev_*, int_*) when a cell has returns but none clear the height cutoff: NA, or a number such as 0, -9999, or inf", "0");
+    parser.AddOption("rgb", "Comma-separated spectral channels to compute a statistic bundle for: R, G, B, N, or all (every channel the input file's LAS point format actually carries)");
     parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (m)", "20.0");
     parser.AddFlag("exp", "Compute additional experimental metrics from RSForTools");
+    parser.AddFlag("surfstats", "Compute surface_area_ratio and roughness bands from the per-cell elevation grid (see /surfstats-source)");
+    parser.AddOption("surfstats-source", "Elevation source for /surfstats: max (typical CHM top-surface use) or mean (ground-DTM-style runs)", "max");
     parser.AddOption("outroot", "Base root name for output CSV summary metrics tables");
     parser.AddOption("outdir", "Output directory for rasters and CSV reports (also the batch/tiled mode output directory)", ".");
     parser.AddOption("output-mode", "Output raster mode: multiband or singleband", "multiband");
@@ -428,6 +493,21 @@ int main(int argc, char* argv[]) {
     double heightCut = parser.GetOption("heightcut") ? std::stod(*parser.GetOption("heightcut")) : minHt;
     double voxelSize = std::stod(parser.GetOption("voxelsize").value_or("20.0"));
     bool enableExp = parser.HasFlag("exp");
+    bool enableSurfStats = parser.HasFlag("surfstats");
+    std::string surfStatsSource = parser.GetOption("surfstats-source").value_or("max");
+    bool enableStrataRaster = parser.HasFlag("strataraster");
+
+    fusion::metrics::SentinelPolicy sentinel;
+    sentinel.nodata = fusion::metrics::ParseSentinelOption(parser.GetOption("nodata").value_or("NA"));
+    sentinel.noheight = fusion::metrics::ParseSentinelOption(parser.GetOption("noheight").value_or("0"));
+    fusion::metrics::RasterNoDataResolution rasterNoData = fusion::metrics::ResolveRasterNoData(
+        sentinel, parser.WasExplicit("nodata"), parser.WasExplicit("noheight"));
+    if (rasterNoData.conflict) {
+        std::cerr << "Warning: /nodata and /noheight were both set to different, non-NA values -- "
+                     "GDAL supports only one registered NoData value per raster. Using /nodata's value ("
+                  << rasterNoData.value << ") as the file's registered NoData; /noheight's value will be "
+                     "written as an ordinary, valid pixel, not flagged as NoData by the GeoTIFF header.\n";
+    }
     std::string outputMode = parser.GetOption("output-mode").value_or("multiband");
     bool firstOnly = parser.HasFlag("first");
     bool noIntensity = parser.HasFlag("nointensity");
@@ -482,6 +562,18 @@ int main(int argc, char* argv[]) {
     std::cout << "[GridMetrics] Processing Point Cloud: " << (inputFiles.size() == 1 ? inputFiles[0].filename().string() : ("merged " + std::to_string(inputFiles.size()) + " files"))
               << " (" << header.pointCount << " points)\n";
 
+    // /rgb: -- a requested channel absent from the file's point format is a
+    // printed warning, never a hard failure, since a batch run over
+    // mixed-format tiles is a real, expected case.
+    fusion::metrics::SpectralChannelSelection spectralSelection;
+    if (auto rgbOpt = parser.GetOption("rgb")) {
+        spectralSelection = fusion::metrics::ParseSpectralChannels(*rgbOpt, header.pointFormat);
+        for (const auto& token : spectralSelection.unknownTokens) {
+            std::cerr << "Warning: /rgb channel '" << token << "' is not available for LAS point format "
+                      << static_cast<int>(header.pointFormat) << " -- skipped.\n";
+        }
+    }
+
     int cols = static_cast<int>(std::ceil((header.maxX - header.minX) / cellSize));
     int rows = static_cast<int>(std::ceil((header.maxY - header.minY) / cellSize));
     if (cols <= 0) cols = 1;
@@ -490,7 +582,7 @@ int main(int argc, char* argv[]) {
     std::vector<CellAccumulator> grid(cols * rows);
     for (auto& cell : grid) {
         if (!strata.empty()) {
-            cell.strataCounts.resize(strata.size() + 1, 0);
+            cell.strataElevations.resize(strata.size() + 1);
         }
         if (!intStrata.empty()) {
             cell.strataIntSums.resize(intStrata.size() + 1, 0.0);
@@ -515,6 +607,10 @@ int main(int argc, char* argv[]) {
             auto& cell = grid[row * cols + col];
             cell.totalReturns++;
             if (pt.returnNumber == 1) cell.firstReturns++;
+            {
+                int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
+                cell.returnNumberCounts[rnIdx]++;
+            }
 
             double elevation = pt.z;
             if (hasGround) {
@@ -540,11 +636,8 @@ int main(int argc, char* argv[]) {
             }
 
             if (!strata.empty()) {
-                size_t sIdx = 0;
-                while (sIdx < strata.size() && elevation >= strata[sIdx]) {
-                    sIdx++;
-                }
-                cell.strataCounts[sIdx]++;
+                size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
+                cell.strataElevations[sIdx].push_back(static_cast<float>(elevation));
             }
 
             if (!noIntensity && !intStrata.empty()) {
@@ -562,30 +655,67 @@ int main(int argc, char* argv[]) {
                 if (!noIntensity) {
                     cell.intensities.push_back(static_cast<float>(pt.intensity));
                 }
+                for (const auto& spec : spectralSelection.channels) {
+                    cell.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                }
             }
         }
     }
     lasReader.Close();
 
-    // Prepare metric output arrays
+    // Prepare metric output arrays. Every band defaults to the resolved
+    // /nodata value -- a cell that never enters any of the branches below
+    // (cell.totalReturns == 0) simply keeps this default, satisfying the
+    // "zero total points -> nodata everywhere, including counts and
+    // density" rule without extra code at each band.
     size_t numCells = cols * rows;
-    std::vector<float> bandMin(numCells, -9999.0f), bandMax(numCells, -9999.0f);
-    std::vector<float> bandMean(numCells, -9999.0f), bandStdDev(numCells, -9999.0f);
-    std::vector<float> bandVar(numCells, -9999.0f), bandCV(numCells, -9999.0f);
-    std::vector<float> bandSkew(numCells, -9999.0f), bandKurt(numCells, -9999.0f);
-    std::vector<float> bandCRR(numCells, -9999.0f), bandMode(numCells, -9999.0f);
-    std::vector<float> bandMedian(numCells, -9999.0f), bandIQR(numCells, -9999.0f);
-    std::vector<float> bandP01(numCells, -9999.0f), bandP05(numCells, -9999.0f);
-    std::vector<float> bandP10(numCells, -9999.0f), bandP20(numCells, -9999.0f);
-    std::vector<float> bandP25(numCells, -9999.0f), bandP30(numCells, -9999.0f);
-    std::vector<float> bandP40(numCells, -9999.0f), bandP50(numCells, -9999.0f);
-    std::vector<float> bandP60(numCells, -9999.0f), bandP70(numCells, -9999.0f);
-    std::vector<float> bandP75(numCells, -9999.0f), bandP80(numCells, -9999.0f);
-    std::vector<float> bandP90(numCells, -9999.0f), bandP95(numCells, -9999.0f);
-    std::vector<float> bandP99(numCells, -9999.0f);
-    std::vector<float> bandCover(numCells, -9999.0f), bandDensity(numCells, -9999.0f);
+    float ND = sentinel.nodata.value;
+    std::vector<float> bandCover(numCells, ND), bandDensity(numCells, ND);
 
-    std::vector<float> bandIntMean(numCells, -9999.0f), bandIntStdDev(numCells, -9999.0f);
+    // item 8: per-return-number counts (r1count..r9count) and cover-variant
+    // bands, all computed directly from the unfiltered return set -- so
+    // they follow the /nodata-when-cell-empty rule only, never /noheight.
+    std::vector<std::vector<float>> returnNumberBands(9, std::vector<float>(numCells, ND));
+    std::vector<float> bandAllCover(numCells, ND), bandAfCover(numCells, ND);
+    std::vector<float> bandAllAboveMean(numCells, ND), bandAllAboveMode(numCells, ND);
+    std::vector<float> bandAfAboveMean(numCells, ND), bandAfAboveMode(numCells, ND);
+
+    // Full elevation/intensity statistic bundle (item 5) -- one band per
+    // PointStatBundle column, keyed by the same column-name list used for
+    // both the raster bandDefs and the CSV header so they can't drift out
+    // of sync. elevProfileArea is the one legacy column PointStatBundle
+    // doesn't cover (it needs the full percentile curve, not a single
+    // value-vector reduction).
+    std::vector<std::string> elevColNames = fusion::metrics::PointStatBundleColumnNames("elev_");
+    std::vector<std::string> intColNames = fusion::metrics::PointStatBundleColumnNames("int_");
+    std::vector<std::vector<float>> elevBands(elevColNames.size(), std::vector<float>(numCells, ND));
+    std::vector<std::vector<float>> intBands(intColNames.size(), std::vector<float>(numCells, ND));
+    std::vector<float> elevProfileArea(numCells, ND);
+
+    // Raw (pre-sentinel-substitution) top-of-cell elevation, used only to
+    // feed /surfstats -- kept separate from the elev_max/elev_mean bands
+    // above so ComputeSurfaceStatsGrid's single-noData-value contract isn't
+    // confused by two different sentinel values (nodata for an empty cell,
+    // noheight for a below-cutoff one) both possibly appearing in the same
+    // array. kSurfNoValue is a private, reliably `==`-comparable marker
+    // (unlike NaN, which policy.nodata.value may well be) never exposed in
+    // final output.
+    constexpr float kSurfNoValue = -3.0e38f;
+    std::vector<float> surfSourceMax(enableSurfStats ? numCells : 0, kSurfNoValue);
+    std::vector<float> surfSourceMean(enableSurfStats ? numCells : 0, kSurfNoValue);
+
+    // /rgb: (item 7) -- same call shape as elev_/int_ above, looped over
+    // the selected channel list instead of called once. Keyed by prefix
+    // ("red","green","blue","nir") since a run may select any subset.
+    std::vector<std::string> spectralChannelPrefixes;
+    std::map<std::string, std::vector<std::string>> spectralColNames;
+    std::map<std::string, std::vector<std::vector<float>>> spectralBands;
+    for (const auto& spec : spectralSelection.channels) {
+        spectralChannelPrefixes.push_back(spec.prefix);
+        auto colNames = fusion::metrics::PointStatBundleColumnNames(spec.prefix + "_");
+        spectralBands[spec.prefix] = std::vector<std::vector<float>>(colNames.size(), std::vector<float>(numCells, ND));
+        spectralColNames[spec.prefix] = std::move(colNames);
+    }
 
     // Experimental metrics bands setup
     std::vector<std::string> expNames;
@@ -593,66 +723,47 @@ int main(int argc, char* argv[]) {
     if (enableExp) {
         expNames = fusion::metrics::GetExperimentalMetricsNames();
         for (const auto& name : expNames) {
-            expBands[name] = std::vector<float>(numCells, -9999.0f);
+            expBands[name] = std::vector<float>(numCells, ND);
         }
     }
 
     for (size_t i = 0; i < numCells; ++i) {
         auto& cell = grid[i];
+        if (cell.totalReturns == 0) {
+            // Nothing landed in this cell at all -- every band above
+            // already defaults to /nodata, so there's nothing further to do.
+            continue;
+        }
+
         if (!cell.elevations.empty()) {
-            std::vector<float> sortedElev = cell.elevations;
-            std::sort(sortedElev.begin(), sortedElev.end());
+            fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(cell.elevations);
+            std::vector<float> vals = fusion::metrics::PointStatBundleAsVector(bundle);
+            for (size_t k = 0; k < vals.size(); ++k) {
+                elevBands[k][i] = vals[k];
+            }
+            elevProfileArea[i] = fusion::metrics::ComputeProfileArea(bundle);
 
-            size_t n = sortedElev.size();
-            double minV = sortedElev.front();
-            double maxV = sortedElev.back();
-            double sum = std::accumulate(sortedElev.begin(), sortedElev.end(), 0.0);
-            double mean = sum / n;
-
-            double sqSum = 0.0, cubeSum = 0.0, quadSum = 0.0;
-            for (float v : sortedElev) {
-                double diff = v - mean;
-                sqSum += diff * diff;
-                cubeSum += diff * diff * diff;
-                quadSum += diff * diff * diff * diff;
+            if (enableSurfStats) {
+                surfSourceMax[i] = bundle.max;
+                surfSourceMean[i] = bundle.mean;
             }
 
-            double var = (n > 1) ? (sqSum / (n - 1)) : 0.0;
-            double stdDev = std::sqrt(sqSum / n);
-            double cv = (mean != 0.0) ? (stdDev / mean) : 0.0;
-            double skew = (stdDev > 0.0) ? ((cubeSum / n) / std::pow(stdDev, 3.0)) : 0.0;
-            double kurt = (stdDev > 0.0) ? ((quadSum / n) / std::pow(stdDev, 4.0)) : 0.0;
-            double crr = (maxV > minV) ? ((mean - minV) / (maxV - minV)) : 0.0;
-
-            bandMin[i] = static_cast<float>(minV);
-            bandMax[i] = static_cast<float>(maxV);
-            bandMean[i] = static_cast<float>(mean);
-            bandStdDev[i] = static_cast<float>(stdDev);
-            bandVar[i] = static_cast<float>(var);
-            bandCV[i] = static_cast<float>(cv);
-            bandSkew[i] = static_cast<float>(skew);
-            bandKurt[i] = static_cast<float>(kurt);
-            bandCRR[i] = static_cast<float>(crr);
-
-            bandMode[i] = GetMode(sortedElev);
-            bandMedian[i] = GetPercentile(sortedElev, 0.50);
-            bandIQR[i] = GetPercentile(sortedElev, 0.75) - GetPercentile(sortedElev, 0.25);
-
-            bandP01[i] = GetPercentile(sortedElev, 0.01);
-            bandP05[i] = GetPercentile(sortedElev, 0.05);
-            bandP10[i] = GetPercentile(sortedElev, 0.10);
-            bandP20[i] = GetPercentile(sortedElev, 0.20);
-            bandP25[i] = GetPercentile(sortedElev, 0.25);
-            bandP30[i] = GetPercentile(sortedElev, 0.30);
-            bandP40[i] = GetPercentile(sortedElev, 0.40);
-            bandP50[i] = GetPercentile(sortedElev, 0.50);
-            bandP60[i] = GetPercentile(sortedElev, 0.60);
-            bandP70[i] = GetPercentile(sortedElev, 0.70);
-            bandP75[i] = GetPercentile(sortedElev, 0.75);
-            bandP80[i] = GetPercentile(sortedElev, 0.80);
-            bandP90[i] = GetPercentile(sortedElev, 0.90);
-            bandP95[i] = GetPercentile(sortedElev, 0.95);
-            bandP99[i] = GetPercentile(sortedElev, 0.99);
+            // item 8 cover-variant support: how many of this cell's
+            // height-filtered elevations (the only per-point elevations
+            // retained) clear the cell's own mean/mode.
+            for (float v : cell.elevations) {
+                if (v > bundle.mean) cell.returnsAboveMean++;
+                if (v > bundle.mode) cell.returnsAboveMode++;
+            }
+        } else {
+            // Points landed in this cell, but none cleared /minht -- every
+            // elev_* band is a real "no canopy height data" answer, not a
+            // "nothing here" one, so it gets /noheight rather than /nodata.
+            float NH = sentinel.noheight.value;
+            for (auto& band : elevBands) {
+                band[i] = NH;
+            }
+            elevProfileArea[i] = NH;
         }
 
         int denom = firstOnly ? cell.firstReturns : cell.totalReturns;
@@ -661,16 +772,50 @@ int main(int argc, char* argv[]) {
         }
         bandDensity[i] = static_cast<float>(cell.totalReturns / (cellSize * cellSize));
 
-        if (!noIntensity && !cell.intensities.empty()) {
-            double sumInt = std::accumulate(cell.intensities.begin(), cell.intensities.end(), 0.0);
-            double meanInt = sumInt / cell.intensities.size();
-            bandIntMean[i] = static_cast<float>(meanInt);
+        for (size_t rn = 0; rn < returnNumberBands.size(); ++rn) {
+            returnNumberBands[rn][i] = static_cast<float>(cell.returnNumberCounts[rn]);
+        }
+        bandAllCover[i] = static_cast<float>(100.0 * cell.returnsAboveHeightCut / cell.totalReturns);
+        if (cell.firstReturns > 0) {
+            bandAfCover[i] = static_cast<float>(100.0 * cell.returnsAboveHeightCut / cell.firstReturns);
+        }
+        bandAllAboveMean[i] = static_cast<float>(100.0 * cell.returnsAboveMean / cell.totalReturns);
+        bandAllAboveMode[i] = static_cast<float>(100.0 * cell.returnsAboveMode / cell.totalReturns);
+        if (cell.firstReturns > 0) {
+            bandAfAboveMean[i] = static_cast<float>(100.0 * cell.returnsAboveMean / cell.firstReturns);
+            bandAfAboveMode[i] = static_cast<float>(100.0 * cell.returnsAboveMode / cell.firstReturns);
+        }
 
-            double sqInt = 0.0;
-            for (float iv : cell.intensities) {
-                sqInt += (iv - meanInt) * (iv - meanInt);
+        if (!noIntensity) {
+            if (!cell.intensities.empty()) {
+                fusion::metrics::PointStatBundle intBundle = fusion::metrics::ComputePointStatBundle(cell.intensities);
+                std::vector<float> intVals = fusion::metrics::PointStatBundleAsVector(intBundle);
+                for (size_t k = 0; k < intVals.size(); ++k) {
+                    intBands[k][i] = intVals[k];
+                }
+            } else {
+                float NH = sentinel.noheight.value;
+                for (auto& band : intBands) {
+                    band[i] = NH;
+                }
             }
-            bandIntStdDev[i] = static_cast<float>(std::sqrt(sqInt / cell.intensities.size()));
+        }
+
+        for (const auto& prefix : spectralChannelPrefixes) {
+            auto valIt = cell.spectralValues.find(prefix);
+            auto& bands = spectralBands[prefix];
+            if (valIt != cell.spectralValues.end() && !valIt->second.empty()) {
+                fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(valIt->second);
+                std::vector<float> vals = fusion::metrics::PointStatBundleAsVector(bundle);
+                for (size_t k = 0; k < vals.size(); ++k) {
+                    bands[k][i] = vals[k];
+                }
+            } else {
+                float NH = sentinel.noheight.value;
+                for (auto& band : bands) {
+                    band[i] = NH;
+                }
+            }
         }
 
         if (enableExp && !cell.cellPoints.empty()) {
@@ -682,6 +827,76 @@ int main(int argc, char* argv[]) {
             auto expMap = fusion::metrics::GetExperimentalMetricsAsMap(expRes);
             for (const auto& name : expNames) {
                 expBands[name][i] = static_cast<float>(expMap[name]);
+            }
+        }
+    }
+
+    // /surfstats: derive surface_area_ratio/roughness from the per-cell
+    // elevation grid gridmetrics already holds in memory (surfSourceMax or
+    // surfSourceMean) -- no second raster round-trip. surface_area_ratio
+    // and roughness are never subject to /noheight (Shared groundwork C) --
+    // a cell without a computed top-surface elevation (whether because it's
+    // fully empty or because no points cleared /minht) simply has no basis
+    // for a surface-stats value either, so both cases collapse to /nodata
+    // in the final output; kSurfNoValue exists only so
+    // ComputeSurfaceStatsGrid's single-noData contract isn't confused by
+    // /nodata potentially being NaN (not reliably `==`-comparable to itself).
+    std::vector<float> surfStatsAreaRatio, surfStatsRoughness;
+    if (enableSurfStats) {
+        const std::vector<float>& sourceElev = (surfStatsSource == "mean") ? surfSourceMean : surfSourceMax;
+        fusion::metrics::SurfaceStatsGrid surfGrid = fusion::metrics::ComputeSurfaceStatsGrid(
+            sourceElev, cols, rows, cellSize, kSurfNoValue);
+        surfStatsAreaRatio = std::move(surfGrid.surfaceAreaRatio);
+        surfStatsRoughness = std::move(surfGrid.roughness);
+        for (size_t i = 0; i < numCells; ++i) {
+            if (surfStatsAreaRatio[i] == kSurfNoValue) surfStatsAreaRatio[i] = ND;
+            if (surfStatsRoughness[i] == kSurfNoValue) surfStatsRoughness[i] = ND;
+        }
+    }
+
+    // /strataraster: gridmetrics already buckets points' elevations into
+    // cell.strataElevations whenever /strata is given (see the point loop
+    // above) but only ever wrote counts to CSV -- append, per stratum
+    // bucket: a return-density band (item 3, same as densitymetrics' own
+    // stratum bands), a count band, a proportion band, and (item 6) a full
+    // ComputePointStatBundle band set. A stratum bucket with zero points in
+    // an otherwise non-empty cell gets /noheight for its stat columns and a
+    // real (not sentinel) 0 for its own count/proportion, consistent with
+    // the cover-metric precedent in Shared groundwork C; density bands
+    // follow the same rule as item 3. Only built when /strataraster is
+    // set -- this is a lot of bands (numBuckets x ~41), so it stays opt-in.
+    std::vector<std::string> strataStatSuffixes = fusion::metrics::PointStatBundleColumnNames("");
+    std::vector<std::vector<float>> strataDensityBands, strataCountBands, strataPropBands;
+    std::vector<std::vector<std::vector<float>>> strataStatBands; // [bucket][statIdx][cell]
+    if (enableStrataRaster && !strata.empty()) {
+        size_t numStrataBuckets = strata.size() + 1;
+        double cellArea = cellSize * cellSize;
+        strataDensityBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
+        strataCountBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
+        strataPropBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
+        strataStatBands.assign(numStrataBuckets, std::vector<std::vector<float>>(
+            strataStatSuffixes.size(), std::vector<float>(numCells, ND)));
+
+        for (size_t i = 0; i < numCells; ++i) {
+            const auto& cell = grid[i];
+            if (cell.totalReturns == 0) continue;
+            for (size_t s = 0; s < numStrataBuckets; ++s) {
+                const auto& bucketElev = cell.strataElevations[s];
+                int count = static_cast<int>(bucketElev.size());
+                strataDensityBands[s][i] = static_cast<float>(count / cellArea);
+                strataCountBands[s][i] = static_cast<float>(count);
+                strataPropBands[s][i] = static_cast<float>(count) / cell.totalReturns;
+                if (count > 0) {
+                    fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(bucketElev);
+                    std::vector<float> vals = fusion::metrics::PointStatBundleAsVector(bundle);
+                    for (size_t k = 0; k < vals.size(); ++k) {
+                        strataStatBands[s][k][i] = vals[k];
+                    }
+                } else {
+                    for (auto& statBand : strataStatBands[s]) {
+                        statBand[i] = sentinel.noheight.value;
+                    }
+                }
             }
         }
     }
@@ -700,22 +915,55 @@ int main(int argc, char* argv[]) {
         const std::vector<float>& data;
     };
 
-    std::vector<BandDef> bandDefs = {
-        {"elev_min", bandMin}, {"elev_max", bandMax}, {"elev_mean", bandMean},
-        {"elev_stddev", bandStdDev}, {"elev_variance", bandVar}, {"elev_cv", bandCV},
-        {"elev_skewness", bandSkew}, {"elev_kurtosis", bandKurt}, {"elev_crr", bandCRR},
-        {"elev_mode", bandMode}, {"elev_median", bandMedian}, {"elev_iqr", bandIQR},
-        {"elev_p01", bandP01}, {"elev_p05", bandP05}, {"elev_p10", bandP10},
-        {"elev_p20", bandP20}, {"elev_p25", bandP25}, {"elev_p30", bandP30},
-        {"elev_p40", bandP40}, {"elev_p50", bandP50}, {"elev_p60", bandP60},
-        {"elev_p70", bandP70}, {"elev_p75", bandP75}, {"elev_p80", bandP80},
-        {"elev_p90", bandP90}, {"elev_p95", bandP95}, {"elev_p99", bandP99},
-        {"canopy_cover", bandCover}, {"point_density", bandDensity}
-    };
+    std::vector<BandDef> bandDefs;
+    for (size_t k = 0; k < elevColNames.size(); ++k) {
+        bandDefs.push_back({elevColNames[k], elevBands[k]});
+    }
+    bandDefs.push_back({"elev_profile_area", elevProfileArea});
+    bandDefs.push_back({"canopy_cover", bandCover});
+    bandDefs.push_back({"point_density", bandDensity});
+    for (size_t rn = 0; rn < returnNumberBands.size(); ++rn) {
+        bandDefs.push_back({"r" + std::to_string(rn + 1) + "count", returnNumberBands[rn]});
+    }
+    bandDefs.push_back({"allcover", bandAllCover});
+    bandDefs.push_back({"afcover", bandAfCover});
+    bandDefs.push_back({"allabovemean", bandAllAboveMean});
+    bandDefs.push_back({"allabovemode", bandAllAboveMode});
+    bandDefs.push_back({"afabovemean", bandAfAboveMean});
+    bandDefs.push_back({"afabovemode", bandAfAboveMode});
 
     if (!noIntensity) {
-        bandDefs.push_back({"int_mean", bandIntMean});
-        bandDefs.push_back({"int_stddev", bandIntStdDev});
+        for (size_t k = 0; k < intColNames.size(); ++k) {
+            bandDefs.push_back({intColNames[k], intBands[k]});
+        }
+    }
+
+    for (const auto& prefix : spectralChannelPrefixes) {
+        const auto& colNames = spectralColNames[prefix];
+        const auto& bands = spectralBands[prefix];
+        for (size_t k = 0; k < colNames.size(); ++k) {
+            bandDefs.push_back({colNames[k], bands[k]});
+        }
+    }
+
+    if (enableSurfStats) {
+        bandDefs.push_back({"surface_area_ratio", surfStatsAreaRatio});
+        bandDefs.push_back({"roughness", surfStatsRoughness});
+    }
+
+    if (enableStrataRaster && !strata.empty()) {
+        for (size_t s = 0; s < strataDensityBands.size(); ++s) {
+            std::ostringstream stratumLabel;
+            stratumLabel << std::setw(2) << std::setfill('0') << s;
+            std::string prefix = "stratum_" + stratumLabel.str() + "_";
+
+            bandDefs.push_back({"density_stratum_" + stratumLabel.str(), strataDensityBands[s]});
+            bandDefs.push_back({prefix + "count", strataCountBands[s]});
+            bandDefs.push_back({prefix + "proportion", strataPropBands[s]});
+            for (size_t k = 0; k < strataStatSuffixes.size(); ++k) {
+                bandDefs.push_back({prefix + strataStatSuffixes[k], strataStatBands[s][k]});
+            }
+        }
     }
 
     if (enableExp) {
@@ -728,7 +976,7 @@ int main(int argc, char* argv[]) {
         std::cout << "[GridMetrics] Writing Single-band GeoTIFF rasters to: " << outDir << "...\n";
         for (const auto& bdef : bandDefs) {
             std::filesystem::path bpath = outDir / (stem + "_" + bdef.name + ".tif");
-            if (outRaster.Create(bpath, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0)) {
+            if (outRaster.Create(bpath, cols, rows, 1, "Float32", "GTiff", "", geotransform, rasterNoData.value)) {
                 outRaster.SetBandDescription(1, bdef.name);
                 outRaster.WriteBandData(1, bdef.data);
                 outRaster.Close();
@@ -737,7 +985,7 @@ int main(int argc, char* argv[]) {
     } else {
         std::cout << "[GridMetrics] Writing Multi-band GeoTIFF raster to: " << outRasterPath << " ("
                   << bandDefs.size() << " bands)...\n";
-        if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, -9999.0)) {
+        if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, rasterNoData.value)) {
             for (size_t b = 0; b < bandDefs.size(); ++b) {
                 outRaster.SetBandDescription(static_cast<int>(b + 1), bandDefs[b].name);
                 outRaster.WriteBandData(static_cast<int>(b + 1), bandDefs[b].data);
@@ -752,10 +1000,39 @@ int main(int argc, char* argv[]) {
     std::ofstream csv(csvPath);
     if (csv.is_open()) {
         std::cout << "[GridMetrics] Exporting CSV Elevation Metrics table to: " << csvPath << "...\n";
-        csv << "Col,Row,X,Y,TotalReturns,FirstReturns,ElevMin,ElevMax,ElevMean,ElevStdDev,ElevVar,ElevCV,ElevSkew,ElevKurt,ElevCRR,ElevMode,ElevMedian,ElevIQR,"
-            << "ElevP01,ElevP05,ElevP10,ElevP20,ElevP25,ElevP30,ElevP40,ElevP50,ElevP60,ElevP70,ElevP75,ElevP80,ElevP90,ElevP95,ElevP99,CanopyCover,PointDensity";
-        for (size_t s = 0; s < strata.size(); ++s) {
-            csv << ",StrataCnt_" << s;
+        csv << "Col,Row,X,Y,TotalReturns,FirstReturns";
+        for (const auto& name : elevColNames) {
+            csv << "," << name;
+        }
+        csv << ",elev_profile_area,CanopyCover,PointDensity";
+        for (int rn = 1; rn <= 9; ++rn) {
+            csv << ",r" << rn << "count";
+        }
+        csv << ",allcover,afcover,allabovemean,allabovemode,afabovemean,afabovemode";
+        if (!noIntensity) {
+            for (const auto& name : intColNames) {
+                csv << "," << name;
+            }
+        }
+        for (const auto& prefix : spectralChannelPrefixes) {
+            for (const auto& name : spectralColNames[prefix]) {
+                csv << "," << name;
+            }
+        }
+        // strata.size() + 1 buckets, not strata.size() -- AssignStratumIndex
+        // (and the resize a few hundred lines above) reserve one extra
+        // "above the last threshold" bucket, and the per-row loop below
+        // already writes cell.strataElevations.size() buckets' worth of
+        // columns; a header short by one bucket here would silently
+        // misalign every downstream column.
+        for (size_t s = 0; !strata.empty() && s < strata.size() + 1; ++s) {
+            std::ostringstream stratumLabel;
+            stratumLabel << std::setw(2) << std::setfill('0') << s;
+            std::string prefix = "stratum_" + stratumLabel.str() + "_";
+            csv << "," << prefix << "count," << prefix << "proportion";
+            for (const auto& suffix : strataStatSuffixes) {
+                csv << "," << prefix << suffix;
+            }
         }
         if (enableExp) {
             for (const auto& name : expNames) {
@@ -770,26 +1047,74 @@ int main(int argc, char* argv[]) {
                 const auto& cell = grid[idx];
                 double x = header.minX + (c + 0.5) * cellSize;
                 double y = header.maxY - (r + 0.5) * cellSize;
+                bool cellEmpty = (cell.totalReturns == 0); // /nodata applies to every column, including counts
 
-                csv << c << "," << r << "," << x << "," << y << ","
-                    << cell.totalReturns << "," << cell.firstReturns << ","
-                    << bandMin[idx] << "," << bandMax[idx] << "," << bandMean[idx] << ","
-                    << bandStdDev[idx] << "," << bandVar[idx] << "," << bandCV[idx] << ","
-                    << bandSkew[idx] << "," << bandKurt[idx] << "," << bandCRR[idx] << ","
-                    << bandMode[idx] << "," << bandMedian[idx] << "," << bandIQR[idx] << ","
-                    << bandP01[idx] << "," << bandP05[idx] << "," << bandP10[idx] << ","
-                    << bandP20[idx] << "," << bandP25[idx] << "," << bandP30[idx] << ","
-                    << bandP40[idx] << "," << bandP50[idx] << "," << bandP60[idx] << ","
-                    << bandP70[idx] << "," << bandP75[idx] << "," << bandP80[idx] << ","
-                    << bandP90[idx] << "," << bandP95[idx] << "," << bandP99[idx] << ","
-                    << bandCover[idx] << "," << bandDensity[idx];
+                csv << c << "," << r << "," << x << "," << y << ",";
+                if (cellEmpty) {
+                    csv << "NA,NA,";
+                } else {
+                    csv << cell.totalReturns << "," << cell.firstReturns << ",";
+                }
+                for (const auto& band : elevBands) {
+                    WriteCSVFloat(csv, band[idx]); csv << ",";
+                }
+                WriteCSVFloat(csv, elevProfileArea[idx]); csv << ",";
+                WriteCSVFloat(csv, bandCover[idx]); csv << ",";
+                WriteCSVFloat(csv, bandDensity[idx]);
+                for (const auto& band : returnNumberBands) {
+                    csv << ",";
+                    WriteCSVFloat(csv, band[idx]);
+                }
+                csv << ",";
+                WriteCSVFloat(csv, bandAllCover[idx]); csv << ",";
+                WriteCSVFloat(csv, bandAfCover[idx]); csv << ",";
+                WriteCSVFloat(csv, bandAllAboveMean[idx]); csv << ",";
+                WriteCSVFloat(csv, bandAllAboveMode[idx]); csv << ",";
+                WriteCSVFloat(csv, bandAfAboveMean[idx]); csv << ",";
+                WriteCSVFloat(csv, bandAfAboveMode[idx]);
+                if (!noIntensity) {
+                    for (const auto& band : intBands) {
+                        csv << ",";
+                        WriteCSVFloat(csv, band[idx]);
+                    }
+                }
+                for (const auto& prefix : spectralChannelPrefixes) {
+                    for (const auto& band : spectralBands[prefix]) {
+                        csv << ",";
+                        WriteCSVFloat(csv, band[idx]);
+                    }
+                }
 
-                for (size_t s = 0; s < cell.strataCounts.size(); ++s) {
-                    csv << "," << cell.strataCounts[s];
+                for (size_t s = 0; s < cell.strataElevations.size(); ++s) {
+                    if (cellEmpty) {
+                        csv << ",NA,NA";
+                        for (size_t k = 0; k < strataStatSuffixes.size(); ++k) {
+                            csv << ",NA";
+                        }
+                        continue;
+                    }
+                    const auto& bucketElev = cell.strataElevations[s];
+                    int count = static_cast<int>(bucketElev.size());
+                    double proportion = static_cast<double>(count) / cell.totalReturns;
+                    csv << "," << count << "," << proportion;
+                    if (count > 0) {
+                        fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(bucketElev);
+                        std::vector<float> vals = fusion::metrics::PointStatBundleAsVector(bundle);
+                        for (float v : vals) {
+                            csv << ",";
+                            WriteCSVFloat(csv, v);
+                        }
+                    } else {
+                        for (size_t k = 0; k < strataStatSuffixes.size(); ++k) {
+                            csv << ",";
+                            WriteCSVFloat(csv, sentinel.noheight.value);
+                        }
+                    }
                 }
                 if (enableExp) {
                     for (const auto& name : expNames) {
-                        csv << "," << expBands[name][idx];
+                        csv << ",";
+                        WriteCSVFloat(csv, expBands[name][idx]);
                     }
                 }
                 csv << "\n";
