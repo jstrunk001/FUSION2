@@ -1,6 +1,19 @@
 # Lidar & Terrain Metrics Reference
 
-This reference manual documents the statistical elevation, canopy structure, return intensity, pulse density, and experimental spatial metrics computed by `gridmetrics`, `cloudmetrics`, and `ExperimentalMetrics`.
+This reference manual documents the statistical elevation, canopy structure, return intensity, pulse density, surface, and experimental spatial metrics computed by `gridmetrics`, `cloudmetrics`, `gridsurfacestats`, `densitymetrics`, and `ExperimentalMetrics`.
+
+---
+
+## 0. `NA` vs. `0` -- the `/nodata` and `/noheight` sentinel convention
+
+`gridmetrics` and `cloudmetrics` distinguish two different "empty" conditions, each with its own independently-overridable placeholder value, rather than collapsing both into one number as earlier releases did:
+
+- **`/nodata` (default `NA`)** -- a cell or cloud with **zero total points**: nothing landed there at all. Every band/column for that cell/cloud gets this value, including counts (`TotalReturns`, `TotalPoints`) and density (`point_density`) -- there is no real computed answer here, only an absence of data.
+- **`/noheight` (default `0`)** -- a cell or cloud with **points present but none passing the height cutoff** (`/minht`): a real, meaningful "no canopy here" answer. This applies specifically to the elevation- and intensity-derived bands whose only data source is the height-filtered point set (`elev_*`, `int_*`, and per-stratum stats). Metrics that are well-defined directly from the *unfiltered* return count -- `canopy_cover`, `point_density`, per-return-number counts -- are **never** overridden by `/noheight`; a computed `0%` cover when points exist but none clear the cutoff is a real answer, not a placeholder.
+
+Both options accept `NA` (case-insensitive) or a literal number (`0`, `-9999`, `inf`, ...). CSV output writes the literal text `NA` when a sentinel resolves to `NA`; both `fread()` (R `data.table`, default `na.strings` already includes `"NA"`) and `terra`/`raster` (a GeoTIFF's registered NoData value, including `NaN`) pick this up automatically on read, with no reader-side code change needed.
+
+**GDAL raster caveat:** GDAL registers exactly one NoData value per file. When `/nodata` resolves to `NA` (the default), the GeoTIFF is created with `NaN` as its registered NoData value, and `/noheight`'s default `0` is written as an ordinary, valid pixel -- the clean default case. If both options are explicitly set to different, non-`NA` values, only one can be the file's registered NoData; the tool prints a warning and uses `/nodata`'s value, with `/noheight`'s value still written as a real (not NoData-flagged) pixel.
 
 ---
 
@@ -21,6 +34,16 @@ Calculated across normalized height values ($Z_i = Z_{point} - Z_{ground}$) for 
 | `elev_kurtosis` | Kurtosis | $\frac{1}{N S^4} \sum (Z_i - \bar{Z})^4 - 3$ |
 | `elev_iqr` | Interquartile Range | $IQR = P_{75} - P_{25}$ |
 | `elev_p01`–`elev_p99` | Height Percentiles | 1st, 5th, 10th, 20th, 25th, 30th, 40th, 50th, 60th, 70th, 75th, 80th, 90th, 95th, 99th height percentiles. |
+| `elev_aad` | Average Absolute Deviation | $\frac{1}{N}\sum \lvert Z_i - \bar{Z} \rvert$ (mean absolute deviation about the mean). |
+| `elev_mad_median` | MAD about the Median | $\frac{1}{N}\sum \lvert Z_i - \text{median}(Z) \rvert$ (mean absolute deviation about the median). |
+| `elev_mad_mode` | MAD about the Mode | $\frac{1}{N}\sum \lvert Z_i - \text{mode}(Z) \rvert$ (mean absolute deviation about the mode). |
+| `elev_l1`–`elev_l4` | L-Moments | Sample L-moments (Hosking 1990), computed from the probability-weighted moments of the sorted values. `elev_l1` equals `elev_mean`. |
+| `elev_l_cv`, `elev_l_skewness`, `elev_l_kurtosis` | L-Moment Ratios | $L\text{-}CV = L_2/L_1$, $L\text{-}skew = L_3/L_2$, $L\text{-}kurt = L_4/L_2$ -- robust analogues of `elev_cv`/`elev_skewness`/`elev_kurtosis`. |
+| `elev_quadratic_mean` | Quadratic Mean (RMS) | $\sqrt{\frac{1}{N}\sum Z_i^2}$ |
+| `elev_cubic_mean` | Cubic Mean | $\sqrt[3]{\frac{1}{N}\sum Z_i^3}$ |
+| `elev_profile_area` | Profile Area | Trapezoidal-rule area under the percentile-vs-percentile-rank curve (`elev_p01`...`elev_p99`, each height offset from `elev_min`) -- the one legacy elevation column that needs the full percentile curve rather than a single-vector reduction. |
+
+The same full bundle (all rows above) is computed for return intensity under the `int_` prefix (`int_min`, `int_mean`, ... `int_cubic_mean`; no `int_profile_area`), and, when `/rgb:` selects one or more spectral channels, once more per selected channel under `red_`/`green_`/`blue_`/`nir_` prefixes -- same columns as `int_*`, one full set per selected, available spectral channel (RGB populated in LAS point formats 2, 3, 5, 7, 8, 10; NIR only in formats 8 and 10 -- see `gridmetrics`'/`cloudmetrics`' `/rgb:` option in [`CLI_TOOLS_REFERENCE.md`](CLI_TOOLS_REFERENCE.md)).
 
 ---
 
@@ -31,6 +54,11 @@ Calculated across normalized height values ($Z_i = Z_{point} - Z_{ground}$) for 
 | `canopy_cover` / `cover_2m` | Canopy Cover Fraction | Fraction of returns above the canopy height cutoff ($h_{min}$, default 2.0 m):<br>$$\text{Cover} = \frac{N_{Z \ge h_{min}}}{N_{total}}$$ |
 | `canopy_relief_ratio` | Canopy Relief Ratio ($CRR$) | Relative position of mean height within total height range:<br>$$CRR = \frac{\bar{Z} - Z_{min}}{Z_{max} - Z_{min}}$$ |
 | `strata_fraction_i` | Height Strata Fraction | Proportion of returns falling into specified height interval $[h_a, h_b]$. |
+| `r1count`–`r9count` | Per-Return-Number Counts | `gridmetrics` only. Raw count of returns with return number 1 through 8, plus an `r9count` bucket for return number 9 or higher. Computed from the unfiltered return set -- `/nodata` when the cell is empty, never `/noheight`. |
+| `allcover` | All-Returns Cover | $100 \times N_{\text{above heightcut}} / N_{\text{total}}$ -- the cover fraction using every return as the denominator, regardless of `/first`. |
+| `afcover` | All-First Cover | $100 \times N_{\text{above heightcut}} / N_{\text{first}}$ -- returns above the height cutoff (from the full return set) as a fraction of first returns only. |
+| `allabovemean`, `allabovemode` | All-Returns Above Mean/Mode | $100 \times N_{\text{above elev\_mean or elev\_mode}} / N_{\text{total}}$. |
+| `afabovemean`, `afabovemode` | All-First Above Mean/Mode | Same numerator as `allabovemean`/`allabovemode`, but as a fraction of first returns only. |
 
 ---
 
@@ -46,6 +74,33 @@ Calculated by `returndensity.exe` and `gridmetrics.exe`:
 | `ground_return_ratio` | Ground Return Percentage | Percentage of classified ground returns ($Class = 2$). |
 | `int_mean_first` | First Return Mean Intensity | Mean return intensity of first-returns. |
 | `int_mean_all` | All Return Mean Intensity | Mean return intensity across all returns. |
+
+---
+
+## 3a. Surface Area Ratio, Roughness & Cut/Fill Volume
+
+Computed by `fusion::metrics::ComputeSurfaceStatsGrid`/`SummarizeSurfaceStats` (`SurfaceStats.h`), and exposed from three places: the standalone `gridsurfacestats.exe`, `gridmetrics.exe`'s `/surfstats` flag (per-cell raster bands, fed from the same `elev_max`/`elev_mean` grid gridmetrics already holds), and `cloudmetrics.exe`'s `/surfstats` flag (scalar summary over a scratch `/cellsize` grid). No TIN/Delaunay triangulation is used -- surface area ratio is a direct closed-form derivation from Horn's-method slope (the same 3x3-neighbor calculation `topometrics.exe` uses for slope/aspect).
+
+| Metric | Name | Formula / Description |
+| :--- | :--- | :--- |
+| `surface_area_ratio` | Surface Area Ratio | 3D surface area / 2D planimetric area for one cell's 3x3 neighborhood: $\frac{1}{\cos(\text{slope})}$. Only computable for interior cells with a full, noData-free 3x3 neighborhood -- border/edge cells get `/nodata`. |
+| `roughness` | Roughness | Local elevation standard deviation across the same 3x3 window. |
+| `volume_diff` | Cut/Fill Volume Difference | Per-cell `elevation - reference`, only present when a second surface is supplied (`gridsurfacestats`' `/reference`). Positive = fill, negative = cut. |
+| `SurfaceAreaRatioMean`, `RoughnessMean` | (cloudmetrics `/surfstats`) | Mean of the per-cell values above, over cells with a computed value. |
+| `PlanimetricArea`, `SurfaceArea3D` | (cloudmetrics `/surfstats`) | Total 2D footprint area and total 3D surface area (border cells assumed flat) over the point cloud's `/cellsize` grid. |
+
+---
+
+## 3b. Vertical Density Stratum Bands & Per-Stratum Statistic Bundles
+
+`densitymetrics.exe` (standalone), `gridmetrics.exe`'s `/strataraster` add-on, and `gridmetrics`'/`cloudmetrics`' `/strata` all share the same bucket-assignment rule (`fusion::metrics::AssignStratumIndex`): a point's stratum bucket is the first `/strata` threshold its (ground-normalized) elevation is still `>=`, or the bucket past the last threshold if it clears all of them.
+
+| Metric | Name | Description |
+| :--- | :--- | :--- |
+| `density_stratum_00`, `density_stratum_01`, ... | Per-Stratum Return Density | `densitymetrics`/`gridmetrics /strataraster` raster bands: that bucket's return count per unit area (`count / cellsize^2`) for the cell. A cell with zero total points gets `/nodata` across every stratum band; a non-empty cell's individual bands are real computed values (including a legitimate `0` for an empty bucket), never `/noheight`. |
+| `stratum_N_count`, `stratum_N_proportion` | Per-Stratum Count & Proportion | `gridmetrics`/`cloudmetrics` `/strata`: bucket `N`'s raw return count and its proportion of the cell/cloud's total returns. Always a real value (including `0`) once the cell/cloud has any returns at all. |
+| `stratum_N_min`, `stratum_N_mean`, ... | Per-Stratum Elevation Bundle | The full statistic bundle (same columns as `elev_*`, Section 1, without the `elev_` prefix) computed from bucket `N`'s own elevation values. A bucket with zero points in an otherwise non-empty cell/cloud gets `/noheight` for these columns. |
+| `intstratum_N_min`, `intstratum_N_mean`, ... | Per-Stratum Intensity Bundle | `cloudmetrics` `/intstrata` only: same bucket assignment as `/strata` (elevation-based, defaults to `/strata`'s thresholds), but the bundle is computed from each bucket's **intensity** values instead of elevation. |
 
 ---
 

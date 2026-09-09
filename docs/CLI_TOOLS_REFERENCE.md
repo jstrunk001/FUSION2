@@ -1,8 +1,10 @@
 # Executable Suite & CLI Tools Reference
 
-This user manual documents the command-line interface, syntax, parameters, options, flags, and workflow patterns for all 13 executables in the FUSION suite.
+This user manual documents the command-line interface, syntax, parameters, options, flags, and workflow patterns for all 15 executables in the FUSION suite.
 
 `ltktools.exe` from earlier versions of this suite has been folded into `gridmetrics.exe` (see its batch/tiled mode below) and replaced as the multi-tool orchestrator by the new `pipeline.exe` (see [`PIPELINE_GUIDE.md`](PIPELINE_GUIDE.md) for worked pipeline examples). Several option names changed in this pass to stay consistent across tools — see the "Renamed in this release" callouts below.
+
+**Changed default behavior in this release:** `gridmetrics.exe` and `cloudmetrics.exe` now write `NA` by default, not a silently-computed value or `-9999`, for any cell/cloud with zero returns at all -- this includes `point_density` and `canopy_cover`/`CanopyCoverPct`, and (for gridmetrics) even the raw `TotalReturns`/`FirstReturns` counts in the CSV export. A separate `/noheight` sentinel (default `0`) covers the different case of a cell/cloud that has returns but none clearing the height cutoff. See "NA vs. 0 -- the /nodata and /noheight sentinel convention" near the top of [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md) for the full rule and why the two cases are now distinguished.
 
 ---
 
@@ -31,12 +33,16 @@ gridmetrics <input_directory> /outdir:<dir> [/tilesize:...] [/buffer:...] [/thre
 ```
 Tiles and buffers every LAS/LAZ file in the input directory, computes the same grid metrics per tile in parallel (multithreaded, in-process — no child processes), and mosaics the tile rasters into a `.vrt` in `/outdir`. This is what `ltktools.exe` used to do as a separate executable; it's the same behavior, just reached by pointing `gridmetrics` at a directory instead of a file. Batch mode always writes one multiband raster per tile (`/output-mode` is ignored — singleband mode would write many files per tile, which doesn't fit the one-raster-per-tile mosaicking model) and skips the CSV summary/experimental-metrics options that only apply to single-file mode.
 
+A COPC (Cloud Optimized Point Cloud) file in the input directory is detected automatically (no separate flag) -- its own chunk index is used to seek directly to the chunks overlapping each tile's buffered extent, instead of reading the whole file sequentially per tile. A plain (non-indexed) LAS/LAZ file falls back to today's sequential read, unchanged. This mainly pays off when the input directory holds one very large regional COPC file rather than pre-tiled LAS/LAZ -- pre-tiled input is already read efficiently without it.
+
 - `/extent:<LLX,LLY,URX,URY>`: Batch mode only. Project extent (default: a `0,0,5000,5000` grid if omitted).
 - `/tilesize:<w,h>`: Batch mode only. Tile width,height in project units (default: `1000,1000`).
 - `/buffer:<val>`: Batch mode only. Tile buffer distance (default: `50`).
 - `/threads:<N>`: Batch mode only. Number of parallel worker threads (default: `4`).
 - `/vrt`: Batch mode only. Generate a GDAL Virtual Raster (`.vrt`) across tile rasters (on by default).
 - `/merge`: Batch mode only. Merge the VRT into a single global GeoTIFF file.
+
+Single-file mode's `elev_*`/`int_*` bands are now the full statistic bundle (min/max/mean/stddev/variance/cv/skewness/kurtosis/crr/mode/median/iqr/percentiles/AAD/MAD-median/MAD-mode/L-moments/quadratic and cubic mean, plus `elev_profile_area`) -- see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md) Section 1 for the full column list. It also always emits `r1count`...`r9count` (per-return-number counts) and `allcover`/`afcover`/`allabovemean`/`allabovemode`/`afabovemean`/`afabovemode` (cover-variant bands), all computed directly from the unfiltered return set. Batch/tiled mode keeps the smaller, original band set (no full bundle, no return-number/cover-variant bands) -- see the codebase's own `TileCellAccumulator` comment for why.
 
 #### Options & Flags (both modes, except where noted)
 - `/ground:<path>`: Path to ground surface DEM raster (GeoTIFF, ENVI, IMG).
@@ -48,13 +54,19 @@ Tiles and buffers every LAS/LAZ file in the input directory, computes the same g
 - `/first`: Use only first returns for metric calculations.
 - `/all`: Single-file mode only. Use all returns for canopy cover and metric calculations.
 - `/nointensity`: Skip computing intensity metrics.
-- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds (e.g. `/strata:0.5,2.0,5.0,10.0,20.0`).
-- `/intstrata:<h1,h2,...>`: Comma-separated intensity strata height thresholds.
+- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds (e.g. `/strata:0.5,2.0,5.0,10.0,20.0`). Each stratum bucket gets `stratum_N_count`/`stratum_N_proportion` CSV columns plus a full elevation statistic bundle (`stratum_N_min`, `stratum_N_mean`, ... -- see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md)) for that bucket's points. A bucket with zero points in an otherwise non-empty cell gets `/noheight` for its stat columns and a real `0` for its own count/proportion.
+- `/intstrata:<h1,h2,...>`: Comma-separated intensity strata height thresholds (defaults to `/strata`'s thresholds if omitted, currently accumulated but not yet surfaced in output -- see the codebase's own `strataIntSums`/`strataIntCounts` fields).
+- `/rgb:<spec>`: Comma-separated spectral channels to compute a full statistic bundle for -- `R`, `G`, `B`, `N` (near-infrared), or `all` (every channel the input file's LAS point format actually carries). RGB is populated in point formats 2, 3, 5, 7, 8, 10; NIR only in formats 8 and 10 -- a requested channel the file's format doesn't carry prints a warning naming the channel and the point format, and is simply omitted (never a hard failure). Emits `red_*`/`green_*`/`blue_*`/`nir_*` bands, one full bundle per selected, available channel, gated by the same `/minht` cutoff and `/noheight`/`/nodata` rule as `int_*`.
 - `/voxelsize:<val>`: Single-file mode only. 3D voxel resolution for voxel volume metrics, in meters (default: `20.0`).
 - `/exp`: Single-file mode only. Compute additional experimental metrics from RSForTools.
 - `/outroot:<name>`: Single-file mode only. Base root name for output CSV summary metrics tables.
 - `/outdir:<path>`: Output directory for rasters and CSV reports (single-file mode) or for tile rasters and the mosaicked VRT (batch mode). Default: `.`.
 - `/output-mode:<mode>`: Single-file mode only. Output raster mode, `multiband` or `singleband` (default: `multiband`).
+- `/surfstats`: Single-file mode only. Compute `surface_area_ratio` and `roughness` bands from the per-cell elevation grid gridmetrics already holds in memory (no second raster round-trip). See `/surfstats-source` and [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md) for the underlying math.
+- `/surfstats-source:<max|mean>`: With `/surfstats`. Which per-cell elevation to feed the surface-stats math -- `max` (default) suits typical CHM top-surface use, `mean` suits ground-DTM-style runs.
+- `/strataraster`: With `/strata`. Also append, per stratum bucket, a return-density band (`density_stratum_00`, ...), a count band (`stratum_00_count`, ...), a proportion band (`stratum_00_proportion`, ...), and a full elevation statistic bundle band set (`stratum_00_min`, `stratum_00_mean`, ...) to the multiband output -- the same values `/strata` already writes to CSV, just also as raster bands. This is a lot of bands (number of buckets x ~41), so it stays opt-in; see [`densitymetrics.exe`](#15-densitymetricsexe) for a dedicated standalone tool covering just the density view.
+- `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every band and, in the CSV export, every column including `TotalReturns`/`FirstReturns`.
+- `/noheight:<NA|number>`: Value for height-dependent bands (`elev_*`, `int_*`) when a cell has returns but none clear `/minht` (default: `0`). Never applied to `canopy_cover`, `point_density`, or `/strataraster`'s bands -- those are well-defined directly from the unfiltered return count. If both `/nodata` and `/noheight` are explicitly set to different, non-`NA` values, gridmetrics prints a warning and uses `/nodata`'s value as the GeoTIFF's registered NoData value (GDAL supports only one per file); `/noheight`'s value is still written as an ordinary pixel, just not flagged as NoData by the file header.
 
 ---
 
@@ -72,6 +84,16 @@ cloudmetrics <input.las/laz or directory> [optional ground DTM file or directory
 - `/cellsize:<val>`: Grid cell size for 2D area/volume metrics, in meters (default: `10.0`).
 - `/voxelsize:<val>`: 3D voxel resolution for voxel volume metrics, in meters (default: `20.0`).
 - `/exp`: Compute additional experimental metrics from RSForTools.
+- `/surfstats`: Compute `SurfaceAreaRatioMean`, `RoughnessMean`, `PlanimetricArea`, and `SurfaceArea3D` from a `/cellsize` elevation grid (max height per cell across the point cloud). Not available together with `/shape`.
+- `/shape:<path.shp>`: Compute one metrics row per polygon feature instead of one row for the whole cloud -- streams the full, uncropped point cloud exactly once, routing each point into whichever feature's polygon contains it. Replaces the legacy two-step `PolyClipData`-then-`CloudMetrics` workflow (no intermediate per-plot LAS files written or reread).
+- `/field:<name>`: With `/shape`. Attribute field used to label each output row (`Label` column); falls back to a zero-padded feature index when omitted or missing on a feature.
+- `/nodata:<NA|number>`: Value for a cloud/feature with zero points at all (default: `NA`). Applies to every CSV column, including `TotalPoints`/`CanopyPoints`.
+- `/noheight:<NA|number>`: Value for height-dependent columns (the full `elev_*`/`int_*` statistic bundle -- see below) when points exist but none clear `/minht` (default: `0`). Never applied to `CanopyCoverPct`, which is well-defined directly from the unfiltered point count.
+- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds -- same syntax and per-bucket `stratum_N_count`/`stratum_N_proportion`/elevation-bundle columns as `gridmetrics`' `/strata` (see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md)), just as one row's worth of CSV columns instead of raster bands.
+- `/intstrata:<h1,h2,...>`: Comma-separated height thresholds bucketing points the same way as `/strata` (defaults to `/strata`'s thresholds if omitted), but reporting an `intstratum_N_*` **intensity** statistic bundle per bucket instead of elevation.
+- `/rgb:<spec>`: Comma-separated spectral channels to compute a full statistic bundle for -- `R`, `G`, `B`, `N`, or `all` -- same semantics as `gridmetrics`' `/rgb` (see above), emitting `red_*`/`green_*`/`blue_*`/`nir_*` CSV columns.
+
+`cloudmetrics`' output CSV now carries the same full `elev_*`/`int_*` statistic bundle (plus `elev_profile_area`) that `gridmetrics` writes per cell -- see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md) Section 1 for the column list.
 
 ---
 
@@ -153,6 +175,10 @@ clipdata <input.las/laz or directory> [other /options]
 - `/ground:<path>`: Path to ground surface raster (GeoTIFF, ENVI, IMG) or directory of DTM tiles for height normalization.
 - `/minz:<val>`: Minimum height above ground (or elevation, if no `/ground` given). Renamed from `/zmin`.
 - `/maxz:<val>`: Maximum height above ground (or elevation, if no `/ground` given). Renamed from `/zmax`.
+- `/shape:<path.shp>`: Polygon shapefile to clip against, in addition to (not instead of) `/extent` -- both apply if both are given.
+- `/multifile`: With `/shape`. Write one output LAS/LAZ per polygon feature instead of one merged output, into the directory given by `/output`. Each feature's writer is opened lazily on its first matched point, so polygons with no returns don't create empty files.
+- `/field:<name>`: With `/multifile`. Attribute field used to name each output file (`<field-value>.laz`); falls back to a zero-padded feature index when omitted or missing on a feature.
+- `/outside`: Keep points outside every polygon instead of inside. Single-clip mode only (no `/multifile`).
 
 ---
 
@@ -254,3 +280,36 @@ The following options are forwarded to whichever stage(s) in the chain accept th
 - `/first`, `/nointensity`, `/slope`
 
 If `groundfilter` runs earlier in the chain, its DEM output is passed automatically as `/ground` to any later stage that accepts it (`canopymodel`, `gridmetrics`) -- an explicit `/ground:<path>` is only needed when no `groundfilter` stage precedes it.
+
+---
+
+### 14. `gridsurfacestats.exe`
+Computes surface area ratio and roughness from a DEM/CHM GeoTIFF (a standalone raster-in/raster-out tool -- the same math is also available inline from `gridmetrics`/`cloudmetrics` via `/surfstats`, see above). With `/reference`, also computes per-cell cut/fill volume against a second, independently produced surface.
+
+```bash
+gridsurfacestats <input_surface.tif> [other /options]
+```
+
+#### Options & Flags
+- `/output:<path>`: Output multi-band GeoTIFF raster path (default: `surface_stats.tif`).
+- `/reference:<path>`: A second surface GeoTIFF, the same cols x rows as the input, to diff against for cut/fill `volume_diff`. Omit to skip cut/fill entirely (2-band output instead of 3).
+
+The output raster inherits its NoData value directly from the input surface's own registered NoData -- there is no separate `/nodata` option, since a cell already flagged NoData in the source DEM/CHM has no basis for a surface-stats value either.
+
+---
+
+### 15. `densitymetrics.exe`
+Computes a return-density raster stack across vertical height slices -- one band per `/strata` bucket (`density_stratum_00`, `density_stratum_01`, ...), each cell holding that bucket's return count per unit area. This is `gridmetrics`' `/strataraster` add-on (see above) as its own dedicated tool: reuses the same grid-binning and strata-bucket-assignment logic, matches the legacy `DensityMetrics` tool name for anyone porting old batch scripts, and is the natural place for a future `pipeline.exe` stage.
+
+```bash
+densitymetrics <input.las/laz or directory> [optional raster ground path] [other /options]
+```
+
+#### Options & Flags
+- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds, same syntax as `gridmetrics`' `/strata` (default: `0.5,2.0,5.0,10.0,20.0`).
+- `/cellsize:<val>`: Output grid cell size in project units (default: `10.0`).
+- `/ground:<path>`: Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly. May also be supplied as an unflagged second positional argument.
+- `/class:<ids>`: Comma-separated point classifications to include (e.g. `/class:2,3,4,5`).
+- `/output:<name>`: Base output name (stem) for the raster/CSV files (default: derived from the input filename).
+- `/outdir:<path>`: Output directory for the raster and CSV report (default: `.`).
+- `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every stratum band and, in the CSV export, every column including `TotalReturns`. A non-empty cell's stratum bands are always real computed counts (including a legitimate `0` for an empty bucket) -- `densitymetrics` has no `/noheight` option, since nothing it computes is height-filtered the way `elev_*`/`int_*` bands are.
