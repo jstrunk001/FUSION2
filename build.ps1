@@ -71,6 +71,33 @@ $build_stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $bundle_version = "$project_version-$build_stamp"
 Write-Host "Building FUSION Update tools v$bundle_version"
 
+#1a. when publishing, request a version bump if this version was already
+#    released, and remind about the changelog -- checked now, before the
+#    (potentially long) compile step, not after
+if ($Publish) {
+    $prior_release_tags = & gh release list --limit 100 2>$null |
+        ForEach-Object { ($_ -split "`t")[0] } |
+        Where-Object { $_ -like "tools-v*" }
+    $prior_versions = $prior_release_tags | ForEach-Object {
+        [regex]::Match($_, '^tools-v([0-9]+\.[0-9]+\.[0-9]+)').Groups[1].Value
+    } | Where-Object { $_ -ne "" }
+
+    if ($prior_versions -contains $project_version) {
+        Write-Warning "CMakeLists.txt still reports v$project_version -- a release under that same version is already published ($($prior_release_tags -join ', ')). Bump VERSION in CMakeLists.txt's project() call before publishing another release, unless this re-publish is intentional."
+        $confirm = Read-Host "Publish anyway under the unchanged version v$project_version? [y/N]"
+        if ($confirm -notmatch '^[Yy]$') {
+            throw "Publish cancelled -- bump the version in CMakeLists.txt (and add a CHANGELOG.md entry) and re-run."
+        }
+    }
+
+    $changelog_path = Join-Path $repo_root "CHANGELOG.md"
+    $has_changelog_entry = (Test-Path $changelog_path) -and
+        (Select-String -Path $changelog_path -Pattern "\[$([regex]::Escape($project_version))\]" -Quiet)
+    if (-not $has_changelog_entry) {
+        Write-Warning "CHANGELOG.md has no entry for v$project_version yet -- add one describing what changed in this release before publishing."
+    }
+}
+
 #2. make sure cmake/gcc/make are reachable -- on this machine GDAL is built
 #   into the Rtools mingw toolchain rather than a system-wide install, and
 #   Rtools is normally only put on PATH by an active R session, not by a

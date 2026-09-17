@@ -152,3 +152,11 @@ Built bundles are published as **GitHub Release assets**:
 - `build.ps1 -Publish` zips the current `bin/` contents, uploads the zip to a new GitHub Release tagged `tools-v<version>-<timestamp>`, and cleans up the previous release tag.
 - To download pre-built binaries, visit the repository's [Releases page](https://github.com/jstrunk001/FUSION2/releases).
 
+### Version bumps
+
+The release `<version>` above comes from `VERSION` in `CMakeLists.txt`'s `project()` call -- a manual, single source of truth read by `build.ps1`. Before publishing a release with real functional changes:
+1. Bump `VERSION` in `CMakeLists.txt` (semantic versioning: `MAJOR.MINOR.PATCH`).
+2. Add a matching `## [<version>] - <date>` entry to [`CHANGELOG.md`](CHANGELOG.md) describing what changed.
+
+`build.ps1 -Publish` checks this automatically before compiling: if the current version was already published, it warns and asks for confirmation before continuing; if `CHANGELOG.md` has no entry for the current version, it warns but does not block.
+
