@@ -5,6 +5,7 @@
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/lidar/PointFilter.h"
 #include "fusion/geom/SpatialMask.h"
 #include "fusion/geom/PolygonFeatureSet.h"
 
@@ -24,7 +25,8 @@ static int RunMultiFileClip(
         const std::filesystem::path& outDir,
         double minX, double minY, double maxX, double maxY,
         double zMin, double zMax,
-        bool hasGround, fusion::raster::GDALRaster& groundRaster) {
+        bool hasGround, fusion::raster::GDALRaster& groundRaster,
+        const fusion::lidar::PointFilter& pointFilter) {
     std::filesystem::create_directories(outDir);
 
     std::vector<std::unique_ptr<fusion::lidar::LASWriter>> writers(featureSet.FeatureCount());
@@ -35,6 +37,9 @@ static int RunMultiFileClip(
     fusion::lidar::PointRecord pt;
     uint64_t totalWritten = 0;
     while (reader.ReadNextPoint(pt)) {
+        if (!pointFilter.Keep(pt)) {
+            continue;
+        }
         if (pt.x < minX || pt.x > maxX || pt.y < minY || pt.y > maxY) {
             continue;
         }
@@ -95,6 +100,7 @@ int main(int argc, char* argv[]) {
     parser.AddFlag("multifile", "With /shape, write one output LAS/LAZ per polygon feature instead of one merged output");
     parser.AddOption("field", "Attribute field used to name each /multifile output (<field-value>.laz); falls back to a zero-padded feature index when omitted or missing on a feature");
     parser.AddFlag("outside", "Keep points outside every polygon instead of inside (single-clip mode only)");
+    fusion::lidar::PointFilter::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -170,10 +176,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+
     if (multiFile) {
         std::cout << "[ClipData] Clipping " << inputFiles.size() << " point cloud file(s) against "
                   << featureSet.FeatureCount() << " polygon feature(s) -> " << outputPath << "...\n";
-        int rc = RunMultiFileClip(reader, featureSet, outputPath, minX, minY, maxX, maxY, zMin, zMax, hasGround, groundRaster);
+        int rc = RunMultiFileClip(reader, featureSet, outputPath, minX, minY, maxX, maxY, zMin, zMax, hasGround, groundRaster, pointFilter);
         reader.Close();
         return rc;
     }
@@ -189,6 +197,7 @@ int main(int argc, char* argv[]) {
     fusion::lidar::PointRecord pt;
     uint64_t clippedCount = 0;
     while (reader.ReadNextPoint(pt)) {
+        if (!pointFilter.Keep(pt)) continue;
         if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) {
             bool inShape = !haveShape || (mask.Contains(pt.x, pt.y) != outsideFlag);
             if (!inShape) {

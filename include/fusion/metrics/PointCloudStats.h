@@ -40,6 +40,33 @@ float ComputeProfileArea(const PointStatBundle& bundle);
 // still >= to, or thresholds.size() if elevation clears every threshold.
 size_t AssignStratumIndex(double elevation, const std::vector<double>& thresholds);
 
+// The simplified 6-metric summary reported per height-stratum bucket
+// (/strata, /intstrata, /rgbstrata) in place of the full 38-field
+// PointStatBundle -- a stratum bucket is one of many repeated per row, so
+// the full bundle's percentile/L-moment columns multiply out to an
+// impractical column count once several buckets are involved.
+struct StrataStatBundle {
+    int count{0};
+    double proportion{0.0};
+    float mean{0.0f};
+    float stddev{0.0f};
+    float min{0.0f};
+    float max{0.0f};
+};
+
+// totalCloudPoints is the denominator for `proportion` (the whole
+// cloud/cell/feature's point count, not just this bucket's) -- pass 0 to
+// force proportion to 0 rather than dividing by zero. count/proportion are
+// always well-defined, even for an empty bucket (both are simply 0); the
+// caller decides whether mean/stddev/min/max keep this bundle's default of
+// 0 for an empty bucket or resolve to a /noheight sentinel value instead --
+// this function performs no sentinel substitution itself, matching
+// ComputePointStatBundle's separation of concerns above.
+StrataStatBundle ComputeStrataStatBundle(const std::vector<double>& values, size_t totalCloudPoints);
+
+std::vector<std::string> StrataStatBundleColumnNames(const std::string& prefix);
+std::vector<double> StrataStatBundleAsVector(const StrataStatBundle& b);
+
 } // namespace fusion::metrics
 
 #endif // FUSION_METRICS_POINTCLOUDSTATS_H

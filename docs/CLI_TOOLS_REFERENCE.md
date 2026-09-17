@@ -16,6 +16,25 @@ Every tool's required input file (or directory) is a **positional** argument —
 
 ---
 
+## Point Filtering: `/class` and `/return` (all point-cloud tools)
+
+Every tool that reads point cloud data directly (`gridmetrics`, `cloudmetrics`, `canopymodel`, `groundfilter`, `clipdata`, `filterdata`, `thindata`, `densitymetrics`, and any point-cloud stage run through `pipeline`) shares one centralized point-filtering implementation and CLI syntax, replacing each tool's previous ad hoc classification handling (a bare whitelist, with no default noise exclusion and no shared return-number support):
+
+- `/class:<spec>`: Point classifications to keep.
+  - Omitted: **default** — excludes ASPRS noise classes 7 (Low Point) and 18 (High Noise); every other class is kept.
+  - `/class:all` or `/class:*`: disables the default noise exclusion, keeping every classification code, including 7 and 18.
+  - `/class:2,3,4,5` or `/class:1-5`: whitelist — keeps only the listed classes (a comma list, inclusive ranges, or both together).
+  - `/class:~7,9,18`: blacklist — keeps every class except the listed ones, replacing the default 7/18 exclusion with your own list.
+- `/return:<spec>`: Return numbers to keep.
+  - Omitted: keeps every return.
+  - `/return:1` or `/return:1,2` (ranges like `/return:1-2` also work): explicit return-number whitelist.
+  - `/return:first`, `/return:last`, `/return:only`, `/return:intermediate`: legacy FUSION mnemonics (first return, last return, the only return on a single-return pulse, or a return that is neither first nor last).
+- Withheld points (the LAS "discard this point" flag) are always excluded, independent of `/class` — there is no option to keep them.
+
+`gridmetrics`' separate `/first` flag (selecting first returns for the metric-calculation set) is unchanged and independent of `/return` — the two can be combined.
+
+---
+
 ## Executable Manuals
 
 ### 1. `gridmetrics.exe`
@@ -50,13 +69,14 @@ Single-file mode's `elev_*`/`int_*` bands are now the full statistic bundle (min
 - `/minht:<val>`: Minimum height above ground for canopy metrics calculation (default: `2.0`).
 - `/heightcut:<val>`: Height cutoff threshold for canopy cover calculations (defaults to `/minht`).
 - `/outlier:<min,max>`: Trim elevation outliers outside `min,max` values (e.g. `/outlier:-5,150`).
-- `/class:<ids>`: Comma-separated point classifications to include (e.g. `/class:2,3,4,5`).
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools.
 - `/first`: Use only first returns for metric calculations.
 - `/all`: Single-file mode only. Use all returns for canopy cover and metric calculations.
 - `/nointensity`: Skip computing intensity metrics.
-- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds (e.g. `/strata:0.5,2.0,5.0,10.0,20.0`). Each stratum bucket gets `stratum_N_count`/`stratum_N_proportion` CSV columns plus a full elevation statistic bundle (`stratum_N_min`, `stratum_N_mean`, ... -- see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md)) for that bucket's points. A bucket with zero points in an otherwise non-empty cell gets `/noheight` for its stat columns and a real `0` for its own count/proportion.
+- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds (e.g. `/strata:0.5,2.0,5.0,10.0,20.0`). Each stratum bucket gets the simplified 6-metric summary as CSV columns -- `stratum_N_count`, `stratum_N_proportion`, `stratum_N_mean`, `stratum_N_stddev`, `stratum_N_min`, `stratum_N_max` (see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md)) -- for that bucket's points. A bucket with zero points in an otherwise non-empty cell gets `/noheight` for its mean/stddev/min/max columns and a real `0` for its own count/proportion.
 - `/intstrata:<h1,h2,...>`: Comma-separated intensity strata height thresholds (defaults to `/strata`'s thresholds if omitted, currently accumulated but not yet surfaced in output -- see the codebase's own `strataIntSums`/`strataIntCounts` fields).
 - `/rgb:<spec>`: Comma-separated spectral channels to compute a full statistic bundle for -- `R`, `G`, `B`, `N` (near-infrared), or `all` (every channel the input file's LAS point format actually carries). RGB is populated in point formats 2, 3, 5, 7, 8, 10; NIR only in formats 8 and 10 -- a requested channel the file's format doesn't carry prints a warning naming the channel and the point format, and is simply omitted (never a hard failure). Emits `red_*`/`green_*`/`blue_*`/`nir_*` bands, one full bundle per selected, available channel, gated by the same `/minht` cutoff and `/noheight`/`/nodata` rule as `int_*`.
+- `/rgbstrata`: With `/rgb` and `/strata` both set. Also reports a mean/stddev/min/max summary per selected spectral channel within each height-stratum bucket -- `<channel>_stratum_N_mean`/`stddev`/`min`/`max` (e.g. `red_stratum_00_mean`), as both CSV columns and (with `/strataraster`) raster bands. Count/proportion aren't repeated here since the elevation `/strata` columns/bands sharing the same bucket boundaries already report them. Ignored (with a warning) if `/rgb` or `/strata` is missing.
 - `/voxelsize:<val>`: Single-file mode only. 3D voxel resolution for voxel volume metrics, in meters (default: `20.0`).
 - `/exp`: Single-file mode only. Compute additional experimental metrics from RSForTools.
 - `/outroot:<name>`: Single-file mode only. Base root name for output CSV summary metrics tables.
@@ -64,9 +84,9 @@ Single-file mode's `elev_*`/`int_*` bands are now the full statistic bundle (min
 - `/output-mode:<mode>`: Single-file mode only. Output raster mode, `multiband` or `singleband` (default: `multiband`).
 - `/surfstats`: Single-file mode only. Compute `surface_area_ratio` and `roughness` bands from the per-cell elevation grid gridmetrics already holds in memory (no second raster round-trip). See `/surfstats-source` and [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md) for the underlying math.
 - `/surfstats-source:<max|mean>`: With `/surfstats`. Which per-cell elevation to feed the surface-stats math -- `max` (default) suits typical CHM top-surface use, `mean` suits ground-DTM-style runs.
-- `/strataraster`: With `/strata`. Also append, per stratum bucket, a return-density band (`density_stratum_00`, ...), a count band (`stratum_00_count`, ...), a proportion band (`stratum_00_proportion`, ...), and a full elevation statistic bundle band set (`stratum_00_min`, `stratum_00_mean`, ...) to the multiband output -- the same values `/strata` already writes to CSV, just also as raster bands. This is a lot of bands (number of buckets x ~41), so it stays opt-in; see [`densitymetrics.exe`](#15-densitymetricsexe) for a dedicated standalone tool covering just the density view.
+- `/strataraster`: With `/strata`. Also append, per stratum bucket, a return-density band (`density_stratum_00`, ...), a count band (`stratum_00_count`, ...), a proportion band (`stratum_00_proportion`, ...), and the simplified mean/stddev/min/max band set (`stratum_00_mean`, `stratum_00_stddev`, `stratum_00_min`, `stratum_00_max`) to the multiband output -- the same values `/strata` already writes to CSV, just also as raster bands. With `/rgbstrata`, also appends that per-channel mean/stddev/min/max band set.
 - `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every band and, in the CSV export, every column including `TotalReturns`/`FirstReturns`.
-- `/noheight:<NA|number>`: Value for height-dependent bands (`elev_*`, `int_*`) when a cell has returns but none clear `/minht` (default: `0`). Never applied to `canopy_cover`, `point_density`, or `/strataraster`'s bands -- those are well-defined directly from the unfiltered return count. If both `/nodata` and `/noheight` are explicitly set to different, non-`NA` values, gridmetrics prints a warning and uses `/nodata`'s value as the GeoTIFF's registered NoData value (GDAL supports only one per file); `/noheight`'s value is still written as an ordinary pixel, just not flagged as NoData by the file header.
+- `/noheight:<NA|number>`: Value for height-dependent bands (`elev_*`, `int_*`, and `/strataraster`'s/`/rgbstrata`'s mean/stddev/min/max bands) when a cell (or stratum bucket) has returns but none clear `/minht`/land in that bucket (default: `0`). Never applied to `canopy_cover`, `point_density`, or `/strataraster`'s own density/count/proportion bands -- those are well-defined directly from the unfiltered return count. If both `/nodata` and `/noheight` are explicitly set to different, non-`NA` values, gridmetrics prints a warning and uses `/nodata`'s value as the GeoTIFF's registered NoData value (GDAL supports only one per file); `/noheight`'s value is still written as an ordinary pixel, just not flagged as NoData by the file header.
 
 ---
 
@@ -89,11 +109,13 @@ cloudmetrics <input.las/laz or directory> [optional ground DTM file or directory
 - `/field:<name>`: With `/shape`. Attribute field used to label each output row (`Label` column); falls back to a zero-padded feature index when omitted or missing on a feature.
 - `/nodata:<NA|number>`: Value for a cloud/feature with zero points at all (default: `NA`). Applies to every CSV column, including `TotalPoints`/`CanopyPoints`.
 - `/noheight:<NA|number>`: Value for height-dependent columns (the full `elev_*`/`int_*` statistic bundle -- see below) when points exist but none clear `/minht` (default: `0`). Never applied to `CanopyCoverPct`, which is well-defined directly from the unfiltered point count.
-- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds -- same syntax and per-bucket `stratum_N_count`/`stratum_N_proportion`/elevation-bundle columns as `gridmetrics`' `/strata` (see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md)), just as one row's worth of CSV columns instead of raster bands.
-- `/intstrata:<h1,h2,...>`: Comma-separated height thresholds bucketing points the same way as `/strata` (defaults to `/strata`'s thresholds if omitted), but reporting an `intstratum_N_*` **intensity** statistic bundle per bucket instead of elevation.
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools.
+- `/strata:<h1,h2,...>`: Comma-separated height strata thresholds -- same syntax as `gridmetrics`' `/strata`. Each bucket gets the simplified 6-metric summary as CSV columns: `stratum_N_count`, `stratum_N_proportion`, `stratum_N_mean`, `stratum_N_stddev`, `stratum_N_min`, `stratum_N_max` (see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md)).
+- `/intstrata:<h1,h2,...>`: Comma-separated height thresholds bucketing points the same way as `/strata` (defaults to `/strata`'s thresholds if omitted), but reporting an `intstratum_N_*` **intensity** summary per bucket instead of elevation.
 - `/rgb:<spec>`: Comma-separated spectral channels to compute a full statistic bundle for -- `R`, `G`, `B`, `N`, or `all` -- same semantics as `gridmetrics`' `/rgb` (see above), emitting `red_*`/`green_*`/`blue_*`/`nir_*` CSV columns.
+- `/rgbstrata`: With `/rgb` and `/strata` both set. Also reports a mean/stddev/min/max summary per selected spectral channel within each height-stratum bucket as CSV columns -- `<channel>_stratum_N_mean`/`stddev`/`min`/`max` (e.g. `red_stratum_00_mean`). Ignored (with a warning) if `/rgb` or `/strata` is missing.
 
-`cloudmetrics`' output CSV now carries the same full `elev_*`/`int_*` statistic bundle (plus `elev_profile_area`) that `gridmetrics` writes per cell -- see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md) Section 1 for the column list.
+`cloudmetrics`' output CSV now carries the same full `elev_*`/`int_*` statistic bundle (plus `elev_profile_area`) that `gridmetrics` writes per cell -- see [`METRICS_REFERENCE.md`](METRICS_REFERENCE.md) Section 1 for the column list. The `/strata`/`/intstrata`/`/rgbstrata` per-bucket columns use the simplified 6-metric (or 4-metric, for `/rgbstrata`) summary instead, not this full bundle.
 
 ---
 
@@ -112,6 +134,7 @@ canopymodel <input.las/laz or directory> [other /options]
 - `/ground:<path>`: Path to ground DEM raster file for height normalization, or a directory of DTM tiles to mosaic on the fly.
 - `/slope`: Normalize heights perpendicular to the local terrain slope plane.
 - `/smooth:<n>`: Spatial smoothing window size (e.g. `/smooth:3` for a 3x3 filter).
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools.
 
 ---
 
@@ -157,6 +180,7 @@ groundfilter <input.las/laz or directory> [other /options]
 - `/cellsize:<val>`: Output DEM cell size (default: `1.0`).
 - `/output-raster:<path>`: Output GeoTIFF ground DEM file path. Renamed from `/output-dem`.
 - `/output-points:<path>`: Output filtered ground-only LAS/LAZ file path. Renamed from `/output-las`. Not yet implemented -- declared but currently a no-op regardless of the name used.
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools. Applied before computing each cell's minimum elevation, so noise/withheld returns don't pull the ground surface up or down.
 
 ---
 
@@ -179,6 +203,7 @@ clipdata <input.las/laz or directory> [other /options]
 - `/multifile`: With `/shape`. Write one output LAS/LAZ per polygon feature instead of one merged output, into the directory given by `/output`. Each feature's writer is opened lazily on its first matched point, so polygons with no returns don't create empty files.
 - `/field:<name>`: With `/multifile`. Attribute field used to name each output file (`<field-value>.laz`); falls back to a zero-padded feature index when omitted or missing on a feature.
 - `/outside`: Keep points outside every polygon instead of inside. Single-clip mode only (no `/multifile`).
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering, applied before the spatial/height clip -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools.
 
 ---
 
@@ -193,8 +218,7 @@ filterdata <input.las/laz or directory> [other /options]
 - `/output:<path>`: Output filtered LAS/LAZ file path (default: `filtered_output.laz`).
 - `/minz:<val>`: Minimum Z elevation threshold.
 - `/maxz:<val>`: Maximum Z elevation threshold.
-- `/return:<n>`: Return number filter (e.g. `/return:1` for first returns only).
-- `/class:<ids>`: Comma-separated point classifications to keep (e.g. `/class:2,3,4,5`). New in this release, matching `gridmetrics`'s `/class`.
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools. `/return` now accepts the same lists/ranges/mnemonics as every other tool, not just a single return number.
 
 ---
 
@@ -208,6 +232,7 @@ thindata <input.las/laz or directory> [other /options]
 #### Options & Flags
 - `/output:<path>`: Output thinned LAS/LAZ file path (default: `thinned_output.laz`).
 - `/cellsize:<val>`: Grid cell size for 2D spatial thinning, in meters (default: `1.0`).
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering, applied before thinning -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools.
 
 ---
 
@@ -309,7 +334,7 @@ densitymetrics <input.las/laz or directory> [optional raster ground path] [other
 - `/strata:<h1,h2,...>`: Comma-separated height strata thresholds, same syntax as `gridmetrics`' `/strata` (default: `0.5,2.0,5.0,10.0,20.0`).
 - `/cellsize:<val>`: Output grid cell size in project units (default: `10.0`).
 - `/ground:<path>`: Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly. May also be supplied as an unflagged second positional argument.
-- `/class:<ids>`: Comma-separated point classifications to include (e.g. `/class:2,3,4,5`).
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools.
 - `/output:<name>`: Base output name (stem) for the raster/CSV files (default: derived from the input filename).
 - `/outdir:<path>`: Output directory for the raster and CSV report (default: `.`).
 - `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every stratum band and, in the CSV export, every column including `TotalReturns`. A non-empty cell's stratum bands are always real computed counts (including a legitimate `0` for an empty bucket) -- `densitymetrics` has no `/noheight` option, since nothing it computes is height-filtered the way `elev_*`/`int_*` bands are.

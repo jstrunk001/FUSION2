@@ -2,6 +2,8 @@
 
 GDAL-based raster handling & native LAS/LAZ point cloud support update to the **FUSION** suite of forest monitoring focused point cloud processing tools and **LTK** batch toolkit originally prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)).
 
+See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-examples) repository for example workflows and small sample datasets that exercise these tools end to end.
+
 ## Key Features
 
 1. **Native GDAL Raster Infrastructure & Dynamic DTM Mosaics**:

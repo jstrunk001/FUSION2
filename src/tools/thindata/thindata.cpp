@@ -4,6 +4,7 @@
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/lidar/PointFilter.h"
 
 #include <iostream>
 #include <filesystem>
@@ -15,6 +16,7 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("output", "Output thinned LAS/LAZ file path", "thinned_output.laz");
     parser.AddOption("cellsize", "Grid cell size for 2D spatial thinning (m)", "1.0");
+    fusion::lidar::PointFilter::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -55,8 +57,10 @@ int main(int argc, char* argv[]) {
     uint64_t outCount = 0;
 
     std::unordered_set<uint64_t> occupiedCells;
+    fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
 
     while (reader.ReadNextPoint(pt)) {
+        if (!pointFilter.Keep(pt)) continue;
         inCount++;
 
         int64_t cellX = static_cast<int64_t>(std::floor(pt.x / cellSize));

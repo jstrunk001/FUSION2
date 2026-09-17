@@ -2,6 +2,8 @@
 
 This reference manual documents the statistical elevation, canopy structure, return intensity, pulse density, surface, and experimental spatial metrics computed by `gridmetrics`, `cloudmetrics`, `gridsurfacestats`, `densitymetrics`, and `ExperimentalMetrics`.
 
+Every metric below is computed only from points admitted by each tool's shared `/class`/`/return` point filtering (excluding ASPRS noise classes 7/18 and withheld points by default) -- see "Point Filtering" in [`CLI_TOOLS_REFERENCE.md`](CLI_TOOLS_REFERENCE.md) for the full syntax.
+
 ---
 
 ## 0. `NA` vs. `0` -- the `/nodata` and `/noheight` sentinel convention
@@ -93,14 +95,16 @@ Computed by `fusion::metrics::ComputeSurfaceStatsGrid`/`SummarizeSurfaceStats` (
 
 ## 3b. Vertical Density Stratum Bands & Per-Stratum Statistic Bundles
 
-`densitymetrics.exe` (standalone), `gridmetrics.exe`'s `/strataraster` add-on, and `gridmetrics`'/`cloudmetrics`' `/strata` all share the same bucket-assignment rule (`fusion::metrics::AssignStratumIndex`): a point's stratum bucket is the first `/strata` threshold its (ground-normalized) elevation is still `>=`, or the bucket past the last threshold if it clears all of them.
+`densitymetrics.exe` (standalone), `gridmetrics.exe`'s `/strataraster` add-on, and `gridmetrics`'/`cloudmetrics`' `/strata`, `/intstrata`, and `/rgbstrata` all share the same bucket-assignment rule (`fusion::metrics::AssignStratumIndex`): a point's stratum bucket is the first `/strata` threshold its (ground-normalized) elevation is still `>=`, or the bucket past the last threshold if it clears all of them.
+
+Per-stratum output uses a simplified 6-field summary (`fusion::metrics::StrataStatBundle`) rather than the full ~38-field bundle in Section 1 -- a stratum bucket is one of several repeated per row/cell, so the full percentile/L-moment set would multiply out to an impractical column count.
 
 | Metric | Name | Description |
 | :--- | :--- | :--- |
 | `density_stratum_00`, `density_stratum_01`, ... | Per-Stratum Return Density | `densitymetrics`/`gridmetrics /strataraster` raster bands: that bucket's return count per unit area (`count / cellsize^2`) for the cell. A cell with zero total points gets `/nodata` across every stratum band; a non-empty cell's individual bands are real computed values (including a legitimate `0` for an empty bucket), never `/noheight`. |
-| `stratum_N_count`, `stratum_N_proportion` | Per-Stratum Count & Proportion | `gridmetrics`/`cloudmetrics` `/strata`: bucket `N`'s raw return count and its proportion of the cell/cloud's total returns. Always a real value (including `0`) once the cell/cloud has any returns at all. |
-| `stratum_N_min`, `stratum_N_mean`, ... | Per-Stratum Elevation Bundle | The full statistic bundle (same columns as `elev_*`, Section 1, without the `elev_` prefix) computed from bucket `N`'s own elevation values. A bucket with zero points in an otherwise non-empty cell/cloud gets `/noheight` for these columns. |
-| `intstratum_N_min`, `intstratum_N_mean`, ... | Per-Stratum Intensity Bundle | `cloudmetrics` `/intstrata` only: same bucket assignment as `/strata` (elevation-based, defaults to `/strata`'s thresholds), but the bundle is computed from each bucket's **intensity** values instead of elevation. |
+| `stratum_N_count`, `stratum_N_proportion`, `stratum_N_mean`, `stratum_N_stddev`, `stratum_N_min`, `stratum_N_max` | Per-Stratum Elevation Summary | `gridmetrics`/`cloudmetrics` `/strata`: bucket `N`'s raw return count and its proportion of the cell/cloud's total returns (always real values, including `0`, once the cell/cloud has any returns at all), plus the mean/stddev/min/max of bucket `N`'s own elevation values. A bucket with zero points in an otherwise non-empty cell/cloud gets `/noheight` for the mean/stddev/min/max columns only. |
+| `intstratum_N_count`, `intstratum_N_proportion`, `intstratum_N_mean`, `intstratum_N_stddev`, `intstratum_N_min`, `intstratum_N_max` | Per-Stratum Intensity Summary | `cloudmetrics` `/intstrata` only: same bucket assignment as `/strata` (elevation-based, defaults to `/strata`'s thresholds), but computed from each bucket's **intensity** values instead of elevation. |
+| `<channel>_stratum_N_mean`, `<channel>_stratum_N_stddev`, `<channel>_stratum_N_min`, `<channel>_stratum_N_max` | Per-Stratum Spectral Summary | `gridmetrics`/`cloudmetrics` `/rgbstrata` (with `/rgb` and `/strata` both set): mean/stddev/min/max of bucket `N`'s spectral values for each selected, format-carried channel (`red`, `green`, `blue`, `nir`), using the same elevation-based buckets as `/strata`. Count/proportion aren't repeated here since the elevation `stratum_N_*` columns/bands sharing the same buckets already report them; a bucket with zero points gets `/noheight` for these four columns. |
 
 ---
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(FUSIONUpdate VERSION 5.0.0 LANGUAGES C CXX)
+project(FUSIONUpdate VERSION 0.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,6 +57,7 @@ add_library(fusion_core STATIC
     src/libfusion_core/ProcessRunner.cpp
     src/libfusion_core/StageRegistry.cpp
     src/libfusion_core/PipelineState.cpp
+    src/libfusion_core/PointFilter.cpp
 )
 
 target_link_libraries(fusion_core PUBLIC GDAL::GDAL)
@@ -155,3 +156,15 @@ target_link_libraries(returndensity PRIVATE fusion_core)
 # src/tools/pipeline/pipeline.cpp)
 add_executable(pipeline src/tools/pipeline/pipeline.cpp)
 target_link_libraries(pipeline PRIVATE fusion_core)
+
+# Lightweight test harness: plain assert-style checks (no GoogleTest/Catch2
+# dependency), registered with CTest so `ctest --test-dir build` runs them
+# the normal way. See tests/cpp/test_assert.h for the CHECK() macro.
+enable_testing()
+add_executable(fusion_tests
+    tests/cpp/test_main.cpp
+    tests/cpp/test_point_filter.cpp
+    tests/cpp/test_point_cloud_stats.cpp
+)
+target_link_libraries(fusion_tests PRIVATE fusion_core)
+add_test(NAME fusion_tests COMMAND fusion_tests)

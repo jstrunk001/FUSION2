@@ -215,4 +215,37 @@ size_t AssignStratumIndex(double elevation, const std::vector<double>& threshold
     return sIdx;
 }
 
+StrataStatBundle ComputeStrataStatBundle(const std::vector<double>& values, size_t totalCloudPoints) {
+    StrataStatBundle b;
+    b.count = static_cast<int>(values.size());
+    b.proportion = (totalCloudPoints > 0) ? (static_cast<double>(b.count) / totalCloudPoints) : 0.0;
+    if (values.empty()) return b;
+
+    double sum = std::accumulate(values.begin(), values.end(), 0.0);
+    double mean = sum / values.size();
+    double sqSum = 0.0;
+    double minV = values.front();
+    double maxV = values.front();
+    for (double v : values) {
+        double diff = v - mean;
+        sqSum += diff * diff;
+        minV = std::min(minV, v);
+        maxV = std::max(maxV, v);
+    }
+
+    b.mean = static_cast<float>(mean);
+    b.stddev = static_cast<float>(std::sqrt(sqSum / values.size()));
+    b.min = static_cast<float>(minV);
+    b.max = static_cast<float>(maxV);
+    return b;
+}
+
+std::vector<std::string> StrataStatBundleColumnNames(const std::string& prefix) {
+    return {prefix + "count", prefix + "proportion", prefix + "mean", prefix + "stddev", prefix + "min", prefix + "max"};
+}
+
+std::vector<double> StrataStatBundleAsVector(const StrataStatBundle& b) {
+    return {static_cast<double>(b.count), b.proportion, b.mean, b.stddev, b.min, b.max};
+}
+
 } // namespace fusion::metrics

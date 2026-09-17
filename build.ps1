@@ -259,8 +259,8 @@ if ($Publish) {
         $release_assets += $pdf_doc_path
     }
     & gh release create $release_tag @release_assets `
-        --title "FUSION Update Tools v$bundle_version" `
-        --notes "Automated build bundle of all 13 CLI executables (gridmetrics, clipdata, groundfilter, canopymodel, catalog, canopymaxima, treeseg, cloudmetrics, topometrics, filterdata, thindata, returndensity, pipeline) and documentation manual."
+        --title "FUSION2 v$bundle_version" `
+        --notes "Automated build bundle of all $($tool_names.Count) CLI executables ($($tool_names -join ', ')) and documentation manual."
     Write-Host "Published release: $release_tag"
 }
 

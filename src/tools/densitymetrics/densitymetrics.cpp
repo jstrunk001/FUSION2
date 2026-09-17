@@ -6,6 +6,7 @@
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/lidar/PointFilter.h"
 #include "fusion/metrics/SentinelPolicy.h"
 
 #include <iostream>
@@ -16,10 +17,8 @@
 #include <filesystem>
 #include <cmath>
 #include <iomanip>
-#include <unordered_set>
 
 using fusion::cli::ParseFloatList;
-using fusion::cli::ParseIntSet;
 
 struct DensityCellAccumulator {
     int totalReturns{0};
@@ -32,7 +31,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("strata", "Comma-separated height strata thresholds (e.g. 0.5,2.0,5.0,10.0,20.0) -- same syntax as gridmetrics' /strata", "0.5,2.0,5.0,10.0,20.0");
     parser.AddOption("cellsize", "Output grid cell size in project units", "10.0");
     parser.AddOption("ground", "Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly");
-    parser.AddOption("class", "Comma-separated point classifications to include (e.g. 2,3,4,5)");
+    fusion::lidar::PointFilter::RegisterOptions(parser);
     parser.AddOption("output", "Base output name (stem) for the raster/CSV files");
     parser.AddOption("outdir", "Output directory for the raster and CSV report", ".");
     parser.AddOption("nodata", "Value for cells with zero returns at all: NA, or a number such as 0, -9999, or inf. A non-empty cell's stratum bands are always real computed counts, never this sentinel.", "NA");
@@ -54,10 +53,7 @@ int main(int argc, char* argv[]) {
     std::filesystem::create_directories(outDir);
     float noDataValue = fusion::metrics::ParseSentinelOption(parser.GetOption("nodata").value_or("NA")).value;
 
-    std::unordered_set<int> validClasses;
-    if (auto classOpt = parser.GetOption("class")) {
-        validClasses = ParseIntSet(*classOpt);
-    }
+    fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
 
     fusion::raster::GDALRaster groundRaster;
     bool hasGround = false;
@@ -104,7 +100,7 @@ int main(int argc, char* argv[]) {
     // re-derived, so the two tools can't drift out of numeric agreement.
     fusion::lidar::PointRecord pt;
     while (lasReader.ReadNextPoint(pt)) {
-        if (!validClasses.empty() && validClasses.find(pt.classification) == validClasses.end()) {
+        if (!pointFilter.Keep(pt)) {
             continue;
         }
 

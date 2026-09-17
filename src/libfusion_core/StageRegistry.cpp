@@ -61,6 +61,7 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "heightcut");
                 ForwardOption(args, forwardedOptions, "outlier");
                 ForwardOption(args, forwardedOptions, "class");
+                ForwardOption(args, forwardedOptions, "return");
                 ForwardFlag(args, forwardedOptions, "first");
                 ForwardFlag(args, forwardedOptions, "nointensity");
                 ForwardOption(args, forwardedOptions, "strata");
@@ -94,6 +95,8 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "cellsize");
                 ForwardFlag(args, forwardedOptions, "slope");
                 ForwardOption(args, forwardedOptions, "smooth");
+                ForwardOption(args, forwardedOptions, "class");
+                ForwardOption(args, forwardedOptions, "return");
                 return args;
             };
             s.resolveOutputPath = IdentityOutputPath;
@@ -117,6 +120,8 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 args.push_back(primaryInput.string());
                 args.push_back("/output-raster:" + outputPath.string());
                 ForwardOption(args, forwardedOptions, "cellsize");
+                ForwardOption(args, forwardedOptions, "class");
+                ForwardOption(args, forwardedOptions, "return");
                 return args;
             };
             s.resolveOutputPath = IdentityOutputPath;
@@ -186,6 +191,8 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 args.push_back(primaryInput.string());
                 args.push_back("/output:" + outputPath.string());
                 ForwardOption(args, forwardedOptions, "cellsize");
+                ForwardOption(args, forwardedOptions, "class");
+                ForwardOption(args, forwardedOptions, "return");
                 return args;
             };
             s.resolveOutputPath = IdentityOutputPath;

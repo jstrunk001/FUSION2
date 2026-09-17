@@ -5,6 +5,7 @@
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/lidar/PointFilter.h"
 
 #include <iostream>
 #include <vector>
@@ -17,6 +18,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("cellsize", "Output DEM cell size", "1.0");
     parser.AddOption("output-raster", "Output GeoTIFF ground DEM file path");
     parser.AddOption("output-points", "Output filtered ground LAS/LAZ file path");
+    fusion::lidar::PointFilter::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -51,8 +53,10 @@ int main(int argc, char* argv[]) {
 
     std::vector<float> minElevGrid(cols * rows, 99999.0f);
 
+    fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
     fusion::lidar::PointRecord pt;
     while (reader.ReadNextPoint(pt)) {
+        if (!pointFilter.Keep(pt)) continue;
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
 

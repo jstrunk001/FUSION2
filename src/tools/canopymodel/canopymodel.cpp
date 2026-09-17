@@ -5,6 +5,7 @@
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/lidar/PointFilter.h"
 
 #include <iostream>
 #include <vector>
@@ -19,6 +20,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output", "Output GeoTIFF CHM file path");
     parser.AddFlag("slope", "Normalize heights perpendicular to local terrain slope plane");
     parser.AddOption("smooth", "Spatial smoothing window size (e.g. 3 for 3x3 filter)", "");
+    fusion::lidar::PointFilter::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -82,8 +84,10 @@ int main(int argc, char* argv[]) {
     double groundPixelSize = hasGround ? groundRaster.GetInfo().pixelWidth : 1.0;
     if (groundPixelSize <= 0) groundPixelSize = 1.0;
 
+    fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
     fusion::lidar::PointRecord pt;
     while (reader.ReadNextPoint(pt)) {
+        if (!pointFilter.Keep(pt)) continue;
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
 
