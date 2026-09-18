@@ -15,10 +15,14 @@ out/
 dist/
 archive/
 
-# Dependencies
+# Dependencies -- deps/* (not deps/) so individual children can be
+# un-ignored below; everything under deps/ is a build script's output
+# (gdal_minimal, laszip_minimal, downloaded tarballs, etc.) except
+# sqlite3_amalgamation, which is checked-in source.
 vcpkg_installed/
 vcpkg/
-deps/
+deps/*
+!deps/sqlite3_amalgamation/
 build_minimal_gdal/
 
 # System / OS
