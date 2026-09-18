@@ -8,6 +8,7 @@
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/lidar/PointFilter.h"
 #include "fusion/metrics/SentinelPolicy.h"
+#include "sqlite3.h"
 
 #include <iostream>
 #include <fstream>
@@ -17,6 +18,8 @@
 #include <filesystem>
 #include <cmath>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
 
 using fusion::cli::ParseFloatList;
 
@@ -24,6 +27,80 @@ struct DensityCellAccumulator {
     int totalReturns{0};
     std::vector<int> strataCounts; // one bucket per /strata threshold, plus one "above the last threshold" bucket
 };
+
+// SQLite counterpart of the CSV block below -- same schema (Col,Row,X,Y,
+// TotalReturns,StrataCnt_0..N), written as real NULLs for an empty cell
+// (SQLite has no "NA" text convention) rather than the CSV's literal "NA".
+static bool WriteDensityMetricsSQLite(const std::filesystem::path& path, int cols, int rows,
+                                       double minX, double maxY, double cellSize,
+                                       const std::vector<DensityCellAccumulator>& grid,
+                                       size_t numStrataBuckets) {
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open(path.string().c_str(), &db) != SQLITE_OK) {
+        std::cerr << "Error: could not create SQLite database '" << path.string() << "'.\n";
+        if (db) sqlite3_close(db);
+        return false;
+    }
+
+    std::string createSQL = "CREATE TABLE grid (col INTEGER, row INTEGER, x REAL, y REAL, total_returns INTEGER";
+    for (size_t s = 0; s < numStrataBuckets; ++s) createSQL += ", strata_cnt_" + std::to_string(s) + " INTEGER";
+    createSQL += ");";
+
+    std::string insertSQL = "INSERT INTO grid VALUES (?,?,?,?,?";
+    for (size_t s = 0; s < numStrataBuckets; ++s) insertSQL += ",?";
+    insertSQL += ");";
+
+    char* errMsg = nullptr;
+    bool ok = sqlite3_exec(db, createSQL.c_str(), nullptr, nullptr, &errMsg) == SQLITE_OK;
+    if (!ok) { std::cerr << "Error: " << (errMsg ? errMsg : "CREATE TABLE failed") << "\n"; sqlite3_free(errMsg); }
+
+    sqlite3_stmt* stmt = nullptr;
+    if (ok) ok = sqlite3_prepare_v2(db, insertSQL.c_str(), -1, &stmt, nullptr) == SQLITE_OK;
+
+    if (ok) ok = sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr) == SQLITE_OK;
+
+    for (int r = 0; ok && r < rows; ++r) {
+        for (int c = 0; ok && c < cols; ++c) {
+            size_t idx = static_cast<size_t>(r) * cols + c;
+            const auto& cell = grid[idx];
+            bool cellEmpty = (cell.totalReturns == 0);
+            double x = minX + (c + 0.5) * cellSize;
+            double y = maxY - (r + 0.5) * cellSize;
+
+            sqlite3_reset(stmt);
+            sqlite3_bind_int(stmt, 1, c);
+            sqlite3_bind_int(stmt, 2, r);
+            sqlite3_bind_double(stmt, 3, x);
+            sqlite3_bind_double(stmt, 4, y);
+            if (cellEmpty) {
+                sqlite3_bind_null(stmt, 5);
+            } else {
+                sqlite3_bind_int(stmt, 5, cell.totalReturns);
+            }
+            for (size_t s = 0; s < numStrataBuckets; ++s) {
+                int col = static_cast<int>(6 + s);
+                if (cellEmpty) {
+                    sqlite3_bind_null(stmt, col);
+                } else {
+                    sqlite3_bind_int(stmt, col, cell.strataCounts[s]);
+                }
+            }
+            ok = sqlite3_step(stmt) == SQLITE_DONE;
+        }
+    }
+
+    if (stmt) sqlite3_finalize(stmt);
+    if (ok) {
+        ok = sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK;
+    } else {
+        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+    }
+    sqlite3_close(db);
+    return ok;
+}
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("densitymetrics", "Computes a return-density raster stack across vertical height slices (one band per /strata bucket)");
@@ -35,6 +112,8 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output", "Base output name (stem) for the raster/CSV files");
     parser.AddOption("outdir", "Output directory for the raster and CSV report", ".");
     parser.AddOption("nodata", "Value for cells with zero returns at all: NA, or a number such as 0, -9999, or inf. A non-empty cell's stratum bands are always real computed counts, never this sentinel.", "NA");
+    parser.AddOption("output-table", "Write a multicolumn table of per-cell stratum counts (path ending in .csv or .sqlite) -- omit to skip table output entirely");
+    parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -44,6 +123,13 @@ int main(int argc, char* argv[]) {
     if (posArgs.empty()) {
         std::cerr << "Error: Input LAS/LAZ point cloud file or directory is required.\n";
         parser.PrintHelp();
+        return 1;
+    }
+
+    bool noRaster = parser.HasFlag("noraster");
+    bool wantTable = parser.WasExplicit("output-table");
+    if (noRaster && !wantTable) {
+        std::cerr << "Error: /noraster requires /output-table:<path> -- a run must produce at least one output.\n";
         return 1;
     }
 
@@ -164,46 +250,63 @@ int main(int argc, char* argv[]) {
     }
 
     double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
-    std::filesystem::path outRasterPath = outDir / (stem + "_densitymetrics.tif");
-    fusion::raster::GDALRaster outRaster;
-    std::cout << "[DensityMetrics] Writing Multi-band GeoTIFF raster to: " << outRasterPath << " ("
-              << bandDefs.size() << " bands)...\n";
-    if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, noDataValue)) {
-        for (size_t b = 0; b < bandDefs.size(); ++b) {
-            outRaster.SetBandDescription(static_cast<int>(b + 1), bandDefs[b].name);
-            outRaster.WriteBandData(static_cast<int>(b + 1), bandDefs[b].data);
+
+    if (!noRaster) {
+        std::filesystem::path outRasterPath = outDir / (stem + "_densitymetrics.tif");
+        fusion::raster::GDALRaster outRaster;
+        std::cout << "[DensityMetrics] Writing Multi-band GeoTIFF raster to: " << outRasterPath << " ("
+                  << bandDefs.size() << " bands)...\n";
+        if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, noDataValue)) {
+            for (size_t b = 0; b < bandDefs.size(); ++b) {
+                outRaster.SetBandDescription(static_cast<int>(b + 1), bandDefs[b].name);
+                outRaster.WriteBandData(static_cast<int>(b + 1), bandDefs[b].data);
+            }
+            outRaster.Close();
         }
-        outRaster.Close();
     }
 
-    std::filesystem::path csvPath = outDir / (stem + "_density_metrics.csv");
-    std::ofstream csv(csvPath);
-    if (csv.is_open()) {
-        std::cout << "[DensityMetrics] Exporting CSV per-cell stratum counts to: " << csvPath << "...\n";
-        csv << "Col,Row,X,Y,TotalReturns";
-        for (size_t s = 0; s < numStrataBuckets; ++s) {
-            csv << ",StrataCnt_" << s;
-        }
-        csv << "\n";
+    if (wantTable) {
+        std::filesystem::path tablePath = *parser.GetOption("output-table");
+        std::string ext = tablePath.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) { return std::tolower(ch); });
 
-        for (int r = 0; r < rows; ++r) {
-            for (int c = 0; c < cols; ++c) {
-                size_t idx = static_cast<size_t>(r) * cols + c;
-                const auto& cell = grid[idx];
-                double x = header.minX + (c + 0.5) * cellSize;
-                double y = header.maxY - (r + 0.5) * cellSize;
-
-                bool cellEmpty = (cell.totalReturns == 0);
-                csv << c << "," << r << "," << x << "," << y << ",";
-                csv << (cellEmpty ? "NA" : std::to_string(cell.totalReturns));
+        if (ext == ".sqlite" || ext == ".db" || ext == ".sqlite3") {
+            std::cout << "[DensityMetrics] Exporting SQLite per-cell stratum counts to: " << tablePath << "...\n";
+            if (!WriteDensityMetricsSQLite(tablePath, cols, rows, header.minX, header.maxY, cellSize, grid, numStrataBuckets)) {
+                std::cerr << "Error: failed to write SQLite table '" << tablePath.string() << "'.\n";
+            }
+        } else {
+            std::ofstream csv(tablePath);
+            if (csv.is_open()) {
+                std::cout << "[DensityMetrics] Exporting CSV per-cell stratum counts to: " << tablePath << "...\n";
+                csv << "Col,Row,X,Y,TotalReturns";
                 for (size_t s = 0; s < numStrataBuckets; ++s) {
-                    csv << ",";
-                    csv << (cellEmpty ? "NA" : std::to_string(cell.strataCounts[s]));
+                    csv << ",StrataCnt_" << s;
                 }
                 csv << "\n";
+
+                for (int r = 0; r < rows; ++r) {
+                    for (int c = 0; c < cols; ++c) {
+                        size_t idx = static_cast<size_t>(r) * cols + c;
+                        const auto& cell = grid[idx];
+                        double x = header.minX + (c + 0.5) * cellSize;
+                        double y = header.maxY - (r + 0.5) * cellSize;
+
+                        bool cellEmpty = (cell.totalReturns == 0);
+                        csv << c << "," << r << "," << x << "," << y << ",";
+                        csv << (cellEmpty ? "NA" : std::to_string(cell.totalReturns));
+                        for (size_t s = 0; s < numStrataBuckets; ++s) {
+                            csv << ",";
+                            csv << (cellEmpty ? "NA" : std::to_string(cell.strataCounts[s]));
+                        }
+                        csv << "\n";
+                    }
+                }
+                csv.close();
+            } else {
+                std::cerr << "Error: could not open '" << tablePath.string() << "' for writing.\n";
             }
         }
-        csv.close();
     }
 
     std::cout << "[DensityMetrics] Density metrics processing completed successfully.\n";
