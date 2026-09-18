@@ -1,6 +1,6 @@
-# FUSION Update (GDAL & Native LAS/LAZ Point Cloud Engine)
+# FUSION2 - Forest Monitoring Point Cloud Processing Tools (GDAL & Native LAS/LAZ Point Cloud Engine)
 
-GDAL-based raster handling & native LAS/LAZ point cloud support update to the **FUSION** suite of forest monitoring focused point cloud processing tools and **LTK** batch toolkit originally prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)).
+Command line tools for processing Lidar point clouds for forest analyses. GDAL-based raster handling & native LAS/LAZ/COPC point cloud suite of forest monitoring focused point cloud processing tools. These tools are based on the stand-alone tools provided in the original FUSION package, prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)). This fork replaces the legacy binary `.dtm` raster format with native GDAL dataset (tiff only) reading and writing and native LAS/LAZ point cloud I/O, with accelerated COPC read support in `gridmetrics`'s batch mode.
 
 See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-examples) repository for example workflows and small sample datasets that exercise these tools end to end.
 
@@ -14,6 +14,7 @@ See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-exa
 2. **Direct `.las` and `.laz` Point Cloud I/O with Directory Streaming**:
    - Built-in reading and writing of standard `.las` (versions 1.0 - 1.4) and compressed `.laz` point cloud formats using static `LASzip`.
    - All point cloud tools (`cloudmetrics`, `canopymodel`, `gridmetrics`, `clipdata`, `groundfilter`, `returndensity`, `thindata`, `filterdata`, `catalog`, `pipeline`) accept individual `.las`/`.laz` files OR directories of point clouds with seamless multi-file streaming.
+   - COPC files are read-only (no COPC output format) -- since COPC is backward-compatible LAZ, any tool above can read one sequentially like a plain `.laz` file, but only `gridmetrics`'s batch/tiled mode uses the file's own COPC chunk index to seek directly to the chunks overlapping each tile instead of reading the whole file.
 3. **Individual Tree Detection & Crown Segmentation**:
    - **`canopymaxima`**: Variable Window Local Maxima (VLM) individual tree top detector on CHM rasters.
    - **`treeseg`**: Watershed region-growing individual tree crown segmentation and per-tree point clipping.
