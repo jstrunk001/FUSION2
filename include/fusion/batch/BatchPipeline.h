@@ -8,6 +8,7 @@
 #include <atomic>
 #include <mutex>
 #include <limits>
+#include <cstdint>
 #include "fusion/raster/GDALRaster.h"
 
 namespace fusion::batch {
@@ -66,6 +67,30 @@ struct PipelineJobOptions {
     // returns but none clearing the height cutoff) as single-file mode.
     float nodataValue{std::numeric_limits<float>::quiet_NaN()};
     float noheightValue{0.0f};
+
+    // Batch/tiled full-metric-parity options -- gridmetrics.exe's tile task
+    // reads these to bring its per-tile metric set up to the same column
+    // set single-file mode computes (/rgb, /exp, /surfstats, /rgbstrata).
+    std::string rgb;
+    // Resolved once, from a representative input file, before tiling starts
+    // -- every tile's spectral-channel selection (both point ingestion and
+    // table/raster column naming) uses this single value, the same way
+    // single-file mode resolves one pointFormat from its merged reader,
+    // so every tile's table schema matches and can be concatenated.
+    uint8_t pointFormat{0};
+    bool enableExp{false};
+    bool enableSurfStats{false};
+    std::string surfStatsSource{"max"};
+    double voxelSize{20.0};
+    bool enableRgbStrata{false};
+
+    // When non-empty, the tile task also writes a per-tile metrics table
+    // (path extension picked from this option's extension, filename
+    // per-tile) -- BatchPipeline concatenates the per-tile tables into one
+    // project-level table at this path after all tiles finish, the same
+    // way it already mosaics per-tile rasters into a VRT.
+    std::filesystem::path outputTablePath;
+    bool noRaster{false};
 };
 
 class BatchPipeline {
@@ -76,14 +101,18 @@ public:
 
     const std::vector<std::filesystem::path>& GetGeneratedTileRasters() const { return m_tileRasterPaths; }
     std::filesystem::path GetVRTPath() const { return m_vrtPath; }
+    const std::vector<std::filesystem::path>& GetGeneratedTileTables() const { return m_tileTablePaths; }
+    std::filesystem::path GetMergedTablePath() const { return m_mergedTablePath; }
 
 private:
     TileGridSpec m_gridSpec;
     PipelineJobOptions m_options;
     std::vector<TileInfo> m_tiles;
     std::vector<std::filesystem::path> m_tileRasterPaths;
+    std::vector<std::filesystem::path> m_tileTablePaths;
     std::mutex m_mutex;
     std::filesystem::path m_vrtPath;
+    std::filesystem::path m_mergedTablePath;
 };
 
 } // namespace fusion::batch

@@ -1,10 +1,12 @@
 #include "fusion/batch/BatchPipeline.h"
+#include "fusion/table/TableWriter.h"
 
 #include <thread>
 #include <future>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
 
 namespace fusion::batch {
 
@@ -53,8 +55,15 @@ bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& til
     std::vector<std::thread> workers;
     int workerCount = std::max(1, m_options.numThreads);
 
+    // (tileID, path) so the table concatenation below can sort into a
+    // stable, deterministic order regardless of which worker finishes a
+    // given tile first -- completion order across threads is not tile
+    // order, but a re-run's merged table must still come out identical.
+    std::vector<std::pair<int, std::filesystem::path>> tileTablesByID;
+    std::string tableExt = m_options.outputTablePath.extension().string();
+
     for (int w = 0; w < workerCount; ++w) {
-        workers.emplace_back([this, &tileTask, &currentIdx, &completedTiles, totalTiles]() {
+        workers.emplace_back([this, &tileTask, &currentIdx, &completedTiles, totalTiles, &tileTablesByID, &tableExt]() {
             while (true) {
                 size_t idx = currentIdx.fetch_add(1);
                 if (idx >= totalTiles) break;
@@ -67,6 +76,12 @@ bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& til
                     std::filesystem::path tileRaster = m_options.outputDir / (tile.name + ".tif");
                     if (std::filesystem::exists(tileRaster)) {
                         m_tileRasterPaths.push_back(tileRaster);
+                    }
+                    if (!tableExt.empty()) {
+                        std::filesystem::path tileTable = m_options.outputDir / (tile.name + tableExt);
+                        if (std::filesystem::exists(tileTable)) {
+                            tileTablesByID.emplace_back(tile.tileID, tileTable);
+                        }
                     }
                 }
 
@@ -96,6 +111,27 @@ bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& til
                 std::cout << "[BatchPipeline] Merging VRT to global GeoTIFF: " << mergedTif << "...\n";
                 fusion::raster::GDALRaster::MergeVRTToGeoTIFF(m_vrtPath, mergedTif);
             }
+        }
+    }
+
+    // Concatenate per-tile metrics tables into one project-level table, the
+    // same "parallel per-tile write, single-threaded merge" shape as the
+    // VRT mosaic above -- table rows are merged in ascending tile-ID order
+    // so re-running produces byte-identical output regardless of worker
+    // scheduling.
+    if (!tableExt.empty() && !tileTablesByID.empty()) {
+        std::sort(tileTablesByID.begin(), tileTablesByID.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        m_tileTablePaths.clear();
+        for (const auto& [tileID, path] : tileTablesByID) {
+            m_tileTablePaths.push_back(path);
+        }
+
+        m_mergedTablePath = m_options.outputTablePath;
+        std::cout << "[BatchPipeline] Merging " << m_tileTablePaths.size() << " per-tile table(s) into: "
+                  << m_mergedTablePath.string() << "...\n";
+        if (!fusion::table::ConcatenateGridTables(m_mergedTablePath, m_tileTablePaths)) {
+            std::cerr << "Error: failed to merge per-tile tables into '" << m_mergedTablePath.string() << "'.\n";
         }
     }
 
