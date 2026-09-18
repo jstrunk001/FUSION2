@@ -37,6 +37,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${LASZIP_MINIMAL_DIR}/include
     ${LASZIP_MINIMAL_DIR}/include/laszip
+    ${CMAKE_CURRENT_SOURCE_DIR}/deps/sqlite3_amalgamation
 )
 
 # Core static library
@@ -58,6 +59,8 @@ add_library(fusion_core STATIC
     src/libfusion_core/StageRegistry.cpp
     src/libfusion_core/PipelineState.cpp
     src/libfusion_core/PointFilter.cpp
+    src/libfusion_core/TableWriter.cpp
+    deps/sqlite3_amalgamation/sqlite3.c
 )
 
 target_link_libraries(fusion_core PUBLIC GDAL::GDAL)
