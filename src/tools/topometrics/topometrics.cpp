@@ -2,6 +2,7 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/table/TableWriter.h"
 
 #include <iostream>
 #include <vector>
@@ -12,6 +13,8 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("topometrics", "Computes Topographic Terrain Metrics (Slope, Aspect) from DEM GeoTIFF");
     parser.SetPositionalArgsUsage("<input_dem.tif>");
     parser.AddOption("output", "Output multi-band GeoTIFF raster path", "topo_metrics.tif");
+    parser.AddOption("output-table", "Also write a multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
+    parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -21,6 +24,13 @@ int main(int argc, char* argv[]) {
     if (posArgs.empty()) {
         std::cerr << "Error: Input DEM GeoTIFF raster file is required.\n";
         parser.PrintHelp();
+        return 1;
+    }
+
+    bool noRaster = parser.HasFlag("noraster");
+    bool wantTable = parser.WasExplicit("output-table");
+    if (noRaster && !wantTable) {
+        std::cerr << "Error: /noraster requires /output-table:<path> -- a run must produce at least one output.\n";
         return 1;
     }
 
@@ -87,16 +97,30 @@ int main(int argc, char* argv[]) {
     }
 
     double geotransform[6] = { info.minX, cellSize, 0.0, info.maxY, 0.0, -cellSize };
-    fusion::raster::GDALRaster outRaster;
-    if (outRaster.Create(outputPath, cols, rows, 2, "Float32", "GTiff", info.projectionWKT, geotransform, -9999.0)) {
-        outRaster.SetBandDescription(1, "slope_degrees");
-        outRaster.WriteBandData(1, slopeData);
 
-        outRaster.SetBandDescription(2, "aspect_degrees");
-        outRaster.WriteBandData(2, aspectData);
+    if (!noRaster) {
+        fusion::raster::GDALRaster outRaster;
+        if (outRaster.Create(outputPath, cols, rows, 2, "Float32", "GTiff", info.projectionWKT, geotransform, -9999.0)) {
+            outRaster.SetBandDescription(1, "slope_degrees");
+            outRaster.WriteBandData(1, slopeData);
 
-        outRaster.Close();
-        std::cout << "[TopoMetrics] Output multi-band terrain GeoTIFF: " << outputPath << "\n";
+            outRaster.SetBandDescription(2, "aspect_degrees");
+            outRaster.WriteBandData(2, aspectData);
+
+            outRaster.Close();
+            std::cout << "[TopoMetrics] Output multi-band terrain GeoTIFF: " << outputPath << "\n";
+        }
+    }
+
+    if (wantTable) {
+        std::vector<fusion::table::BandDef> bandDefs = {
+            {"slope_degrees", &slopeData},
+            {"aspect_degrees", &aspectData}
+        };
+        std::filesystem::path tablePath = *parser.GetOption("output-table");
+        if (fusion::table::WriteGridTable(tablePath, cols, rows, geotransform, bandDefs, -9999.0f)) {
+            std::cout << "[TopoMetrics] Successfully output table: " << tablePath.string() << "\n";
+        }
     }
 
     return 0;

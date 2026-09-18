@@ -6,6 +6,7 @@
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/lidar/PointFilter.h"
+#include "fusion/table/TableWriter.h"
 
 #include <iostream>
 #include <vector>
@@ -21,6 +22,8 @@ int main(int argc, char* argv[]) {
     parser.AddFlag("slope", "Normalize heights perpendicular to local terrain slope plane");
     parser.AddOption("smooth", "Spatial smoothing window size (e.g. 3 for 3x3 filter)", "");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    parser.AddOption("output-table", "Also write a one-band multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
+    parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -33,9 +36,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    bool noRaster = parser.HasFlag("noraster");
+    bool wantTable = parser.WasExplicit("output-table");
+    if (noRaster && !wantTable) {
+        std::cerr << "Error: /noraster requires /output-table:<path> -- a run must produce at least one output.\n";
+        return 1;
+    }
+
     auto optOutput = parser.GetOption("output");
-    if (!optOutput) {
-        std::cerr << "Error: /output file parameter is required.\n";
+    if (!noRaster && !optOutput) {
+        std::cerr << "Error: /output file parameter is required (or pass /noraster together with /output-table:<path>).\n";
         return 1;
     }
 
@@ -153,12 +163,22 @@ int main(int argc, char* argv[]) {
     }
 
     double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
-    fusion::raster::GDALRaster chmRaster;
-    if (chmRaster.Create(*optOutput, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0)) {
-        chmRaster.SetBandDescription(1, "canopy_height");
-        chmRaster.WriteBandData(1, maxElevGrid);
-        chmRaster.Close();
-        std::cout << "[CanopyModel] Successfully output CHM GeoTIFF: " << *optOutput << "\n";
+    if (!noRaster) {
+        fusion::raster::GDALRaster chmRaster;
+        if (chmRaster.Create(*optOutput, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0)) {
+            chmRaster.SetBandDescription(1, "canopy_height");
+            chmRaster.WriteBandData(1, maxElevGrid);
+            chmRaster.Close();
+            std::cout << "[CanopyModel] Successfully output CHM GeoTIFF: " << *optOutput << "\n";
+        }
+    }
+
+    if (wantTable) {
+        std::vector<fusion::table::BandDef> bandDefs = {{"canopy_height", &maxElevGrid}};
+        std::filesystem::path tablePath = *parser.GetOption("output-table");
+        if (fusion::table::WriteGridTable(tablePath, cols, rows, geotransform, bandDefs, -9999.0f)) {
+            std::cout << "[CanopyModel] Successfully output table: " << tablePath.string() << "\n";
+        }
     }
 
     return 0;

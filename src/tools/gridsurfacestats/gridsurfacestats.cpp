@@ -3,6 +3,7 @@
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/metrics/SurfaceStats.h"
+#include "fusion/table/TableWriter.h"
 
 #include <iostream>
 #include <vector>
@@ -14,6 +15,8 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input_surface.tif>");
     parser.AddOption("output", "Output multi-band GeoTIFF raster path", "surface_stats.tif");
     parser.AddOption("reference", "Second surface GeoTIFF (same cols x rows) to diff against for cut/fill volume_diff");
+    parser.AddOption("output-table", "Also write a multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
+    parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -23,6 +26,13 @@ int main(int argc, char* argv[]) {
     if (posArgs.empty()) {
         std::cerr << "Error: Input DEM/CHM GeoTIFF raster file is required.\n";
         parser.PrintHelp();
+        return 1;
+    }
+
+    bool noRaster = parser.HasFlag("noraster");
+    bool wantTable = parser.WasExplicit("output-table");
+    if (noRaster && !wantTable) {
+        std::cerr << "Error: /noraster requires /output-table:<path> -- a run must produce at least one output.\n";
         return 1;
     }
 
@@ -75,22 +85,39 @@ int main(int argc, char* argv[]) {
         elevation, cols, rows, cellSize, noData, hasReference ? &reference : nullptr);
 
     double geotransform[6] = { info.minX, cellSize, 0.0, info.maxY, 0.0, -cellSize };
-    fusion::raster::GDALRaster outRaster;
-    int numBands = hasReference ? 3 : 2;
-    if (outRaster.Create(outputPath, cols, rows, numBands, "Float32", "GTiff", info.projectionWKT, geotransform, noData)) {
-        outRaster.SetBandDescription(1, "surface_area_ratio");
-        outRaster.WriteBandData(1, grid.surfaceAreaRatio);
 
-        outRaster.SetBandDescription(2, "roughness");
-        outRaster.WriteBandData(2, grid.roughness);
+    if (!noRaster) {
+        fusion::raster::GDALRaster outRaster;
+        int numBands = hasReference ? 3 : 2;
+        if (outRaster.Create(outputPath, cols, rows, numBands, "Float32", "GTiff", info.projectionWKT, geotransform, noData)) {
+            outRaster.SetBandDescription(1, "surface_area_ratio");
+            outRaster.WriteBandData(1, grid.surfaceAreaRatio);
 
-        if (hasReference) {
-            outRaster.SetBandDescription(3, "volume_diff");
-            outRaster.WriteBandData(3, grid.volumeDiff);
+            outRaster.SetBandDescription(2, "roughness");
+            outRaster.WriteBandData(2, grid.roughness);
+
+            if (hasReference) {
+                outRaster.SetBandDescription(3, "volume_diff");
+                outRaster.WriteBandData(3, grid.volumeDiff);
+            }
+
+            outRaster.Close();
+            std::cout << "[GridSurfaceStats] Output multi-band GeoTIFF: " << outputPath << "\n";
         }
+    }
 
-        outRaster.Close();
-        std::cout << "[GridSurfaceStats] Output multi-band GeoTIFF: " << outputPath << "\n";
+    if (wantTable) {
+        std::vector<fusion::table::BandDef> bandDefs = {
+            {"surface_area_ratio", &grid.surfaceAreaRatio},
+            {"roughness", &grid.roughness}
+        };
+        if (hasReference) {
+            bandDefs.push_back({"volume_diff", &grid.volumeDiff});
+        }
+        std::filesystem::path tablePath = *parser.GetOption("output-table");
+        if (fusion::table::WriteGridTable(tablePath, cols, rows, geotransform, bandDefs, noData)) {
+            std::cout << "[GridSurfaceStats] Successfully output table: " << tablePath.string() << "\n";
+        }
     }
 
     return 0;
