@@ -14,13 +14,20 @@ struct SurfaceStatsGrid {
 // Generalizes topometrics.cpp's 3x3-neighbor Horn's-method slope calculation
 // (no Delaunay/TIN needed): surfaceAreaRatio is the direct closed-form
 // 1/cos(slope) derivation, roughness is the local elevation standard
-// deviation in the same 3x3 window. Both are only computable for interior
-// cells with a full, noData-free 3x3 neighborhood -- border cells and cells
-// missing a neighbor get noData in the output grid, matching topometrics'
-// own convention. volumeDiff needs no neighborhood -- it's a direct per-cell
-// elevation-minus-reference difference, computed for every cell where both
-// grids have valid data, when reference is supplied (same cols x rows as
-// elevation; nullptr skips volumeDiff entirely, leaving that vector empty).
+// deviation in the same 3x3 window. A value is computed for every cell that
+// itself has valid (non-noData) elevation, including the grid's own
+// border -- a missing neighbor (off the grid edge, or itself noData) is
+// treated as locally flat by substituting the cell's own value in that
+// neighbor's place, rather than leaving the whole cell noData. This
+// degrades gracefully on sparse/patchy real data (e.g. mostly bare ground
+// with scattered canopy) instead of requiring every cell to sit inside an
+// unbroken 3x3 block of valid neighbors, which real canopy data routinely
+// fails to provide anywhere in a small or sparse tile. Only a cell whose
+// own elevation is noData is left noData in the output. volumeDiff needs no
+// neighborhood -- it's a direct per-cell elevation-minus-reference
+// difference, computed for every cell where both grids have valid data,
+// when reference is supplied (same cols x rows as elevation; nullptr skips
+// volumeDiff entirely, leaving that vector empty).
 SurfaceStatsGrid ComputeSurfaceStatsGrid(
     const std::vector<float>& elevation, int cols, int rows,
     double cellSize, float noData,
@@ -35,10 +42,11 @@ struct SurfaceStatsSummary {
 };
 
 // Same per-cell math, reduced to scalars for a one-row CSV consumer
-// (cloudmetrics' /surfstats). Cells without a computed surfaceAreaRatio
-// (border cells) are assumed flat (ratio 1.0) when accumulating
-// surfaceArea3D, so the total still covers the whole valid-data extent
-// rather than silently excluding its edge.
+// (cloudmetrics' /surfstats). ComputeSurfaceStatsGrid now computes a ratio
+// for every cell with valid elevation (see its own comment), so the "assume
+// flat" fallback below is a defensive backstop rather than the common case
+// it used to be -- kept in case a caller ever hands this function a grid
+// built some other way.
 SurfaceStatsSummary SummarizeSurfaceStats(const SurfaceStatsGrid& grid,
                                            const std::vector<float>& elevation,
                                            int cols, int rows, double cellSize, float noData);

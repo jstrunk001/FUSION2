@@ -14,24 +14,38 @@ SurfaceStatsGrid ComputeSurfaceStatsGrid(
     grid.surfaceAreaRatio.assign(numCells, noData);
     grid.roughness.assign(numCells, noData);
 
-    for (int r = 1; r < rows - 1; ++r) {
-        for (int c = 1; c < cols - 1; ++c) {
+    // A missing neighbor -- off the grid entirely, or itself noData -- is
+    // treated as "locally flat": substitute the center cell's own value
+    // rather than abort the whole cell. Real canopy/ground data is commonly
+    // patchy (a stand with 80%+ bare/low-vegetation cells is a realistic
+    // input, not a corner case), and requiring a full, unbroken 3x3 block of
+    // valid cells meant surfstats came back entirely NA on exactly that kind
+    // of input -- every cell missing at least one of its 8 neighbors, with
+    // no partial/degraded answer available. This also lets every cell,
+    // including the grid's own border, get a value (there is no
+    // off-grid neighbor to be missing that isn't already handled the same
+    // way as a noData one) -- SummarizeSurfaceStats' own "assume flat" rule
+    // for a cell with no computed ratio already reflects the same
+    // philosophy, just one level up.
+    auto sampleOrCenter = [&](int rr, int cc, float center) -> float {
+        if (rr < 0 || rr >= rows || cc < 0 || cc >= cols) return center;
+        float v = elevation[static_cast<size_t>(rr) * cols + cc];
+        return (v == noData) ? center : v;
+    };
+
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
             float z5 = elevation[r * cols + c];
             if (z5 == noData) continue;
 
-            float z1 = elevation[(r - 1) * cols + (c - 1)];
-            float z2 = elevation[(r - 1) * cols + c];
-            float z3 = elevation[(r - 1) * cols + (c + 1)];
-            float z4 = elevation[r * cols + (c - 1)];
-            float z6 = elevation[r * cols + (c + 1)];
-            float z7 = elevation[(r + 1) * cols + (c - 1)];
-            float z8 = elevation[(r + 1) * cols + c];
-            float z9 = elevation[(r + 1) * cols + (c + 1)];
-
-            if (z1 == noData || z2 == noData || z3 == noData || z4 == noData ||
-                z6 == noData || z7 == noData || z8 == noData || z9 == noData) {
-                continue;
-            }
+            float z1 = sampleOrCenter(r - 1, c - 1, z5);
+            float z2 = sampleOrCenter(r - 1, c, z5);
+            float z3 = sampleOrCenter(r - 1, c + 1, z5);
+            float z4 = sampleOrCenter(r, c - 1, z5);
+            float z6 = sampleOrCenter(r, c + 1, z5);
+            float z7 = sampleOrCenter(r + 1, c - 1, z5);
+            float z8 = sampleOrCenter(r + 1, c, z5);
+            float z9 = sampleOrCenter(r + 1, c + 1, z5);
 
             // Horn's method for partial derivatives (same as topometrics.cpp)
             double dz_dx = ((z3 + 2 * z6 + z9) - (z1 + 2 * z4 + z7)) / (8.0 * cellSize);
@@ -93,7 +107,10 @@ SurfaceStatsSummary SummarizeSurfaceStats(const SurfaceStatsGrid& grid,
             ratioSum += ratio;
             ratioCount++;
         } else {
-            // Border/edge cell with no computed ratio -- assume flat.
+            // Defensive backstop only -- ComputeSurfaceStatsGrid computes a
+            // ratio for every cell with valid elevation now, border cells
+            // included, so this path shouldn't normally be reached. Assume
+            // flat if it ever is.
             surfaceArea3D += cellArea;
         }
 
