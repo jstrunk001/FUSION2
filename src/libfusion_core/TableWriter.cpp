@@ -82,6 +82,20 @@ private:
     sqlite3* m_db;
 };
 
+// These tables are disposable, regenerate-from-source exports (each write
+// starts by deleting any stale file, mirroring WriteGridTableSQLite's own
+// "start fresh" comment below) rather than a durable system of record, so
+// the crash-safety SQLite's defaults exist for is not needed here. Default
+// journaling (DELETE) and synchronous=FULL force an fsync-heavy flush on
+// every transaction commit; for a bulk, single-run export that trade only
+// slows the write down without protecting anything worth protecting.
+void ApplyBulkInsertPragmas(sqlite3* db) {
+    sqlite3_exec(db, "PRAGMA synchronous = OFF;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA journal_mode = MEMORY;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA temp_store = MEMORY;", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "PRAGMA cache_size = 100000;", nullptr, nullptr, nullptr);
+}
+
 bool ExecSQL(sqlite3* db, const std::string& sql) {
     char* errMsg = nullptr;
     int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &errMsg);
@@ -108,6 +122,7 @@ bool WriteGridTableSQLite(const std::filesystem::path& outputPath, int cols, int
     }
     SQLiteConnection conn(rawDb);
     sqlite3* db = conn.get();
+    ApplyBulkInsertPragmas(db);
 
     std::string createSQL = "CREATE TABLE " + tableName + " (col INTEGER, row INTEGER, x REAL, y REAL";
     for (const auto& band : bands) {
@@ -218,6 +233,7 @@ bool ConcatenateSQLite(const std::filesystem::path& outputPath,
     }
     SQLiteConnection conn(rawDb);
     sqlite3* db = conn.get();
+    ApplyBulkInsertPragmas(db);
 
     bool ok = true;
     for (size_t i = 1; ok && i < tileTablePaths.size(); ++i) {
@@ -334,6 +350,7 @@ bool RowTableWriter::Open(const std::filesystem::path& outputPath, const std::ve
             std::cerr << "Error: could not create SQLite database '" << outputPath.string() << "'.\n";
             return false;
         }
+        ApplyBulkInsertPragmas(m_impl->db);
 
         std::string createSQL = "CREATE TABLE grid (";
         std::string insertSQL = "INSERT INTO grid VALUES (";
