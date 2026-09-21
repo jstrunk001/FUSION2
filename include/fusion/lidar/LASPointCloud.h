@@ -53,6 +53,10 @@ struct LASHeaderInfo {
     bool isCompressed{false};
     std::string systemID;
     std::string generatingSoftware;
+    // OGC WKT coordinate system string, read from the "LASF_Projection"
+    // VLR (record ID 2112) when present -- empty if the file carries no WKT
+    // VLR (e.g. an older file using GeoTIFF keys instead).
+    std::string projectionWKT;
 };
 
 class LASReader {

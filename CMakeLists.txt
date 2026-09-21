@@ -168,6 +168,7 @@ add_executable(fusion_tests
     tests/cpp/test_main.cpp
     tests/cpp/test_point_filter.cpp
     tests/cpp/test_point_cloud_stats.cpp
+    tests/cpp/test_las_writer.cpp
 )
 target_link_libraries(fusion_tests PRIVATE fusion_core)
 add_test(NAME fusion_tests COMMAND fusion_tests)

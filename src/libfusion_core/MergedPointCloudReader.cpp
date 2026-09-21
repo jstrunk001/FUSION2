@@ -53,6 +53,7 @@ bool MergedPointCloudReader::Open(const std::vector<std::filesystem::path>& file
             merged.versionMinor = h.versionMinor;
             merged.systemID = h.systemID;
             merged.generatingSoftware = h.generatingSoftware;
+            merged.projectionWKT = h.projectionWKT;
             first = false;
         }
 

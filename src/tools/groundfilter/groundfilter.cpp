@@ -63,10 +63,42 @@ int main(int argc, char* argv[]) {
 
     std::vector<float> minElevGrid(cols * rows, 99999.0f);
 
+    // /output-points writes out every point that passes the ground filter
+    // (the same points that feed the DEM below), so a caller can inspect
+    // the ground-classified returns directly instead of only the rasterized
+    // minimum-elevation surface.
+    bool wantOutputPoints = parser.WasExplicit("output-points");
+    fusion::lidar::LASWriter pointWriter;
+    if (wantOutputPoints) {
+        fusion::lidar::LASHeaderInfo writeHeader;
+        writeHeader.pointFormat = header.pointFormat;
+        writeHeader.versionMajor = header.versionMajor;
+        writeHeader.versionMinor = header.versionMinor;
+        writeHeader.xScaleFactor = header.xScaleFactor;
+        writeHeader.yScaleFactor = header.yScaleFactor;
+        writeHeader.zScaleFactor = header.zScaleFactor;
+        writeHeader.xOffset = header.xOffset;
+        writeHeader.yOffset = header.yOffset;
+        writeHeader.zOffset = header.zOffset;
+        writeHeader.minX = header.minX;
+        writeHeader.maxX = header.maxX;
+        writeHeader.minY = header.minY;
+        writeHeader.maxY = header.maxY;
+        writeHeader.minZ = header.minZ;
+        writeHeader.maxZ = header.maxZ;
+        if (!pointWriter.Open(*parser.GetOption("output-points"), writeHeader)) {
+            std::cerr << "Error: Failed to open ground point output file: " << *parser.GetOption("output-points") << "\n";
+            return 1;
+        }
+    }
+
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
     fusion::lidar::PointRecord pt;
     while (reader.ReadNextPoint(pt)) {
         if (!pointFilter.Keep(pt)) continue;
+        if (wantOutputPoints) {
+            pointWriter.WritePoint(pt);
+        }
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
 
@@ -78,6 +110,10 @@ int main(int argc, char* argv[]) {
         }
     }
     reader.Close();
+    if (wantOutputPoints) {
+        pointWriter.Close();
+        std::cout << "[GroundFilter] Successfully output ground points: " << *parser.GetOption("output-points") << "\n";
+    }
 
     for (size_t i = 0; i < minElevGrid.size(); ++i) {
         if (minElevGrid[i] > 90000.0f) {
@@ -89,7 +125,7 @@ int main(int argc, char* argv[]) {
     if (!noRaster) {
         if (auto outDem = parser.GetOption("output-raster")) {
             fusion::raster::GDALRaster demRaster;
-            if (demRaster.Create(*outDem, cols, rows, 1, "Float32", "GTiff", "", geotransform, -9999.0)) {
+            if (demRaster.Create(*outDem, cols, rows, 1, "Float32", "GTiff", header.projectionWKT, geotransform, -9999.0)) {
                 demRaster.SetBandDescription(1, "ground_elevation");
                 demRaster.WriteBandData(1, minElevGrid);
                 demRaster.Close();

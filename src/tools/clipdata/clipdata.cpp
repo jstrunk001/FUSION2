@@ -14,6 +14,7 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <algorithm>
 
 // /multifile mode: streams the merged input once, routing each matched point
 // to a lazily-opened LASWriter for whichever polygon feature contains it.
@@ -29,62 +30,87 @@ static int RunMultiFileClip(
         const fusion::lidar::PointFilter& pointFilter) {
     std::filesystem::create_directories(outDir);
 
-    std::vector<std::unique_ptr<fusion::lidar::LASWriter>> writers(featureSet.FeatureCount());
-    std::vector<uint64_t> writtenCounts(featureSet.FeatureCount(), 0);
-
     const auto& header = reader.GetHeader();
+    const size_t featureCount = featureSet.FeatureCount();
 
-    fusion::lidar::PointRecord pt;
+    // Windows' default CRT open-file-handle limit (~512) makes one
+    // concurrently-open writer per polygon feature unsafe once a shapefile
+    // has more than a few hundred features -- LASWriter::Open starts
+    // silently failing partway through and every later polygon's points get
+    // dropped. LAZ output cannot be safely appended after Close(), so
+    // instead of an LRU cache that would need to reopen-and-append evicted
+    // writers, features are processed in bounded-size batches: each batch
+    // re-streams the whole input once, writing only to the small, bounded
+    // set of writers open for that batch. With featureCount <=
+    // kMaxOpenWriters (the common case) this is exactly one pass, identical
+    // to before; only pathologically large polygon counts pay for extra
+    // input passes, in exchange for never silently dropping a polygon.
+    constexpr size_t kMaxOpenWriters = 256;
+
     uint64_t totalWritten = 0;
-    while (reader.ReadNextPoint(pt)) {
-        if (!pointFilter.Keep(pt)) {
-            continue;
-        }
-        if (pt.x < minX || pt.x > maxX || pt.y < minY || pt.y > maxY) {
-            continue;
-        }
+    uint64_t filesWritten = 0;
 
-        double elevation = pt.z;
-        if (hasGround) {
-            if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                elevation -= *gz;
-            }
-        }
-        if (elevation < zMin || elevation > zMax) {
-            continue;
-        }
+    for (size_t batchStart = 0; batchStart < featureCount; batchStart += kMaxOpenWriters) {
+        size_t batchEnd = (std::min)(batchStart + kMaxOpenWriters, featureCount);
 
-        size_t featureIdx = featureSet.FindContaining(pt.x, pt.y);
-        if (featureIdx == fusion::geom::PolygonFeatureSet::npos) {
-            continue;
-        }
+        std::vector<std::unique_ptr<fusion::lidar::LASWriter>> writers(batchEnd - batchStart);
+        std::vector<uint64_t> writtenCounts(batchEnd - batchStart, 0);
 
-        auto& writer = writers[featureIdx];
-        if (!writer) {
-            writer = std::make_unique<fusion::lidar::LASWriter>();
-            std::filesystem::path outPath = outDir / (featureSet.Label(featureIdx) + ".laz");
-            if (!writer->Open(outPath, header)) {
-                std::cerr << "Error: Failed to create output point cloud: " << outPath << "\n";
-                writer.reset();
+        reader.Rewind();
+        fusion::lidar::PointRecord pt;
+        while (reader.ReadNextPoint(pt)) {
+            if (!pointFilter.Keep(pt)) {
                 continue;
             }
+            if (pt.x < minX || pt.x > maxX || pt.y < minY || pt.y > maxY) {
+                continue;
+            }
+
+            double elevation = pt.z;
+            if (hasGround) {
+                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
+                    elevation -= *gz;
+                }
+            }
+            if (elevation < zMin || elevation > zMax) {
+                continue;
+            }
+
+            size_t featureIdx = featureSet.FindContaining(pt.x, pt.y);
+            if (featureIdx == fusion::geom::PolygonFeatureSet::npos) {
+                continue;
+            }
+            if (featureIdx < batchStart || featureIdx >= batchEnd) {
+                continue;
+            }
+
+            size_t localIdx = featureIdx - batchStart;
+            auto& writer = writers[localIdx];
+            if (!writer) {
+                writer = std::make_unique<fusion::lidar::LASWriter>();
+                std::filesystem::path outPath = outDir / (featureSet.Label(featureIdx) + ".laz");
+                if (!writer->Open(outPath, header)) {
+                    std::cerr << "Error: Failed to create output point cloud: " << outPath << "\n";
+                    writer.reset();
+                    continue;
+                }
+            }
+
+            writer->WritePoint(pt);
+            writtenCounts[localIdx]++;
+            totalWritten++;
         }
 
-        writer->WritePoint(pt);
-        writtenCounts[featureIdx]++;
-        totalWritten++;
-    }
-
-    uint64_t filesWritten = 0;
-    for (size_t i = 0; i < writers.size(); ++i) {
-        if (writers[i]) {
-            writers[i]->Close();
-            filesWritten++;
+        for (size_t i = 0; i < writers.size(); ++i) {
+            if (writers[i]) {
+                writers[i]->Close();
+                filesWritten++;
+            }
         }
     }
 
     std::cout << "[ClipData] Wrote " << totalWritten << " point(s) across " << filesWritten
-              << " polygon output file(s) (of " << featureSet.FeatureCount() << " feature(s)) to " << outDir << "\n";
+              << " polygon output file(s) (of " << featureCount << " feature(s)) to " << outDir << "\n";
     return 0;
 }
 

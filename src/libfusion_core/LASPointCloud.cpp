@@ -1,85 +1,15 @@
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/lidar/COPCIndex.h"
 
-#include <fstream>
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <cctype>
 #include <algorithm>
 
 #include <laszip/laszip_api.h>
 
 namespace fusion::lidar {
-
-#pragma pack(push, 1)
-struct RawLASHeader {
-    char fileSignature[4];       // "LASF"
-    uint16_t fileSourceID;
-    uint16_t globalEncoding;
-    uint32_t guid1;
-    uint16_t guid2;
-    uint16_t guid3;
-    uint8_t guid4[8];
-    uint8_t versionMajor;
-    uint8_t versionMinor;
-    char systemIdentifier[32];
-    char generatingSoftware[32];
-    uint16_t fileCreationDay;
-    uint16_t fileCreationYear;
-    uint16_t headerSize;
-    uint32_t offsetToPointData;
-    uint32_t numberOfVLRs;
-    uint8_t pointDataFormat;
-    uint16_t pointDataRecordLength;
-    uint32_t numberOfPointRecords;          // Legacy point count (offset 107)
-    uint32_t numberOfPointsByReturn[5];    // Legacy return count
-    double xScaleFactor;
-    double yScaleFactor;
-    double zScaleFactor;
-    double xOffset;
-    double yOffset;
-    double zOffset;
-    double maxX;
-    double minX;
-    double maxY;
-    double minY;
-    double maxZ;
-    double minZ;
-    // LAS 1.3+ waveform offset (offset 227)
-    uint64_t startOfWaveformDataPacketRecord;
-    // LAS 1.4+ extended header fields (offset 235)
-    uint64_t startOfExtendedVLR;              // offset 235
-    uint32_t numberOfExtendedVLRs;            // offset 243
-    uint64_t extendedNumberOfPointRecords;    // offset 247 (64-bit point count)
-    uint64_t extendedNumberOfPointsByReturn[15]; // offset 255
-};
-
-struct RawPointFormat0 { // 20 bytes (Legacy Formats 0 - 5)
-    int32_t x;
-    int32_t y;
-    int32_t z;
-    uint16_t intensity;
-    uint8_t returnBits; // return_num(3), num_returns(3), scan_dir(1), edge_flight(1)
-    uint8_t classification;
-    int8_t scanAngleRank;
-    uint8_t userData;
-    uint16_t pointSourceID;
-};
-
-struct RawPointFormat6 { // 30 bytes (LAS 1.4 Formats 6 - 10)
-    int32_t x;
-    int32_t y;
-    int32_t z;
-    uint16_t intensity;
-    uint8_t returnBits; // return_num(4), num_returns(4)
-    uint8_t flags;      // synthetic(1), keypoint(1), withheld(1), overlap(1), scanner_channel(2), scan_dir(1), edge_flight(1)
-    uint8_t classification;
-    uint8_t userData;
-    int16_t scanAngle;  // 16-bit scan angle (* 0.006 deg)
-    uint16_t pointSourceID;
-    double gpsTime;     // mandatory in format 6-10
-};
-#pragma pack(pop)
 
 // Reads via the vendored LASzip DLL API (deps/laszip_minimal), which handles
 // both plain LAS and LASzip-compressed LAZ through the same laszip_open_reader
@@ -172,6 +102,20 @@ bool LASReader::Open(const std::filesystem::path& filePath) {
     m_header.isCompressed = (isCompressed != 0);
     m_header.systemID = std::string(h.system_identifier, strnlen(h.system_identifier, 32));
     m_header.generatingSoftware = std::string(h.generating_software, strnlen(h.generating_software, 32));
+
+    // Look for the OGC WKT coordinate system VLR ("LASF_Projection",
+    // record ID 2112) so callers that write derived rasters (groundfilter,
+    // returndensity) can carry the input point cloud's CRS through instead
+    // of writing an unprojected GeoTIFF.
+    m_header.projectionWKT.clear();
+    for (laszip_U32 v = 0; v < h.number_of_variable_length_records; ++v) {
+        const laszip_vlr_struct& vlr = h.vlrs[v];
+        if (vlr.record_id == 2112 && std::strncmp(vlr.user_id, "LASF_Projection", 16) == 0 && vlr.data) {
+            const char* wkt = reinterpret_cast<const char*>(vlr.data);
+            m_header.projectionWKT.assign(wkt, strnlen(wkt, vlr.record_length_after_header));
+            break;
+        }
+    }
 
     m_impl->currentPointIndex = 0;
 
@@ -306,25 +250,36 @@ void LASReader::Rewind() {
 }
 
 
+// Writes via the same vendored LASzip DLL API the reader uses. An earlier
+// version of this class hand-rolled raw LAS point structs and wrote them
+// through a plain std::ofstream; that path stamped the header's declared
+// pointDataFormat (e.g. 1, 2, 3) while always writing the 20-byte Format-0
+// record layout underneath, and never compressed .laz output. Routing every
+// write through laszip_write_point makes the on-disk record match whatever
+// point_data_format is set on the header (the per-format record length
+// below must still be set explicitly -- laszip does not infer it), and
+// compression follows naturally from the `compress` flag passed to
+// laszip_open_writer.
 class LASWriter::Impl {
 public:
-    std::ofstream file;
-    RawLASHeader rawHeader;
+    laszip_POINTER handle{nullptr};
+    laszip_point_struct* point{nullptr};
     uint64_t pointCount{0};
     bool isFormat6Plus{false};
-
-    // Running bounds of the points actually written, tracked independently
-    // of whatever bounds the caller's header (usually copied from the input
-    // file/merged reader) supplied to Open() -- patched into the header at
-    // Close() so a writer given fewer points than the whole input (e.g. one
-    // /multifile polygon output) reports its own true extent, not the input's.
-    double minX{0.0}, maxX{0.0}, minY{0.0}, maxY{0.0}, minZ{0.0}, maxZ{0.0};
-    bool haveBounds{false};
+    double xScaleFactor{0.001}, yScaleFactor{0.001}, zScaleFactor{0.001};
+    double xOffset{0.0}, yOffset{0.0}, zOffset{0.0};
 
     ~Impl() {
-        if (file.is_open()) {
-            file.close();
+        CloseHandle();
+    }
+
+    void CloseHandle() {
+        if (handle) {
+            laszip_close_writer(handle);
+            laszip_destroy(handle);
+            handle = nullptr;
         }
+        point = nullptr;
     }
 };
 
@@ -334,132 +289,156 @@ LASWriter::~LASWriter() = default;
 bool LASWriter::Open(const std::filesystem::path& filePath, const LASHeaderInfo& headerInfo) {
     Close();
 
-    m_impl->file.open(filePath.string(), std::ios::binary);
-    if (!m_impl->file.is_open()) {
+    if (laszip_create(&m_impl->handle) != 0) {
+        m_impl->handle = nullptr;
         return false;
     }
 
-    std::memset(&m_impl->rawHeader, 0, sizeof(RawLASHeader));
-    std::memcpy(m_impl->rawHeader.fileSignature, "LASF", 4);
+    laszip_header_struct hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
 
     m_impl->isFormat6Plus = (headerInfo.versionMinor >= 4 || headerInfo.pointFormat >= 6);
 
     if (m_impl->isFormat6Plus) {
-        m_impl->rawHeader.versionMajor = 1;
-        m_impl->rawHeader.versionMinor = 4;
-        m_impl->rawHeader.headerSize = sizeof(RawLASHeader); // 375 bytes
-        m_impl->rawHeader.offsetToPointData = sizeof(RawLASHeader);
-        m_impl->rawHeader.pointDataFormat = (headerInfo.pointFormat >= 6) ? headerInfo.pointFormat : 6;
-        m_impl->rawHeader.pointDataRecordLength = sizeof(RawPointFormat6); // 30 bytes
+        hdr.version_major = 1;
+        hdr.version_minor = 4;
+        hdr.header_size = 375;
+        hdr.offset_to_point_data = 375;
+        uint8_t requestedFormat = (headerInfo.pointFormat >= 6) ? headerInfo.pointFormat : 6;
+        // Formats 9 and 10 carry mandatory waveform-packet fields that
+        // PointRecord does not hold -- write the nearest format without
+        // waveform data instead of claiming a format whose required fields
+        // would always be empty.
+        if (requestedFormat == 9) requestedFormat = 6;
+        if (requestedFormat == 10) requestedFormat = 8;
+        hdr.point_data_format = requestedFormat;
+        switch (requestedFormat) {
+            case 8:  hdr.point_data_record_length = 38; break;
+            case 7:  hdr.point_data_record_length = 36; break;
+            default: hdr.point_data_record_length = 30; break; // format 6
+        }
     } else {
-        m_impl->rawHeader.versionMajor = 1;
-        m_impl->rawHeader.versionMinor = 2;
-        m_impl->rawHeader.headerSize = 227; // LAS 1.2 standard header size
-        m_impl->rawHeader.offsetToPointData = 227;
-        m_impl->rawHeader.pointDataFormat = headerInfo.pointFormat;
-        m_impl->rawHeader.pointDataRecordLength = sizeof(RawPointFormat0); // 20 bytes
+        hdr.version_major = 1;
+        hdr.version_minor = 2;
+        hdr.header_size = 227;
+        hdr.offset_to_point_data = 227;
+        uint8_t requestedFormat = headerInfo.pointFormat;
+        if (requestedFormat == 4) requestedFormat = 1;
+        if (requestedFormat == 5) requestedFormat = 3;
+        hdr.point_data_format = requestedFormat;
+        switch (requestedFormat) {
+            case 3:  hdr.point_data_record_length = 34; break;
+            case 2:  hdr.point_data_record_length = 26; break;
+            case 1:  hdr.point_data_record_length = 28; break;
+            default: hdr.point_data_record_length = 20; break; // format 0
+        }
     }
 
-    m_impl->rawHeader.xScaleFactor = (headerInfo.xScaleFactor != 0.0) ? headerInfo.xScaleFactor : 0.001;
-    m_impl->rawHeader.yScaleFactor = (headerInfo.yScaleFactor != 0.0) ? headerInfo.yScaleFactor : 0.001;
-    m_impl->rawHeader.zScaleFactor = (headerInfo.zScaleFactor != 0.0) ? headerInfo.zScaleFactor : 0.001;
-    m_impl->rawHeader.xOffset = headerInfo.xOffset;
-    m_impl->rawHeader.yOffset = headerInfo.yOffset;
-    m_impl->rawHeader.zOffset = headerInfo.zOffset;
-    m_impl->rawHeader.minX = headerInfo.minX;
-    m_impl->rawHeader.maxX = headerInfo.maxX;
-    m_impl->rawHeader.minY = headerInfo.minY;
-    m_impl->rawHeader.maxY = headerInfo.maxY;
-    m_impl->rawHeader.minZ = headerInfo.minZ;
-    m_impl->rawHeader.maxZ = headerInfo.maxZ;
+    hdr.x_scale_factor = (headerInfo.xScaleFactor != 0.0) ? headerInfo.xScaleFactor : 0.001;
+    hdr.y_scale_factor = (headerInfo.yScaleFactor != 0.0) ? headerInfo.yScaleFactor : 0.001;
+    hdr.z_scale_factor = (headerInfo.zScaleFactor != 0.0) ? headerInfo.zScaleFactor : 0.001;
+    hdr.x_offset = headerInfo.xOffset;
+    hdr.y_offset = headerInfo.yOffset;
+    hdr.z_offset = headerInfo.zOffset;
+    hdr.max_x = headerInfo.maxX;
+    hdr.min_x = headerInfo.minX;
+    hdr.max_y = headerInfo.maxY;
+    hdr.min_y = headerInfo.minY;
+    hdr.max_z = headerInfo.maxZ;
+    hdr.min_z = headerInfo.minZ;
 
-    size_t headerWriteSize = m_impl->isFormat6Plus ? sizeof(RawLASHeader) : 227;
-    m_impl->file.write(reinterpret_cast<char*>(&m_impl->rawHeader), headerWriteSize);
+    if (!headerInfo.systemID.empty()) {
+        std::strncpy(hdr.system_identifier, headerInfo.systemID.c_str(), sizeof(hdr.system_identifier) - 1);
+    }
+    std::strncpy(hdr.generating_software, "FUSION Update", sizeof(hdr.generating_software) - 1);
+
+    if (laszip_set_header(m_impl->handle, &hdr) != 0) {
+        m_impl->CloseHandle();
+        return false;
+    }
+
+    m_impl->xScaleFactor = hdr.x_scale_factor;
+    m_impl->yScaleFactor = hdr.y_scale_factor;
+    m_impl->zScaleFactor = hdr.z_scale_factor;
+    m_impl->xOffset = hdr.x_offset;
+    m_impl->yOffset = hdr.y_offset;
+    m_impl->zOffset = hdr.z_offset;
+
+    std::string ext = filePath.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    laszip_BOOL compress = (ext == ".laz") ? 1 : 0;
+
+    if (laszip_open_writer(m_impl->handle, filePath.string().c_str(), compress) != 0) {
+        laszip_CHAR* err = nullptr;
+        laszip_get_error(m_impl->handle, &err);
+        std::cerr << "LASWriter::Open failed for " << filePath << ": " << (err ? err : "unknown") << "\n";
+        m_impl->CloseHandle();
+        return false;
+    }
+
+    if (laszip_get_point_pointer(m_impl->handle, &m_impl->point) != 0) {
+        m_impl->CloseHandle();
+        return false;
+    }
+
     m_impl->pointCount = 0;
-    m_impl->haveBounds = false;
     return true;
 }
 
 bool LASWriter::WritePoint(const PointRecord& pt) {
-    if (!m_impl->file.is_open()) return false;
+    if (!m_impl->handle || !m_impl->point) return false;
 
-    if (!m_impl->haveBounds) {
-        m_impl->minX = m_impl->maxX = pt.x;
-        m_impl->minY = m_impl->maxY = pt.y;
-        m_impl->minZ = m_impl->maxZ = pt.z;
-        m_impl->haveBounds = true;
-    } else {
-        m_impl->minX = (std::min)(m_impl->minX, pt.x);
-        m_impl->maxX = (std::max)(m_impl->maxX, pt.x);
-        m_impl->minY = (std::min)(m_impl->minY, pt.y);
-        m_impl->maxY = (std::max)(m_impl->maxY, pt.y);
-        m_impl->minZ = (std::min)(m_impl->minZ, pt.z);
-        m_impl->maxZ = (std::max)(m_impl->maxZ, pt.z);
+    laszip_point_struct& p = *m_impl->point;
+    std::memset(&p, 0, sizeof(p));
+
+    p.X = static_cast<laszip_I32>(std::llround((pt.x - m_impl->xOffset) / m_impl->xScaleFactor));
+    p.Y = static_cast<laszip_I32>(std::llround((pt.y - m_impl->yOffset) / m_impl->yScaleFactor));
+    p.Z = static_cast<laszip_I32>(std::llround((pt.z - m_impl->zOffset) / m_impl->zScaleFactor));
+    p.intensity = pt.intensity;
+    p.point_source_ID = pt.pointSourceID;
+    p.gps_time = pt.gpsTime;
+    p.rgb[0] = pt.red;
+    p.rgb[1] = pt.green;
+    p.rgb[2] = pt.blue;
+    p.rgb[3] = pt.nir;
+
+    if (m_impl->isFormat6Plus) { // LAS 1.4 Point Formats 6 to 10 -- extended fields
+        p.extended_return_number = pt.returnNumber & 0x0F;
+        p.extended_number_of_returns = pt.numberOfReturns & 0x0F;
+        p.extended_classification = pt.classification;
+        p.extended_scan_angle = pt.scanAngle;
+        p.extended_scanner_channel = pt.scannerChannel & 0x03;
+        p.extended_classification_flags = (pt.synthetic ? 0x01 : 0) |
+                                           (pt.keypoint ? 0x02 : 0) |
+                                           (pt.withheld ? 0x04 : 0) |
+                                           (pt.overlap ? 0x08 : 0);
+    } else { // Legacy LAS Formats 0 to 5
+        p.return_number = pt.returnNumber & 0x07;
+        p.number_of_returns = pt.numberOfReturns & 0x07;
+        p.classification = pt.classification & 0x1F;
+        p.synthetic_flag = pt.synthetic ? 1 : 0;
+        p.keypoint_flag = pt.keypoint ? 1 : 0;
+        p.withheld_flag = pt.withheld ? 1 : 0;
+        p.scan_angle_rank = static_cast<laszip_I8>(std::clamp<int16_t>(pt.scanAngle, -128, 127));
     }
 
-    if (m_impl->isFormat6Plus) {
-        RawPointFormat6 rawPt6;
-        rawPt6.x = static_cast<int32_t>((pt.x - m_impl->rawHeader.xOffset) / m_impl->rawHeader.xScaleFactor);
-        rawPt6.y = static_cast<int32_t>((pt.y - m_impl->rawHeader.yOffset) / m_impl->rawHeader.yScaleFactor);
-        rawPt6.z = static_cast<int32_t>((pt.z - m_impl->rawHeader.zOffset) / m_impl->rawHeader.zScaleFactor);
-        rawPt6.intensity = pt.intensity;
-        rawPt6.returnBits = (pt.returnNumber & 0x0F) | ((pt.numberOfReturns & 0x0F) << 4);
-        rawPt6.flags = (pt.synthetic ? 0x01 : 0) |
-                       (pt.keypoint ? 0x02 : 0) |
-                       (pt.withheld ? 0x04 : 0) |
-                       (pt.overlap ? 0x08 : 0) |
-                       ((pt.scannerChannel & 0x03) << 4);
-        rawPt6.classification = pt.classification;
-        rawPt6.userData = 0;
-        rawPt6.scanAngle = pt.scanAngle;
-        rawPt6.pointSourceID = pt.pointSourceID;
-        rawPt6.gpsTime = pt.gpsTime;
-
-        m_impl->file.write(reinterpret_cast<char*>(&rawPt6), sizeof(RawPointFormat6));
-    } else {
-        RawPointFormat0 rawPt;
-        rawPt.x = static_cast<int32_t>((pt.x - m_impl->rawHeader.xOffset) / m_impl->rawHeader.xScaleFactor);
-        rawPt.y = static_cast<int32_t>((pt.y - m_impl->rawHeader.yOffset) / m_impl->rawHeader.yScaleFactor);
-        rawPt.z = static_cast<int32_t>((pt.z - m_impl->rawHeader.zOffset) / m_impl->rawHeader.zScaleFactor);
-        rawPt.intensity = pt.intensity;
-        rawPt.returnBits = (pt.returnNumber & 0x07) | ((pt.numberOfReturns & 0x07) << 3);
-        rawPt.classification = (pt.classification & 0x1F) |
-                               (pt.synthetic ? 0x20 : 0) |
-                               (pt.keypoint ? 0x40 : 0) |
-                               (pt.withheld ? 0x80 : 0);
-        rawPt.scanAngleRank = static_cast<int8_t>(std::clamp<int16_t>(pt.scanAngle, -128, 127));
-        rawPt.userData = 0;
-        rawPt.pointSourceID = pt.pointSourceID;
-
-        m_impl->file.write(reinterpret_cast<char*>(&rawPt), sizeof(RawPointFormat0));
+    if (laszip_write_point(m_impl->handle) != 0) {
+        return false;
     }
+    // laszip_update_inventory accumulates one point's worth of running
+    // count/bounding-box state per call -- it must be invoked once per
+    // point written (calling it only once at Close() undercounted, since it
+    // is not itself a summary/finalize step).
+    laszip_update_inventory(m_impl->handle);
 
     m_impl->pointCount++;
     return true;
 }
 
 void LASWriter::Close() {
-    if (m_impl && m_impl->file.is_open()) {
-        if (m_impl->haveBounds) {
-            m_impl->rawHeader.minX = m_impl->minX;
-            m_impl->rawHeader.maxX = m_impl->maxX;
-            m_impl->rawHeader.minY = m_impl->minY;
-            m_impl->rawHeader.maxY = m_impl->maxY;
-            m_impl->rawHeader.minZ = m_impl->minZ;
-            m_impl->rawHeader.maxZ = m_impl->maxZ;
-        }
-        if (m_impl->isFormat6Plus) {
-            m_impl->rawHeader.extendedNumberOfPointRecords = m_impl->pointCount;
-            m_impl->rawHeader.numberOfPointRecords = (m_impl->pointCount <= 0xFFFFFFFF) ? static_cast<uint32_t>(m_impl->pointCount) : 0;
-            size_t headerWriteSize = sizeof(RawLASHeader);
-            m_impl->file.seekp(0, std::ios::beg);
-            m_impl->file.write(reinterpret_cast<char*>(&m_impl->rawHeader), headerWriteSize);
-        } else {
-            m_impl->rawHeader.numberOfPointRecords = static_cast<uint32_t>(m_impl->pointCount);
-            m_impl->file.seekp(0, std::ios::beg);
-            m_impl->file.write(reinterpret_cast<char*>(&m_impl->rawHeader), 227);
-        }
-        m_impl->file.close();
+    if (m_impl && m_impl->handle) {
+        m_impl->CloseHandle();
     }
 }
 

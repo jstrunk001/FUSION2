@@ -89,10 +89,16 @@ int main(int argc, char* argv[]) {
             double slopeDeg = slopeRad * rad2deg;
             slopeData[r * cols + c] = static_cast<float>(slopeDeg);
 
+            // atan2(dz_dy, -dz_dx) gives a mathematical Cartesian angle
+            // (counter-clockwise from East), not a geographic compass
+            // azimuth (clockwise from North: 0=N, 90=E, 180=S, 270=W).
+            // Converting through fmod(450 - aspectDeg, 360) is the standard
+            // ESRI-equivalent remap between the two conventions -- see
+            // https://desktop.arcgis.com/en/arcmap/latest/tools/spatial-analyst-toolbox/how-aspect-works.htm
             double aspectRad = std::atan2(dz_dy, -dz_dx);
             double aspectDeg = aspectRad * rad2deg;
-            if (aspectDeg < 0.0) aspectDeg += 360.0;
-            aspectData[r * cols + c] = static_cast<float>(aspectDeg);
+            double compassAspectDeg = std::fmod(450.0 - aspectDeg, 360.0);
+            aspectData[r * cols + c] = static_cast<float>(compassAspectDeg);
         }
     }
 

@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
 
     if (!noRaster) {
         fusion::raster::GDALRaster outRaster;
-        if (outRaster.Create(outputPath, cols, rows, 2, "Float32", "GTiff", "", geotransform, -9999.0)) {
+        if (outRaster.Create(outputPath, cols, rows, 2, "Float32", "GTiff", header.projectionWKT, geotransform, -9999.0)) {
             outRaster.SetBandDescription(1, "point_density_pts_m2");
             outRaster.WriteBandData(1, densityData);
 

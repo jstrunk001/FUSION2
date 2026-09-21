@@ -34,43 +34,81 @@ bool COPCIndex::ReadIndex(const std::filesystem::path& filePath) {
     return true;
 }
 
-// The first 589 bytes of a COPC file are: the 375-byte LAS 1.4 header, one
-// 54-byte VLR header, then the 160-byte COPC info VLR payload -- see the
-// COPC spec (https://copc.io/). "copc" as the VLR user ID (bytes 377-380 of
-// the file) identifies it; the info VLR's own fields (center/halfsize,
-// hierarchy root offset/size) start at byte 429.
+// Per the ASPRS LAS spec, Variable Length Records can appear in any order
+// after the header -- the COPC info VLR is not guaranteed to be the first
+// one. This walks the real VLR chain (userId == "copc", recordId == 1)
+// instead of assuming a fixed 375-byte LAS 1.4 header followed immediately
+// by the COPC VLR; a file where an authoring tool wrote a projection/GeoTIFF
+// VLR first would otherwise cause a false "not COPC" fallback to an
+// unindexed sequential scan. Header Size (offset 94) and Number of VLRs
+// (offset 100) sit at the same fixed byte offsets across LAS 1.2-1.4, so
+// both can be read directly without a version-specific header struct. See
+// the COPC spec (https://copc.io/) for the VLR header layout (54 bytes) and
+// the 160-byte info VLR payload (center/halfsize, hierarchy root
+// offset/size) that follows it.
 bool COPCIndex::ReadInfo(std::ifstream& f) {
-    char buf[589];
+    char sig[4];
     f.seekg(0, std::ios::beg);
-    f.read(buf, sizeof(buf));
-    if (f.gcount() != static_cast<std::streamsize>(sizeof(buf))) {
+    f.read(sig, sizeof(sig));
+    if (f.gcount() != static_cast<std::streamsize>(sizeof(sig)) || std::strncmp(sig, "LASF", 4) != 0) {
         return false;
     }
 
-    if (std::strncmp(buf, "LASF", 4) != 0) {
-        return false;
-    }
-    if (std::strncmp(&buf[377], "copc", 4) != 0) {
-        return false;
-    }
-    // COPC info VLR record ID must be 1, version (bytes 393-394) must be 1.0
-    if (buf[393] != 1 || buf[394] != 0) {
+    uint16_t headerSize = 0;
+    uint32_t numberOfVLRs = 0;
+    f.seekg(94, std::ios::beg);
+    f.read(reinterpret_cast<char*>(&headerSize), sizeof(headerSize));
+    f.seekg(100, std::ios::beg);
+    f.read(reinterpret_cast<char*>(&numberOfVLRs), sizeof(numberOfVLRs));
+    if (!f) {
         return false;
     }
 
-    const char* c = &buf[429];
-    auto readDouble = [&c]() { double v; std::memcpy(&v, c, sizeof(v)); c += sizeof(v); return v; };
-    auto readU64 = [&c]() { uint64_t v; std::memcpy(&v, c, sizeof(v)); c += sizeof(v); return v; };
+    uint64_t vlrPos = headerSize;
+    for (uint32_t i = 0; i < numberOfVLRs; ++i) {
+        f.seekg(static_cast<std::streamoff>(vlrPos), std::ios::beg);
 
-    m_centerX = readDouble();
-    m_centerY = readDouble();
-    /* center_z */ readDouble();
-    m_halfsize = readDouble();
-    /* spacing */ readDouble();
-    m_rootHierOffset = readU64();
-    m_rootHierSize = static_cast<uint32_t>(readU64());
+        char reserved[2];
+        char userId[16];
+        uint16_t recordId = 0;
+        uint16_t recordLength = 0;
+        char description[32];
+        f.read(reserved, sizeof(reserved));
+        f.read(userId, sizeof(userId));
+        f.read(reinterpret_cast<char*>(&recordId), sizeof(recordId));
+        f.read(reinterpret_cast<char*>(&recordLength), sizeof(recordLength));
+        f.read(description, sizeof(description));
+        if (!f) {
+            return false;
+        }
 
-    return true;
+        uint64_t payloadPos = vlrPos + 54;
+        if (std::strncmp(userId, "copc", 4) == 0 && recordId == 1) {
+            char payload[160];
+            f.seekg(static_cast<std::streamoff>(payloadPos), std::ios::beg);
+            f.read(payload, sizeof(payload));
+            if (f.gcount() != static_cast<std::streamsize>(sizeof(payload))) {
+                return false;
+            }
+
+            const char* c = payload;
+            auto readDouble = [&c]() { double v; std::memcpy(&v, c, sizeof(v)); c += sizeof(v); return v; };
+            auto readU64 = [&c]() { uint64_t v; std::memcpy(&v, c, sizeof(v)); c += sizeof(v); return v; };
+
+            m_centerX = readDouble();
+            m_centerY = readDouble();
+            /* center_z */ readDouble();
+            m_halfsize = readDouble();
+            /* spacing */ readDouble();
+            m_rootHierOffset = readU64();
+            m_rootHierSize = static_cast<uint32_t>(readU64());
+            return true;
+        }
+
+        vlrPos = payloadPos + recordLength;
+    }
+
+    return false;
 }
 
 void COPCIndex::ReadPage(std::ifstream& f, uint64_t offset, int32_t entryCount) {
@@ -118,10 +156,15 @@ void COPCIndex::ComputeEntryBounds(const RawEntry& e, double& outMinX, double& o
 
     double cellWidth = (rootMaxX - rootMinX) / std::pow(2.0, e.level);
 
-    outMinX = (e.keyX == 0) ? rootMinX : rootMinX + (cellWidth * e.keyX);
-    outMaxX = (e.keyX == e.level) ? rootMaxX : rootMinX + (cellWidth * (e.keyX + 1));
-    outMinY = (e.keyY == 0) ? rootMinY : rootMinY + (cellWidth * e.keyY);
-    outMaxY = (e.keyY == e.level) ? rootMaxY : rootMinY + (cellWidth * (e.keyY + 1));
+    // Voxel keys along an axis range over [0, 2^level - 1], not [0, level] --
+    // comparing keyX/keyY directly to level (the prior condition here) only
+    // happened to be correct at level <= 1, and inflated every interior
+    // cell's bounds out to the root's max at higher levels.
+    int64_t cellsPerAxis = (int64_t(1) << e.level);
+    outMinX = rootMinX + (cellWidth * e.keyX);
+    outMaxX = (e.keyX == cellsPerAxis - 1) ? rootMaxX : rootMinX + (cellWidth * (e.keyX + 1));
+    outMinY = rootMinY + (cellWidth * e.keyY);
+    outMaxY = (e.keyY == cellsPerAxis - 1) ? rootMaxY : rootMinY + (cellWidth * (e.keyY + 1));
 }
 
 void COPCIndex::SortAndAccumulate() {
