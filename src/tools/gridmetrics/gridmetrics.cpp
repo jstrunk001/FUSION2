@@ -29,6 +29,7 @@
 #include <iomanip>
 #include <array>
 #include <limits>
+#include <memory>
 
 struct CellAccumulator {
     std::vector<float> elevations;
@@ -45,25 +46,108 @@ struct CellAccumulator {
     std::array<int, 9> returnNumberCounts{};
     int returnsAboveMean{0};
     int returnsAboveMode{0};
-    // One bucket per /strata threshold, plus one "above the last threshold"
-    // bucket (item 6: full per-stratum elevation values, not just a count --
-    // ComputePointStatBundle runs per non-empty bucket).
-    std::vector<std::vector<float>> strataElevations;
-    // One bucket per /intstrata threshold, plus one "above the last
-    // threshold" bucket -- same shape as strataElevations above, but holding
-    // each bucket's raw intensity values instead of elevation, so
-    // ComputeStrataStatBundle can report stddev/min/max, not just a mean.
-    std::vector<std::vector<float>> strataIntensities;
-    // /rgb: (item 7) -- one entry per selected, format-carried spectral
-    // channel ("red","green","blue","nir"), populated in lockstep with
-    // elevations/intensities (same elevation >= /minht gate).
-    std::map<std::string, std::vector<float>> spectralValues;
-    // /rgbstrata (new): per-channel spectral values bucketed by elevation
-    // stratum -- keyed by channel prefix (a run may select any subset),
-    // each holding one vector per /strata bucket, populated unconditionally
-    // alongside strataElevations (not gated by /minht).
-    std::map<std::string, std::vector<std::vector<float>>> strataSpectralValues;
+
+    // /strata, /intstrata, and /rgb (spectral) per-point values, grouped
+    // behind one lazily-allocated pointer instead of four always-present
+    // containers (two vector<vector<float>>, two std::map<string,...>).
+    // On a large grid (e.g. 5000x5000 = 25M cells) those four containers as
+    // direct members add roughly 140 bytes/cell -- about 3.5 GB -- even
+    // when a run uses none of /strata, /intstrata, or /rgb, and even for
+    // cells that end up with zero points. Extras is only allocated for a
+    // given cell the first time a point actually needs to record a value
+    // in one of these four containers (see CellAccumulator::EnsureExtras
+    // and the point loops in RunBatchTiledMode()/main()) -- so a run
+    // without those options never allocates it at all, and a cell with no
+    // points (or whose only points were filtered out before reaching the
+    // strata/spectral bookkeeping) never allocates it either.
+    struct Extras {
+        // One bucket per /strata threshold, plus one "above the last
+        // threshold" bucket (item 6: full per-stratum elevation values, not
+        // just a count -- ComputePointStatBundle runs per non-empty bucket).
+        std::vector<std::vector<float>> strataElevations;
+        // One bucket per /intstrata threshold, plus one "above the last
+        // threshold" bucket -- same shape as strataElevations above, but
+        // holding each bucket's raw intensity values instead of elevation,
+        // so ComputeStrataStatBundle can report stddev/min/max, not just a
+        // mean.
+        std::vector<std::vector<float>> strataIntensities;
+        // /rgb: (item 7) -- one entry per selected, format-carried spectral
+        // channel ("red","green","blue","nir"), populated in lockstep with
+        // elevations/intensities (same elevation >= /minht gate).
+        std::map<std::string, std::vector<float>> spectralValues;
+        // /rgbstrata (new): per-channel spectral values bucketed by
+        // elevation stratum -- keyed by channel prefix (a run may select
+        // any subset), each holding one vector per /strata bucket,
+        // populated unconditionally alongside strataElevations (not gated
+        // by /minht).
+        std::map<std::string, std::vector<std::vector<float>>> strataSpectralValues;
+    };
+    std::unique_ptr<Extras> extras;
+
+    // Allocates extras on first use for this cell, sizing strataElevations/
+    // strataIntensities to the requested bucket counts (0 buckets = that
+    // stratification wasn't requested, so the corresponding vector stays
+    // empty). A no-op if extras is already allocated -- numStrataBuckets/
+    // numIntStrataBuckets are constant for the whole run, so re-sizing on a
+    // later call would be redundant, never a correction.
+    Extras& EnsureExtras(size_t numStrataBuckets, size_t numIntStrataBuckets) {
+        if (!extras) {
+            extras = std::make_unique<Extras>();
+            if (numStrataBuckets > 0) {
+                extras->strataElevations.resize(numStrataBuckets);
+            }
+            if (numIntStrataBuckets > 0) {
+                extras->strataIntensities.resize(numIntStrataBuckets);
+            }
+        }
+        return *extras;
+    }
 };
+
+// Null-safe read helpers for CellAccumulator::Extras, used by every output
+// loop below. A cell whose extras was never allocated (the /strata,
+// /intstrata, or /rgb option wasn't in use, or no point that reached this
+// cell needed it -- e.g. every point landing here was outlier-filtered
+// before the strata bookkeeping step) is treated exactly like a cell whose
+// bucket vector exists but is empty: both report zero points in that
+// bucket, so output is identical either way.
+static const std::vector<float>& StrataElevationBucket(const CellAccumulator& cell, size_t bucketIdx) {
+    static const std::vector<float> kEmpty;
+    if (!cell.extras || bucketIdx >= cell.extras->strataElevations.size()) {
+        return kEmpty;
+    }
+    return cell.extras->strataElevations[bucketIdx];
+}
+
+static const std::vector<float>& StrataIntensityBucket(const CellAccumulator& cell, size_t bucketIdx) {
+    static const std::vector<float> kEmpty;
+    if (!cell.extras || bucketIdx >= cell.extras->strataIntensities.size()) {
+        return kEmpty;
+    }
+    return cell.extras->strataIntensities[bucketIdx];
+}
+
+// Returns nullptr if this cell has no recorded spectral values for the
+// given channel prefix at all (extras never allocated, or this channel
+// never appeared for this cell).
+static const std::vector<float>* SpectralValueBucket(const CellAccumulator& cell, const std::string& prefix) {
+    if (!cell.extras) {
+        return nullptr;
+    }
+    auto it = cell.extras->spectralValues.find(prefix);
+    return (it != cell.extras->spectralValues.end()) ? &it->second : nullptr;
+}
+
+// Returns nullptr under the same conditions as SpectralValueBucket(), but
+// for the per-stratum-bucket spectral values (one vector<float> per
+// stratum bucket, for the given channel prefix).
+static const std::vector<std::vector<float>>* StrataSpectralValueBuckets(const CellAccumulator& cell, const std::string& prefix) {
+    if (!cell.extras) {
+        return nullptr;
+    }
+    auto it = cell.extras->strataSpectralValues.find(prefix);
+    return (it != cell.extras->strataSpectralValues.end()) ? &it->second : nullptr;
+}
 
 using fusion::cli::ParseFloatList;
 
@@ -195,20 +279,19 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
         std::vector<double> strata = !opts.strata.empty() ? ParseFloatList(opts.strata) : std::vector<double>{};
         std::vector<double> intStrata = !opts.intStrata.empty() ? ParseFloatList(opts.intStrata) : strata;
 
+        // Bucket counts for this run, constant across every cell -- used
+        // both to lazily size CellAccumulator::Extras the first time a
+        // given cell needs it (point loop below) and as the fixed output
+        // column/band count downstream (a cell's own extras may be null
+        // even when these are nonzero, e.g. a cell with zero points).
+        size_t numStrataBuckets = strata.empty() ? 0 : strata.size() + 1;
+        size_t numIntStrataBuckets = (intStrata.empty() || opts.noIntensity) ? 0 : intStrata.size() + 1;
+
+        // No per-cell strata/intstrata/spectral containers are allocated
+        // here -- CellAccumulator::extras is left null for all cols*rows
+        // cells and only allocated lazily, per cell, in the point loop
+        // below (see the big comment on CellAccumulator::Extras).
         std::vector<CellAccumulator> grid(cols * rows);
-        for (auto& cell : grid) {
-            if (!strata.empty()) {
-                cell.strataElevations.resize(strata.size() + 1);
-                if (opts.enableRgbStrata) {
-                    for (const auto& spec : spectralSelection.channels) {
-                        cell.strataSpectralValues[spec.prefix].resize(strata.size() + 1);
-                    }
-                }
-            }
-            if (!intStrata.empty() && !opts.noIntensity) {
-                cell.strataIntensities.resize(intStrata.size() + 1);
-            }
-        }
 
         // Process matching LAS/LAZ files in input directory
         if (std::filesystem::exists(opts.inputPointCloudDir)) {
@@ -275,17 +358,23 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
                             if (!strata.empty()) {
                                 size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
-                                cell.strataElevations[sIdx].push_back(static_cast<float>(elevation));
+                                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                                extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
                                 if (opts.enableRgbStrata) {
                                     for (const auto& spec : spectralSelection.channels) {
-                                        cell.strataSpectralValues[spec.prefix][sIdx].push_back(static_cast<float>(pt.*(spec.field)));
+                                        auto& perPrefix = extras.strataSpectralValues[spec.prefix];
+                                        if (perPrefix.size() != numStrataBuckets) {
+                                            perPrefix.resize(numStrataBuckets);
+                                        }
+                                        perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
                                     }
                                 }
                             }
 
                             if (!opts.noIntensity && !intStrata.empty()) {
                                 size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
-                                cell.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
+                                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                                extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
                             }
 
                             if (elevation >= opts.minHt) {
@@ -294,8 +383,11 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                                 if (!opts.noIntensity) {
                                     cell.intensities.push_back(static_cast<float>(pt.intensity));
                                 }
-                                for (const auto& spec : spectralSelection.channels) {
-                                    cell.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                                if (!spectralSelection.channels.empty()) {
+                                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                                    for (const auto& spec : spectralSelection.channels) {
+                                        extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                                    }
                                 }
                             }
                         }
@@ -396,10 +488,10 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
             }
 
             for (const auto& prefix : spectralChannelPrefixes) {
-                auto valIt = cell.spectralValues.find(prefix);
+                const std::vector<float>* vals_ptr = SpectralValueBucket(cell, prefix);
                 auto& bands = spectralBands[prefix];
-                if (valIt != cell.spectralValues.end() && !valIt->second.empty()) {
-                    fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(valIt->second);
+                if (vals_ptr && !vals_ptr->empty()) {
+                    fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(*vals_ptr);
                     std::vector<float> vals = fusion::metrics::PointStatBundleAsVector(bundle);
                     for (size_t k = 0; k < vals.size(); ++k) bands[k][i] = vals[k];
                 } else {
@@ -565,12 +657,13 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                             for (const auto& band : spectralBands[prefix]) row.push_back(band[idx]);
                         }
 
-                        for (size_t s = 0; s < cell.strataElevations.size(); ++s) {
+                        for (size_t s = 0; s < numStrataBuckets; ++s) {
                             if (cellEmpty) {
                                 for (int k = 0; k < 6; ++k) row.push_back(kNA);
                                 continue;
                             }
-                            std::vector<double> bucketElevD(cell.strataElevations[s].begin(), cell.strataElevations[s].end());
+                            const std::vector<float>& bucketElev = StrataElevationBucket(cell, s);
+                            std::vector<double> bucketElevD(bucketElev.begin(), bucketElev.end());
                             fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketElevD, cell.totalReturns);
                             row.push_back(b.count);
                             row.push_back(b.proportion);
@@ -580,12 +673,12 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                                 for (int k = 0; k < 4; ++k) row.push_back(opts.noheightValue);
                             }
                         }
-                        for (size_t s = 0; s < cell.strataIntensities.size(); ++s) {
+                        for (size_t s = 0; s < numIntStrataBuckets; ++s) {
                             if (cellEmpty) {
                                 for (int k = 0; k < 6; ++k) row.push_back(kNA);
                                 continue;
                             }
-                            std::vector<double> bucketIntD(cell.strataIntensities[s].begin(), cell.strataIntensities[s].end());
+                            std::vector<double> bucketIntD(StrataIntensityBucket(cell, s).begin(), StrataIntensityBucket(cell, s).end());
                             fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketIntD, cell.totalReturns);
                             row.push_back(b.count);
                             row.push_back(b.proportion);
@@ -597,15 +690,15 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                         }
                         if (opts.enableRgbStrata) {
                             for (const auto& prefix : spectralChannelPrefixes) {
-                                auto valIt = cell.strataSpectralValues.find(prefix);
+                                const std::vector<std::vector<float>>* perPrefix = StrataSpectralValueBuckets(cell, prefix);
                                 for (size_t s = 0; s < strata.size() + 1; ++s) {
                                     if (cellEmpty) {
                                         for (int k = 0; k < 4; ++k) row.push_back(kNA);
                                         continue;
                                     }
                                     std::vector<double> bucketValsD;
-                                    if (valIt != cell.strataSpectralValues.end()) {
-                                        const auto& bucketVals = valIt->second[s];
+                                    if (perPrefix && s < perPrefix->size()) {
+                                        const auto& bucketVals = (*perPrefix)[s];
                                         bucketValsD.assign(bucketVals.begin(), bucketVals.end());
                                     }
                                     fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketValsD, bucketValsD.size());
@@ -796,20 +889,17 @@ int main(int argc, char* argv[]) {
     if (cols <= 0) cols = 1;
     if (rows <= 0) rows = 1;
 
+    // Bucket counts for this run, constant across every cell -- used both to
+    // lazily size CellAccumulator::Extras the first time a given cell needs
+    // it (point loop below) and as the fixed output column/band count
+    // downstream (a cell's own extras may be null even when these are
+    // nonzero, e.g. a cell with zero points). No per-cell strata/intstrata/
+    // spectral containers are pre-allocated here -- see the big comment on
+    // CellAccumulator::Extras for why.
+    size_t numStrataBuckets = strata.empty() ? 0 : strata.size() + 1;
+    size_t numIntStrataBuckets = (intStrata.empty() || noIntensity) ? 0 : intStrata.size() + 1;
+
     std::vector<CellAccumulator> grid(cols * rows);
-    for (auto& cell : grid) {
-        if (!strata.empty()) {
-            cell.strataElevations.resize(strata.size() + 1);
-            if (enableRgbStrata) {
-                for (const auto& spec : spectralSelection.channels) {
-                    cell.strataSpectralValues[spec.prefix].resize(strata.size() + 1);
-                }
-            }
-        }
-        if (!intStrata.empty() && !noIntensity) {
-            cell.strataIntensities.resize(intStrata.size() + 1);
-        }
-    }
 
     fusion::lidar::PointRecord pt;
     while (lasReader.ReadNextPoint(pt)) {
@@ -858,17 +948,23 @@ int main(int argc, char* argv[]) {
 
             if (!strata.empty()) {
                 size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
-                cell.strataElevations[sIdx].push_back(static_cast<float>(elevation));
+                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
                 if (enableRgbStrata) {
                     for (const auto& spec : spectralSelection.channels) {
-                        cell.strataSpectralValues[spec.prefix][sIdx].push_back(static_cast<float>(pt.*(spec.field)));
+                        auto& perPrefix = extras.strataSpectralValues[spec.prefix];
+                        if (perPrefix.size() != numStrataBuckets) {
+                            perPrefix.resize(numStrataBuckets);
+                        }
+                        perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
                     }
                 }
             }
 
             if (!noIntensity && !intStrata.empty()) {
                 size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
-                cell.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
+                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
             }
 
             if (elevation >= minHt) {
@@ -877,8 +973,11 @@ int main(int argc, char* argv[]) {
                 if (!noIntensity) {
                     cell.intensities.push_back(static_cast<float>(pt.intensity));
                 }
-                for (const auto& spec : spectralSelection.channels) {
-                    cell.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                if (!spectralSelection.channels.empty()) {
+                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                    for (const auto& spec : spectralSelection.channels) {
+                        extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                    }
                 }
             }
         }
@@ -1024,10 +1123,10 @@ int main(int argc, char* argv[]) {
         }
 
         for (const auto& prefix : spectralChannelPrefixes) {
-            auto valIt = cell.spectralValues.find(prefix);
+            const std::vector<float>* vals_ptr = SpectralValueBucket(cell, prefix);
             auto& bands = spectralBands[prefix];
-            if (valIt != cell.spectralValues.end() && !valIt->second.empty()) {
-                fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(valIt->second);
+            if (vals_ptr && !vals_ptr->empty()) {
+                fusion::metrics::PointStatBundle bundle = fusion::metrics::ComputePointStatBundle(*vals_ptr);
                 std::vector<float> vals = fusion::metrics::PointStatBundleAsVector(bundle);
                 for (size_t k = 0; k < vals.size(); ++k) {
                     bands[k][i] = vals[k];
@@ -1092,7 +1191,6 @@ int main(int argc, char* argv[]) {
     std::vector<std::vector<float>> strataDensityBands, strataCountBands, strataPropBands;
     std::vector<std::vector<std::vector<float>>> strataStatBands; // [bucket][statIdx(mean,stddev,min,max)][cell]
     if (enableStrataRaster && !strata.empty()) {
-        size_t numStrataBuckets = strata.size() + 1;
         double cellArea = cellSize * cellSize;
         strataDensityBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
         strataCountBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
@@ -1104,7 +1202,8 @@ int main(int argc, char* argv[]) {
             const auto& cell = grid[i];
             if (cell.totalReturns == 0) continue;
             for (size_t s = 0; s < numStrataBuckets; ++s) {
-                std::vector<double> bucketElevD(cell.strataElevations[s].begin(), cell.strataElevations[s].end());
+                const std::vector<float>& bucketElev = StrataElevationBucket(cell, s);
+                std::vector<double> bucketElevD(bucketElev.begin(), bucketElev.end());
                 fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketElevD, cell.totalReturns);
                 strataDensityBands[s][i] = static_cast<float>(b.count / cellArea);
                 strataCountBands[s][i] = static_cast<float>(b.count);
@@ -1132,7 +1231,6 @@ int main(int argc, char* argv[]) {
     std::vector<std::vector<float>> intStrataCountBands, intStrataPropBands;
     std::vector<std::vector<std::vector<float>>> intStrataStatBands; // [bucket][statIdx(mean,stddev,min,max)][cell]
     if (enableStrataRaster && !intStrata.empty() && !noIntensity) {
-        size_t numIntStrataBuckets = intStrata.size() + 1;
         intStrataCountBands.assign(numIntStrataBuckets, std::vector<float>(numCells, ND));
         intStrataPropBands.assign(numIntStrataBuckets, std::vector<float>(numCells, ND));
         intStrataStatBands.assign(numIntStrataBuckets, std::vector<std::vector<float>>(
@@ -1142,7 +1240,8 @@ int main(int argc, char* argv[]) {
             const auto& cell = grid[i];
             if (cell.totalReturns == 0) continue;
             for (size_t s = 0; s < numIntStrataBuckets; ++s) {
-                std::vector<double> bucketIntD(cell.strataIntensities[s].begin(), cell.strataIntensities[s].end());
+                const std::vector<float>& bucketInt = StrataIntensityBucket(cell, s);
+                std::vector<double> bucketIntD(bucketInt.begin(), bucketInt.end());
                 fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketIntD, cell.totalReturns);
                 intStrataCountBands[s][i] = static_cast<float>(b.count);
                 intStrataPropBands[s][i] = static_cast<float>(b.proportion);
@@ -1177,11 +1276,11 @@ int main(int argc, char* argv[]) {
             if (cell.totalReturns == 0) continue;
             for (const auto& prefix : rgbStrataChannelPrefixes) {
                 auto& bands = rgbStrataBands[prefix];
-                auto valIt = cell.strataSpectralValues.find(prefix);
+                const std::vector<std::vector<float>>* perPrefix = StrataSpectralValueBuckets(cell, prefix);
                 for (size_t s = 0; s < numStrataBuckets; ++s) {
                     std::vector<double> bucketValsD;
-                    if (valIt != cell.strataSpectralValues.end()) {
-                        const auto& bucketVals = valIt->second[s];
+                    if (perPrefix && s < perPrefix->size()) {
+                        const auto& bucketVals = (*perPrefix)[s];
                         bucketValsD.assign(bucketVals.begin(), bucketVals.end());
                     }
                     fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketValsD, bucketValsD.size());
@@ -1352,10 +1451,9 @@ int main(int argc, char* argv[]) {
             for (const auto& name : spectralColNames[prefix]) columnNames.push_back(name);
         }
         // strata.size() + 1 buckets, not strata.size() -- AssignStratumIndex
-        // (and the resize a few hundred lines above) reserve one extra
-        // "above the last threshold" bucket, and the per-row loop below
-        // already writes cell.strataElevations.size() buckets' worth of
-        // columns; a header short by one bucket here would silently
+        // reserves one extra "above the last threshold" bucket, and the
+        // per-row loop below already writes numStrataBuckets buckets' worth
+        // of columns; a header short by one bucket here would silently
         // misalign every downstream column.
         for (size_t s = 0; !strata.empty() && s < strata.size() + 1; ++s) {
             std::ostringstream stratumLabel;
@@ -1426,12 +1524,13 @@ int main(int argc, char* argv[]) {
                         for (const auto& band : spectralBands[prefix]) row.push_back(band[idx]);
                     }
 
-                    for (size_t s = 0; s < cell.strataElevations.size(); ++s) {
+                    for (size_t s = 0; s < numStrataBuckets; ++s) {
                         if (cellEmpty) {
                             for (int k = 0; k < 6; ++k) row.push_back(kNA);
                             continue;
                         }
-                        std::vector<double> bucketElevD(cell.strataElevations[s].begin(), cell.strataElevations[s].end());
+                        const std::vector<float>& bucketElev = StrataElevationBucket(cell, s);
+                        std::vector<double> bucketElevD(bucketElev.begin(), bucketElev.end());
                         fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketElevD, cell.totalReturns);
                         row.push_back(b.count);
                         row.push_back(b.proportion);
@@ -1444,12 +1543,13 @@ int main(int argc, char* argv[]) {
                             for (int k = 0; k < 4; ++k) row.push_back(sentinel.noheight.value);
                         }
                     }
-                    for (size_t s = 0; s < cell.strataIntensities.size(); ++s) {
+                    for (size_t s = 0; s < numIntStrataBuckets; ++s) {
                         if (cellEmpty) {
                             for (int k = 0; k < 6; ++k) row.push_back(kNA);
                             continue;
                         }
-                        std::vector<double> bucketIntD(cell.strataIntensities[s].begin(), cell.strataIntensities[s].end());
+                        const std::vector<float>& bucketInt = StrataIntensityBucket(cell, s);
+                        std::vector<double> bucketIntD(bucketInt.begin(), bucketInt.end());
                         fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketIntD, cell.totalReturns);
                         row.push_back(b.count);
                         row.push_back(b.proportion);
@@ -1464,15 +1564,15 @@ int main(int argc, char* argv[]) {
                     }
                     if (enableRgbStrata) {
                         for (const auto& prefix : rgbStrataChannelPrefixes) {
-                            auto valIt = cell.strataSpectralValues.find(prefix);
+                            const std::vector<std::vector<float>>* perPrefix = StrataSpectralValueBuckets(cell, prefix);
                             for (size_t s = 0; s < strata.size() + 1; ++s) {
                                 if (cellEmpty) {
                                     for (int k = 0; k < 4; ++k) row.push_back(kNA);
                                     continue;
                                 }
                                 std::vector<double> bucketValsD;
-                                if (valIt != cell.strataSpectralValues.end()) {
-                                    const auto& bucketVals = valIt->second[s];
+                                if (perPrefix && s < perPrefix->size()) {
+                                    const auto& bucketVals = (*perPrefix)[s];
                                     bucketValsD.assign(bucketVals.begin(), bucketVals.end());
                                 }
                                 fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketValsD, bucketValsD.size());

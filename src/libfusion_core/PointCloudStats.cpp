@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 #include <numeric>
 
 namespace fusion::metrics {
@@ -21,22 +20,41 @@ float GetPercentile(const std::vector<float>& sortedData, double p) {
     return static_cast<float>((1.0 - frac) * sortedData[i0] + frac * sortedData[i1]);
 }
 
-float GetMode(const std::vector<float>& data, float binSize = 0.5f) {
-    if (data.empty()) return -9999.0f;
-    std::map<int, int> bins;
-    for (float v : data) {
+// sortedData must already be sorted ascending -- the only caller,
+// ComputePointStatBundle(), sorts its working copy before calling this.
+// Binning a value into floor(v / binSize) is a non-decreasing function of v
+// for binSize > 0, so on sorted input every bin's members land in one
+// contiguous run; that lets this walk the data once, tracking only the
+// current run's bin/count and the best run seen so far, instead of
+// building a std::map<int,int> (one heap-allocated tree node per distinct
+// bin) to group values by bin before picking the largest group. Tie-
+// breaking (more than one bin sharing the maximum count) matches the
+// original map-based version: the first (lowest-elevation) bin to reach
+// the maximum count wins, since bins are visited in ascending order and a
+// later bin only overtakes the current best on a strictly greater count.
+float GetMode(const std::vector<float>& sortedData, float binSize = 0.5f) {
+    if (sortedData.empty()) return -9999.0f;
+
+    int bestBin = static_cast<int>(std::floor(sortedData[0] / binSize));
+    int bestCount = 0;
+    int currentBin = bestBin;
+    int currentCount = 0;
+
+    for (float v : sortedData) {
         int b = static_cast<int>(std::floor(v / binSize));
-        bins[b]++;
-    }
-    int maxCount = 0;
-    int maxBin = 0;
-    for (const auto& [b, cnt] : bins) {
-        if (cnt > maxCount) {
-            maxCount = cnt;
-            maxBin = b;
+        if (b == currentBin) {
+            currentCount++;
+        } else {
+            currentBin = b;
+            currentCount = 1;
+        }
+        if (currentCount > bestCount) {
+            bestCount = currentCount;
+            bestBin = currentBin;
         }
     }
-    return (maxBin + 0.5f) * binSize;
+
+    return (bestBin + 0.5f) * binSize;
 }
 
 // Sample L-moments (Hosking 1990) from already-sorted data, via the

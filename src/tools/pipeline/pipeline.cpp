@@ -155,14 +155,19 @@ static bool MaterializeTileClip(const std::filesystem::path& inputPath,
             haveHeader = true;
         }
 
-        fusion::lidar::PointRecord pt;
-        while (reader.ReadNextPoint(pt)) {
-            if (pt.x < tile.bufferedMinX || pt.x > tile.bufferedMaxX ||
-                pt.y < tile.bufferedMinY || pt.y > tile.bufferedMaxY) {
-                continue;
-            }
+        // ReadPointsInExtent() seeks straight to the COPC chunks overlapping
+        // this tile's buffered extent when the file carries a COPC index
+        // (reader.IsCOPC()), instead of decoding every point in the file and
+        // filtering in memory -- with N output tiles, a plain sequential
+        // read-and-filter loop here re-reads and re-decodes the whole point
+        // cloud N times. A non-COPC file falls back to that same sequential
+        // read-and-filter internally, so this call is correct either way and
+        // the min/max bounds passed here are the identical buffered-tile
+        // extent the old manual filter compared each point against.
+        reader.ReadPointsInExtent(tile.bufferedMinX, tile.bufferedMinY, tile.bufferedMaxX, tile.bufferedMaxY,
+                                   [&](const fusion::lidar::PointRecord& pt) {
             matched.push_back(pt);
-        }
+        });
         reader.Close();
     }
 

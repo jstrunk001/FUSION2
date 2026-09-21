@@ -60,6 +60,15 @@ public:
     std::vector<double> invGeotransform{0.0, 1.0, 0.0, 0.0, 0.0, -1.0};
     bool isReadWrite{false};
 
+    // In-memory per-band pixel cache, indexed 0-based (bandCache[b-1] holds
+    // band b). Sized to numBands whenever a dataset is opened/created, but
+    // each entry starts empty and is only populated (via one bulk RasterIO
+    // read) the first time that band is actually sampled -- see
+    // GDALRaster::EnsureBandCached(). This avoids one RasterIO call per
+    // point per corner during height normalization, which otherwise turns
+    // into tens of millions of single-cell GDAL calls on a large tile.
+    std::vector<std::vector<float>> bandCache;
+
     ~Impl() {
         if (dataset) {
             GDALClose(dataset);
@@ -113,6 +122,7 @@ bool GDALRaster::Open(const std::filesystem::path& filePath, bool readWrite) {
     m_info.width = m_impl->dataset->GetRasterXSize();
     m_info.height = m_impl->dataset->GetRasterYSize();
     m_info.numBands = m_impl->dataset->GetRasterCount();
+    m_impl->bandCache.assign(static_cast<size_t>(std::max(m_info.numBands, 0)), std::vector<float>());
 
     double gt[6] = {0, 1, 0, 0, 0, -1};
     if (m_impl->dataset->GetGeoTransform(gt) == CE_None) {
@@ -187,6 +197,7 @@ bool GDALRaster::Create(const std::filesystem::path& filePath,
     m_info.numBands = numBands;
     m_info.noDataValue = noDataValue;
     m_info.hasNoData = true;
+    m_impl->bandCache.assign(static_cast<size_t>(std::max(numBands, 0)), std::vector<float>());
 
     if (geotransform) {
         m_impl->dataset->SetGeoTransform(const_cast<double*>(geotransform));
@@ -218,9 +229,12 @@ bool GDALRaster::Create(const std::filesystem::path& filePath,
 }
 
 void GDALRaster::Close() {
-    if (m_impl && m_impl->dataset) {
-        GDALClose(m_impl->dataset);
-        m_impl->dataset = nullptr;
+    if (m_impl) {
+        if (m_impl->dataset) {
+            GDALClose(m_impl->dataset);
+            m_impl->dataset = nullptr;
+        }
+        m_impl->bandCache.clear();
     }
     m_info = {};
 }
@@ -265,16 +279,46 @@ std::optional<double> GDALRaster::GetElevation(double x, double y, SampleMethod 
     return (1.0 - ty) * top + ty * bottom;
 }
 
+bool GDALRaster::EnsureBandCached(int bandIdx) const {
+    if (!IsOpen() || bandIdx < 1 || bandIdx > m_info.numBands) {
+        return false;
+    }
+
+    std::vector<float>& cache = m_impl->bandCache[static_cast<size_t>(bandIdx - 1)];
+    if (!cache.empty()) {
+        return true;
+    }
+
+    size_t cellCount = static_cast<size_t>(m_info.width) * static_cast<size_t>(m_info.height);
+    if (cellCount == 0) {
+        return false;
+    }
+
+    // Single bulk read for the whole band, instead of one RasterIO call per
+    // cell -- populated lazily on first access to this band so a band that's
+    // never sampled (e.g. an unused auxiliary band) never pays this cost.
+    cache.resize(cellCount);
+    GDALRasterBand* band = m_impl->dataset->GetRasterBand(bandIdx);
+    if (band->RasterIO(GF_Read, 0, 0, m_info.width, m_info.height, cache.data(),
+                        m_info.width, m_info.height, GDT_Float32, 0, 0) != CE_None) {
+        cache.clear();
+        return false;
+    }
+
+    return true;
+}
+
 std::optional<double> GDALRaster::GetCellValue(int col, int row, int bandIdx) const {
     if (!IsOpen() || col < 0 || col >= m_info.width || row < 0 || row >= m_info.height) {
         return std::nullopt;
     }
 
-    GDALRasterBand* band = m_impl->dataset->GetRasterBand(bandIdx);
-    float val = 0.0f;
-    if (band->RasterIO(GF_Read, col, row, 1, 1, &val, 1, 1, GDT_Float32, 0, 0) != CE_None) {
+    if (!EnsureBandCached(bandIdx)) {
         return std::nullopt;
     }
+
+    size_t idx = static_cast<size_t>(row) * static_cast<size_t>(m_info.width) + static_cast<size_t>(col);
+    float val = m_impl->bandCache[static_cast<size_t>(bandIdx - 1)][idx];
 
     if (m_info.hasNoData && std::abs(val - m_info.noDataValue) < 1e-5) {
         return std::nullopt;
@@ -290,7 +334,22 @@ bool GDALRaster::SetCellValue(int col, int row, double value, int bandIdx) {
 
     GDALRasterBand* band = m_impl->dataset->GetRasterBand(bandIdx);
     float val = static_cast<float>(value);
-    return (band->RasterIO(GF_Write, col, row, 1, 1, &val, 1, 1, GDT_Float32, 0, 0) == CE_None);
+    if (band->RasterIO(GF_Write, col, row, 1, 1, &val, 1, 1, GDT_Float32, 0, 0) != CE_None) {
+        return false;
+    }
+
+    // Keep an already-populated cache for this band consistent with the
+    // write, so a subsequent GetCellValue()/GetElevation() on this same
+    // instance doesn't read back a stale cached value.
+    if (bandIdx >= 1 && bandIdx <= m_info.numBands) {
+        std::vector<float>& cache = m_impl->bandCache[static_cast<size_t>(bandIdx - 1)];
+        if (!cache.empty()) {
+            size_t idx = static_cast<size_t>(row) * static_cast<size_t>(m_info.width) + static_cast<size_t>(col);
+            cache[idx] = val;
+        }
+    }
+
+    return true;
 }
 
 bool GDALRaster::SetBandDescription(int bandIdx, const std::string& description) {
@@ -329,7 +388,15 @@ bool GDALRaster::WriteBandData(int bandIdx, const std::vector<float>& buffer) {
     }
 
     GDALRasterBand* band = m_impl->dataset->GetRasterBand(bandIdx);
-    return (band->RasterIO(GF_Write, 0, 0, m_info.width, m_info.height, const_cast<float*>(buffer.data()), m_info.width, m_info.height, GDT_Float32, 0, 0) == CE_None);
+    bool ok = (band->RasterIO(GF_Write, 0, 0, m_info.width, m_info.height, const_cast<float*>(buffer.data()), m_info.width, m_info.height, GDT_Float32, 0, 0) == CE_None);
+
+    // Invalidate any existing cache for this band rather than trying to keep
+    // it in sync -- it will be lazily repopulated from disk on next read.
+    if (ok) {
+        m_impl->bandCache[static_cast<size_t>(bandIdx - 1)].clear();
+    }
+
+    return ok;
 }
 
 bool GDALRaster::BuildVRT(const std::filesystem::path& outputVRTPath,

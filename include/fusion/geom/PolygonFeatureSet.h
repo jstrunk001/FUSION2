@@ -47,6 +47,25 @@ private:
     };
 
     std::vector<Feature> m_features;
+
+    // Uniform 2D grid spatial index over the feature bounding boxes, built
+    // once in LoadShapefile() so FindContaining() only ray-casts against
+    // the handful of features registered in the query point's cell instead
+    // of scanning every feature. A feature is registered in every cell its
+    // bbox overlaps (a bbox can span multiple cells), so a cell's candidate
+    // list is a superset of the features whose bbox could contain a point
+    // that lands there -- FindContaining() still applies the exact bbox and
+    // ray-casting tests before accepting a match.
+    void BuildSpatialIndex();
+
+    double m_gridMinX{0.0}, m_gridMinY{0.0}, m_gridMaxX{0.0}, m_gridMaxY{0.0};
+    int m_gridCols{0};
+    int m_gridRows{0};
+    double m_cellWidth{1.0};
+    double m_cellHeight{1.0};
+    // Flattened gridCols x gridRows grid of candidate feature indices;
+    // cell (col,row) lives at m_grid[row * m_gridCols + col].
+    std::vector<std::vector<size_t>> m_grid;
 };
 
 } // namespace fusion::geom

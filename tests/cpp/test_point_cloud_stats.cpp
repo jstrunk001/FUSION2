@@ -46,3 +46,41 @@ int RunStrataStatBundleTests() {
     std::cout << (failures == 0 ? "  all passed\n" : ("  " + std::to_string(failures) + " failure(s)\n"));
     return failures;
 }
+
+// GetMode() itself is a file-local helper inside PointCloudStats.cpp, not
+// exposed through the header, so these exercise it indirectly through
+// ComputePointStatBundle()'s .mode field -- the only place it's called from.
+// GetMode was rewritten from a std::map<int,int>-based grouping pass to a
+// single allocation-free scan over already-sorted data (see the comment
+// above GetMode() in PointCloudStats.cpp); these checks pin down that the
+// rewrite still finds the correct most-populous bin, and still breaks a
+// count tie the same way the map-based version did -- in favor of the
+// lower (map key order is ascending, so it's the earliest-visited) bin.
+int RunGetModeTests() {
+    int failures = 0;
+    std::cout << "GetMode (via ComputePointStatBundle) tests\n";
+
+    // {1,1,1,2,3}: with the default 0.5 bin width, all three 1.0 values
+    // land in one bin (3 points) while 2.0 and 3.0 each land alone in their
+    // own bin (1 point each) -- the 1.0 bin is the clear, single winner.
+    {
+        fusion::metrics::PointStatBundle b = fusion::metrics::ComputePointStatBundle({1.0f, 1.0f, 1.0f, 2.0f, 3.0f});
+        CHECK(std::abs(b.mode - 1.25f) < 1e-4, failures);
+    }
+
+    // {0,0,1,1}: two bins (one for the pair of 0.0's, one for the pair of
+    // 1.0's) tie at 2 points each -- the lower bin (0.0's) must win.
+    {
+        fusion::metrics::PointStatBundle b = fusion::metrics::ComputePointStatBundle({0.0f, 0.0f, 1.0f, 1.0f});
+        CHECK(std::abs(b.mode - 0.25f) < 1e-4, failures);
+    }
+
+    // A single value is trivially its own (only) bin's mode.
+    {
+        fusion::metrics::PointStatBundle b = fusion::metrics::ComputePointStatBundle({5.0f});
+        CHECK(std::abs(b.mode - 5.25f) < 1e-4, failures);
+    }
+
+    std::cout << (failures == 0 ? "  all passed\n" : ("  " + std::to_string(failures) + " failure(s)\n"));
+    return failures;
+}

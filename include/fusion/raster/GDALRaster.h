@@ -102,6 +102,13 @@ private:
     class Impl;
     std::unique_ptr<Impl> m_impl;
     RasterInfo m_info;
+
+    // Populates the in-memory cache for the given (1-based) band, via a
+    // single bulk RasterIO read, if it isn't already cached. GetCellValue
+    // uses this instead of issuing one RasterIO call per cell -- see
+    // GDALRaster.cpp for why. Returns false if the band can't be cached
+    // (raster not open, band out of range, or the read itself fails).
+    bool EnsureBandCached(int bandIdx) const;
 };
 
 } // namespace fusion::raster
