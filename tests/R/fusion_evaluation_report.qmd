@@ -267,48 +267,45 @@ p_cover_map <- ggplot(df_cover, aes(x = x, y = y, fill = Value)) +
 
 # 5. Speed Benchmarks: `fusion_update` vs Old Code
 
-```{r speed-tests, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=5}
+The numbers and charts below are real `proc.time()` wall-clock measurements from actually running the compiled legacy FUSION v4.40 executables and the compiled `fusion_update` executables against real point-cloud tiles -- produced by [`speed_benchmark.qmd`](speed_benchmark.qmd) in this same folder, not estimated or hand-entered. That script should be re-run after any change to performance-sensitive code (raster sampling, point-cloud I/O, per-cell metric accumulation, smoothing/filtering passes), and this chunk always displays its latest saved results rather than re-running those tool timings itself, since the large-tile `GridMetrics` run alone takes several minutes.
+
+```{r speed-tests, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9}
 # ==============================================================================
-# Chunk 5: Execution Speed Tests & Memory Footprint Comparison
+# Chunk 5: Real Execution Speed Benchmark (from speed_benchmark.qmd)
 # ==============================================================================
 
-# Benchmark Execution Matrix Across Dataset Size Tiers
-benchmark_data <- data.frame(
-  Dataset_Size = factor(c("100K Points", "1M Points", "5M Points", "20M Points"), 
-                        levels = c("100K Points", "1M Points", "5M Points", "20M Points")),
-  Old_Code_sec = c(3.4, 38.2, 215.6, 940.0),
-  Update_Code_sec = c(0.8, 7.1, 36.4, 142.5),
-  Old_RAM_MB = c(120, 480, 2100, 8400),
-  Update_RAM_MB = c(45, 180, 620, 1950)
-)
+#1. load the latest saved results from speed_benchmark.qmd -- file_version()
+#   with increment=FALSE (the default) resolves to the current/latest
+#   version without minting a new one
+path_speed_summary = RForInvt::file_version(file.path("output", "speed_benchmark_summary.csv"))
+path_speed_raw = RForInvt::file_version(file.path("output", "speed_benchmark_raw_timings.csv"))
 
-benchmark_data <- benchmark_data %>%
-  mutate(
-    Speedup_Factor = round(Old_Code_sec / Update_Code_sec, 2),
-    Throughput_Old_kpts_sec = round(c(100, 1000, 5000, 20000) / Old_Code_sec, 1),
-    Throughput_Update_kpts_sec = round(c(100, 1000, 5000, 20000) / Update_Code_sec, 1)
-  )
+#2. display them if present, or say plainly that they don't exist yet --
+#   never substitute placeholder numbers for a missing measurement
+if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
+  cat("No speed benchmark results found yet. Run speed_benchmark.qmd in this folder to generate them.")
+} else {
+  dt_speed_summary = data.table::fread(path_speed_summary)
+  dt_speed_raw = data.table::fread(path_speed_raw)
+  print(dt_speed_summary)
 
-# Plot 1: Execution Time Benchmark
-p_time <- ggplot(benchmark_data, aes(x = Dataset_Size)) +
-  geom_bar(aes(y = Old_Code_sec, fill = "Legacy FUSION v4.40 (Single-thread)"), stat = "identity", position = position_nudge(x = -0.2), width = 0.38) +
-  geom_bar(aes(y = Update_Code_sec, fill = "fusion_update (Multi-thread + GDAL)"), stat = "identity", position = position_nudge(x = 0.2), width = 0.38) +
-  geom_text(aes(y = Update_Code_sec + 25, label = paste0(Speedup_Factor, "x Speedup")), position = position_nudge(x = 0.2), fontface = "bold", color = PALETTE_TEAL) +
-  scale_fill_manual(values = c("Legacy FUSION v4.40 (Single-thread)" = "#94A3B8", "fusion_update (Multi-thread + GDAL)" = PALETTE_BLUE)) +
-  labs(title = "Processing Time Comparison (Seconds)", y = "Wall-clock Time (sec)", x = "Point Cloud Volume", fill = "Codebase Version") +
-  theme(legend.position = "bottom")
+  p_time = ggplot(dt_speed_raw[benchmark == "canopymodel_smooth"], aes(x = factor(window), y = elapsed_sec, fill = tool)) +
+    geom_boxplot(position = position_dodge(width = 0.75), width = 0.6) +
+    facet_wrap(~tier, scales = "free_y") +
+    scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = PALETTE_BLUE)) +
+    labs(title = "CanopyModel /smooth: measured elapsed time", y = "Elapsed seconds (measured)", x = "Smoothing window (W)", fill = "Codebase Version") +
+    theme(legend.position = "bottom")
 
-# Plot 2: Memory Footprint (RAM) Comparison
-p_ram <- ggplot(benchmark_data, aes(x = Dataset_Size)) +
-  geom_line(aes(y = Old_RAM_MB, group = 1, color = "Legacy FUSION v4.40"), linewidth = 1.2, linetype = "dashed") +
-  geom_line(aes(y = Update_RAM_MB, group = 1, color = "fusion_update"), linewidth = 1.2) +
-  geom_point(aes(y = Old_RAM_MB, color = "Legacy FUSION v4.40"), size = 3) +
-  geom_point(aes(y = Update_RAM_MB, color = "fusion_update"), size = 3) +
-  scale_color_manual(values = c("Legacy FUSION v4.40" = PALETTE_CRIMSON, "fusion_update" = PALETTE_GREEN)) +
-  labs(title = "Peak RAM Consumption (MB)", y = "Memory Usage (MB)", x = "Point Cloud Volume", color = "Codebase Version") +
-  theme(legend.position = "bottom")
+  p_gridmetrics = ggplot(dt_speed_raw[benchmark == "gridmetrics_ground_normalized"], aes(x = tier, y = elapsed_sec, fill = tool)) +
+    geom_boxplot(position = position_dodge(width = 0.75), width = 0.6) +
+    scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = PALETTE_BLUE)) +
+    labs(title = "GridMetrics (ground-normalized) measured elapsed time",
+         subtitle = "Not apples-to-apples in scope -- see speed_benchmark.qmd Step 5",
+         y = "Elapsed seconds (measured)", x = "Dataset tier", fill = "Codebase Version") +
+    theme(legend.position = "bottom")
 
-p_time + p_ram
+  p_time / p_gridmetrics
+}
 ```
 
 ---

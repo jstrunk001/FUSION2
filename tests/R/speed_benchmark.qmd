@@ -1,0 +1,408 @@
+---
+title: "fusion_update Speed Benchmark vs. Legacy FUSION v4.40"
+subtitle: "Real, measured wall-clock timings -- no simulated or hand-entered numbers"
+author: "Jacob Strunk"
+date: today
+format:
+  html:
+    output-dir: ../../docs
+    theme: cosmo
+    embed-resources: true
+    toc: true
+    toc-depth: 2
+    df-print: paged
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+<!--
+This script runs the actual compiled fusion_update tools and the actual
+legacy FUSION v4.40 install side by side on the same real point-cloud files,
+timing each run with proc.time() and reporting whatever numbers come out --
+favorable or not. It replaces the "Section 5: Speed Benchmarks" table that
+previously lived in fusion_evaluation_report.qmd, which was a hand-entered
+data.frame of illustrative numbers, not a measurement of anything.
+
+Run this after any update that touches performance-sensitive code (raster
+sampling, point-cloud I/O, per-cell metric accumulation, smoothing/filtering
+passes) -- not just after a change explicitly described as a speed fix.
+Re-running it is the only way to know whether a change actually moved wall-
+clock time, in either direction.
+
+Chunk-by-chunk pipeline script per r_coding_standards.md Section 19 -- "#
+Step N" headings in execution order, no Data/Methods/Results skeleton. It
+still renders to HTML (like its sibling fusion_evaluation_report.qmd in this
+same folder) because the point of this particular script is a shareable
+benchmark report, not just a diagnostic run.
+-->
+
+## Reset working directory to the project root
+
+<!--
+This script lives in tests/R/, but Quarto executes chunks with the working
+directory set to the .qmd's own folder by default. Project-relative paths
+below are written relative to fusion_update/ (two levels up).
+-->
+
+```{r}
+#| label: root-dir
+
+knitr::opts_knit$set(root.dir = file.path("..", ".."))
+```
+
+## Load libraries and set default options
+
+```{r}
+#| label: setup
+
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(terra)
+library(RForInvt)
+
+knitr::opts_chunk$set(
+    echo      = TRUE
+  , warning   = FALSE
+  , message   = FALSE
+  )
+
+options(scipen = 10E6)
+
+dir_scratch = file.path("scratch", "benchmark")
+dir_out     = file.path("tests", "R", "output")
+dir.create(dir_scratch, recursive = TRUE, showWarnings = FALSE)
+dir.create(dir_out, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Define helper functions used throughout this benchmark
+
+```{r}
+#| label: helper-functions
+
+# Runs one executable with the given arguments and returns its real
+# wall-clock elapsed time (seconds) via proc.time(), along with its exit
+# status and captured output. Does not parse or trust any "elapsed time"
+# string the tool itself prints -- those differ in rounding/precision
+# between the legacy and updated tools and are not what gets reported here.
+fn_run_timed = function(exe_path, args, label){
+  #1. resolve the executable to an absolute path -- system2() cannot resolve
+  #   a relative "../.." executable path reliably on Windows
+  exe_path_abs = normalizePath(exe_path, mustWork = TRUE)
+
+  #2. run the command, capturing wall-clock time around it
+  time_start = proc.time()
+  out = tryCatch(
+      system2(exe_path_abs, args = args, stdout = TRUE, stderr = TRUE)
+    , error = function(e) paste("ERROR:", conditionMessage(e))
+    )
+  time_elapsed = (proc.time() - time_start)[["elapsed"]]
+  status = attr(out, "status")
+  if(is.null(status)) status = 0L
+
+  #3. report failures immediately rather than silently recording a bogus time
+  if(status != 0){
+    warning(paste0(label, " exited with status ", status, ":\n", paste(tail(out, 10), collapse = "\n")))
+    }
+
+  list(elapsed_sec = time_elapsed, status = status, output = out)
+  }
+
+# Builds a ground-surface DEM for one input point cloud in both formats
+# needed for a fair comparison: a GeoTIFF (fusion_update's /ground: input)
+# and a PLANS DTM (legacy FUSION's positional groundfile argument), derived
+# from the *same* underlying ground raster so both tools normalize against
+# equivalent terrain rather than two independently-filtered surfaces. This
+# setup step is not timed -- only the CanopyModel/GridMetrics runs below are.
+fn_build_matched_ground = function(las_path, tag, cellsize, dir_scratch, dir_bin_new, dir_legacy){
+  #1. run fusion_update's groundfilter to get a GeoTIFF ground DEM
+  path_tif = file.path(dir_scratch, paste0("ground_", tag, ".tif"))
+  system2(
+      normalizePath(file.path(dir_bin_new, "groundfilter.exe"), mustWork = TRUE)
+    , args = c(shQuote(las_path), paste0("/output-raster:", path_tif), paste0("/cellsize:", cellsize))
+    , stdout = FALSE
+    )
+  if(!file.exists(path_tif)) stop("fn_build_matched_ground: groundfilter.exe did not produce ", path_tif)
+
+  #2. export that raster as an ESRI ASCII grid (drop the CRS -- legacy
+  #   ASCII2DTM takes coordinate system as separate numeric switches, not a
+  #   CRS string, and a CRS tag on the ASCII header is not something it reads)
+  path_asc = file.path(dir_scratch, paste0("ground_", tag, ".asc"))
+  r = terra::rast(path_tif)
+  terra::crs(r) = ""
+  terra::writeRaster(r, path_asc, filetype = "AAIGrid", overwrite = TRUE)
+
+  #3. convert the ASCII grid into a legacy PLANS DTM -- xyunits/zunits = M
+  #   (meters), coordsys/zone/horizdatum/vertdatum = 0 (unknown); none of
+  #   these affect the raster values used for height normalization, only
+  #   metadata legacy FUSION stores in the DTM header
+  path_dtm = file.path(dir_scratch, paste0("ground_", tag, ".dtm"))
+  system2(
+      normalizePath(file.path(dir_legacy, "ASCII2DTM64.exe"), mustWork = TRUE)
+    , args = c(path_dtm, "M", "M", "0", "0", "0", "0", path_asc)
+    , stdout = FALSE
+    )
+  if(!file.exists(path_dtm)) stop("fn_build_matched_ground: ASCII2DTM64.exe did not produce ", path_dtm)
+
+  list(tif = path_tif, dtm = path_dtm)
+  }
+```
+
+# Benchmark overview
+
+This script times the real, compiled `fusion_update` tools against the real, installed legacy FUSION v4.40 tools (`C:/FUSION`), on two real point-cloud tiles already shipped with this project -- a ~52K-point 200ft clip and a ~6.1M-point full tile. It reports actual `proc.time()` wall-clock seconds, not estimates.
+
+Two comparisons, chosen because both sides expose the same CLI switch with the same meaning, so the two tools are asked to do genuinely comparable work:
+
+1. **CanopyModel smoothing** (Step 4) -- isolates the exact fix in commit `794f79f` (O(W^2) brute-force smoothing replaced by a separable O(W) filter). No ground surface needed; both tools take the same `/smooth:<W>` switch.
+2. **GridMetrics, ground-normalized** (Step 5) -- exercises the raster-sampling cache fix from commit `6afb2cc` by supplying both tools a ground surface derived from the same source raster. This comparison is **not** apples-to-apples in scope, and Step 5 says why before showing any numbers.
+
+```{r}
+#| label: locate-tools-and-data
+
+#1. legacy FUSION v4.40 install and this repo's freshly-built tools --
+#   deliberately build/, not bin/: bin/ is a periodically-refreshed
+#   packaged snapshot (stale by design between packaging runs) and would
+#   silently benchmark old code after a same-day fix
+dir_legacy = "C:/FUSION"
+dir_bin_new = "build"
+if(!dir.exists(dir_legacy)) stop("Legacy FUSION install not found at ", dir_legacy)
+if(!file.exists(file.path(dir_bin_new, "canopymodel.exe"))) stop(
+  "fusion_update build not found under ", dir_bin_new, " -- build the project first.")
+
+#2. the two real sample point clouds used as the small/large size tiers
+path_las_small = file.path("..", "FUSION2-examples", "data", "raw", "lidar",
+                            "USGS_LPC_WA_6County_A24_w2049750n409500_clip200ft_las12.las")
+path_las_large = file.path("test_output", "USGS_uncompressed.las")
+if(!file.exists(path_las_small)) stop("Small sample LAS not found: ", path_las_small)
+if(!file.exists(path_las_large)) stop("Large sample LAS not found: ", path_las_large)
+
+dt_datasets = data.table(
+    tier     = c("small_52K_pts", "large_6.1M_pts")
+  , path_las = c(path_las_small, path_las_large)
+  )
+print(dt_datasets)
+```
+
+# Step 3: Build matched ground surfaces for each dataset tier
+
+Both CanopyModel's `/slope`/`/ground` path and GridMetrics require a ground surface to normalize heights; Step 5 needs one in each tool's native format. Building these is real I/O work but is not part of what's being timed below, so it happens once per tier here, ahead of any timed run.
+
+```{r}
+#| label: step-3-build-ground
+
+cellsize_ground = 2.0
+list_ground = list()
+for(tier_i in dt_datasets$tier){
+  las_path_i = dt_datasets[tier == tier_i, path_las]
+  list_ground[[tier_i]] = fn_build_matched_ground(
+      las_path    = las_path_i
+    , tag         = tier_i
+    , cellsize    = cellsize_ground
+    , dir_scratch = dir_scratch
+    , dir_bin_new = dir_bin_new
+    , dir_legacy  = dir_legacy
+    )
+  cat("Built matched ground surfaces for", tier_i, "\n")
+  }
+```
+
+# Step 4: Time CanopyModel's smoothing filter -- legacy vs. fusion_update
+
+`/smooth:<W>` runs the exact code path rewritten in commit `794f79f`. Window size is swept from 5 to 21 because the separable filter's advantage over the brute-force O(W^2) scan grows with W -- a real speedup should widen, not just appear, as W increases. Repetition count is lower for the large tile purely because each of its runs already takes tens of seconds; the small tile gets more repetitions since each one is cheap.
+
+```{r}
+#| label: step-4-canopymodel-benchmark
+
+window_sizes = c(5, 11, 21)
+reps_by_tier = c(small_52K_pts = 3L, large_6.1M_pts = 2L)
+
+list_cm_rows = list()
+row_i = 0L
+for(tier_i in dt_datasets$tier){
+  las_path_i = dt_datasets[tier == tier_i, path_las]
+  n_reps_i = reps_by_tier[[tier_i]]
+
+  for(window_i in window_sizes){
+    for(rep_i in seq_len(n_reps_i)){
+
+      #1. time the legacy CanopyModel run (positional args, disposable .dtm output)
+      path_legacy_out = file.path(dir_scratch, paste0("legacy_chm_", tier_i, "_w", window_i, "_r", rep_i, ".dtm"))
+      res_legacy = fn_run_timed(
+          file.path(dir_legacy, "canopymodel64.exe")
+        , args = c(paste0("/smooth:", window_i), path_legacy_out, "1.0", "M", "M", "0", "0", "0", "0", shQuote(las_path_i))
+        , label = paste("legacy canopymodel", tier_i, "W =", window_i)
+        )
+
+      #2. time the fusion_update CanopyModel run (same window, same input)
+      path_new_out = file.path(dir_scratch, paste0("new_chm_", tier_i, "_w", window_i, "_r", rep_i, ".tif"))
+      res_new = fn_run_timed(
+          file.path(dir_bin_new, "canopymodel.exe")
+        , args = c(shQuote(las_path_i), paste0("/smooth:", window_i), "/cellsize:1.0", paste0("/output:", path_new_out))
+        , label = paste("fusion_update canopymodel", tier_i, "W =", window_i)
+        )
+
+      row_i = row_i + 1L
+      list_cm_rows[[row_i]] = data.table(
+          benchmark = "canopymodel_smooth", tier = tier_i, window = window_i, rep = rep_i
+        , tool = c("legacy", "fusion_update"), elapsed_sec = c(res_legacy$elapsed_sec, res_new$elapsed_sec)
+        )
+      }
+    }
+  }
+dt_canopymodel_times = rbindlist(list_cm_rows)
+
+#3. verify every timed run produced a finite, positive elapsed time before
+#   anything downstream summarizes it
+if(any(!is.finite(dt_canopymodel_times$elapsed_sec) | dt_canopymodel_times$elapsed_sec <= 0)){
+  stop("step-4: one or more CanopyModel timed runs produced a non-positive or non-finite elapsed time.")
+  }
+print(dt_canopymodel_times[, .(mean_sec = mean(elapsed_sec)), by = .(tier, window, tool)])
+```
+
+# Step 5: Time GridMetrics -- legacy vs. fusion_update, ground-normalized
+
+This comparison is not apples-to-apples in scope, and that difference is stated here before any number is shown. `fusion_update`'s `gridmetrics` writes a comprehensive multiband raster (elevation, strata, spectral, and experimental metric bands together) by default; the legacy run below uses `/nointensity` to skip only intensity metrics, which still leaves legacy computing a much smaller default bundle than the new tool's default multiband output. Any elapsed-time difference measured here reflects that scope difference at least as much as the raster-sampling cache fix from commit `6afb2cc` -- it measures what a user actually experiences running each tool's default configuration today, not an isolated per-point throughput comparison the way Step 4 is. The large tile's `fusion_update` run alone takes several minutes, so it gets a single repetition; the small tile still gets three.
+
+```{r}
+#| label: step-5-gridmetrics-benchmark
+
+heightbreak = 5.0
+cellsize_metrics = 2.0
+reps_by_tier_gm = c(small_52K_pts = 3L, large_6.1M_pts = 1L)
+
+list_gm_rows = list()
+row_i = 0L
+for(tier_i in dt_datasets$tier){
+  las_path_i = dt_datasets[tier == tier_i, path_las]
+  ground_i = list_ground[[tier_i]]
+  n_reps_i = reps_by_tier_gm[[tier_i]]
+
+  for(rep_i in seq_len(n_reps_i)){
+
+    #1. time the legacy GridMetrics run against the matched .dtm ground surface
+    path_legacy_out = file.path(dir_scratch, paste0("legacy_gm_", tier_i, "_r", rep_i))
+    res_legacy = fn_run_timed(
+        file.path(dir_legacy, "gridmetrics64.exe")
+      , args = c("/nointensity", ground_i$dtm, as.character(heightbreak), as.character(cellsize_metrics),
+                  path_legacy_out, shQuote(las_path_i))
+      , label = paste("legacy gridmetrics", tier_i)
+      )
+
+    #2. time the fusion_update GridMetrics run against the matched .tif ground surface
+    res_new = fn_run_timed(
+        file.path(dir_bin_new, "gridmetrics.exe")
+      , args = c(shQuote(las_path_i), paste0("/ground:", ground_i$tif), paste0("/cellsize:", cellsize_metrics),
+                  paste0("/minht:", heightbreak), "/nointensity", paste0("/outdir:", dir_scratch),
+                  paste0("/outroot:new_gm_", tier_i, "_r", rep_i))
+      , label = paste("fusion_update gridmetrics", tier_i)
+      )
+
+    row_i = row_i + 1L
+    list_gm_rows[[row_i]] = data.table(
+        benchmark = "gridmetrics_ground_normalized", tier = tier_i, window = NA_real_, rep = rep_i
+      , tool = c("legacy", "fusion_update"), elapsed_sec = c(res_legacy$elapsed_sec, res_new$elapsed_sec)
+      )
+    }
+  }
+dt_gridmetrics_times = rbindlist(list_gm_rows)
+
+if(any(!is.finite(dt_gridmetrics_times$elapsed_sec) | dt_gridmetrics_times$elapsed_sec <= 0)){
+  stop("step-5: one or more GridMetrics timed runs produced a non-positive or non-finite elapsed time.")
+  }
+print(dt_gridmetrics_times[, .(mean_sec = mean(elapsed_sec)), by = .(tier, tool)])
+```
+
+# Step 6: Summarize measured timings and compute speedup factors
+
+Speedup factors below are `legacy mean / fusion_update mean`, computed from the measured means above -- not looked up, not assumed. A factor below 1.0 means `fusion_update` was slower for that configuration, and is reported as such rather than omitted.
+
+```{r}
+#| label: step-6-summarize
+
+#1. combine both benchmarks into one long table
+dt_all_times = rbind(dt_canopymodel_times, dt_gridmetrics_times, fill = TRUE)
+
+#2. mean/sd/n per benchmark x tier x window x tool
+dt_summary_long = dt_all_times[
+    , .(mean_sec = mean(elapsed_sec), sd_sec = sd(elapsed_sec), n_reps = .N)
+    , by = .(benchmark, tier, window, tool)
+    ]
+
+#3. reshape legacy vs. fusion_update onto one row per configuration, then
+#   compute the real speedup factor from those measured means
+dt_summary_wide = dcast(
+    dt_summary_long
+  , benchmark + tier + window ~ tool
+  , value.var = c("mean_sec", "sd_sec", "n_reps")
+  )
+dt_summary_wide[, speedup_factor := round(mean_sec_legacy / mean_sec_fusion_update, 2)]
+
+#4. flag any configuration with only one repetition -- sd_sec is NA there,
+#   so a reader isn't misled into thinking that number was more stable than
+#   it actually is
+dt_summary_wide[n_reps_legacy <= 1 | n_reps_fusion_update <= 1
+                , note := "single repetition -- no variability estimate"]
+
+print(dt_summary_wide)
+```
+
+# Step 7: Save results and plot measured timings
+
+The full per-run timing table and the summarized speedup table are both saved as versioned CSVs -- the per-run table so a future comparison can pool results across benchmark runs, the summary table as the number a reader actually cites.
+
+```{r}
+#| label: step-7-save-and-plot
+
+#1. save the raw per-run timings and the summary table
+path_raw = RForInvt::file_version(
+    file.path(dir_out, "speed_benchmark_raw_timings.csv")
+  , increment = TRUE
+  , note = "canopymodel smoothing + gridmetrics ground-normalized runs"
+  )
+fwrite(dt_all_times, path_raw)
+
+path_summary = RForInvt::file_version(
+    file.path(dir_out, "speed_benchmark_summary.csv")
+  , increment = TRUE
+  , note = "mean/sd elapsed seconds and speedup factor by configuration"
+  )
+fwrite(dt_summary_wide, path_summary)
+
+#2. plot CanopyModel elapsed time by window size and tool, faceted by tier
+p_canopymodel = ggplot(dt_canopymodel_times, aes(x = factor(window), y = elapsed_sec, fill = tool)) +
+  geom_boxplot(position = position_dodge(width = 0.75), width = 0.6) +
+  facet_wrap(~tier, scales = "free_y") +
+  scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = "#2563EB")) +
+  labs(title = "CanopyModel /smooth: elapsed time", x = "Smoothing window (W)", y = "Elapsed seconds (measured)", fill = "Codebase")
+
+#3. plot GridMetrics elapsed time by tier and tool
+p_gridmetrics = ggplot(dt_gridmetrics_times, aes(x = tier, y = elapsed_sec, fill = tool)) +
+  geom_boxplot(position = position_dodge(width = 0.75), width = 0.6) +
+  scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = "#2563EB")) +
+  labs(title = "GridMetrics (ground-normalized) elapsed time -- not apples-to-apples in scope, see Step 5",
+       x = "Dataset tier", y = "Elapsed seconds (measured)", fill = "Codebase")
+
+p_combined = p_canopymodel / p_gridmetrics
+
+#4. save the figure, then display it immediately
+path_fig = RForInvt::file_version(
+    file.path(dir_out, "speed_benchmark.tif")
+  , increment = TRUE
+  , note = "measured elapsed-time comparison, legacy vs. fusion_update"
+  )
+ggplot2::ggsave(path_fig, p_combined, device = "tiff", width = 9, height = 9, dpi = 400, compression = "lzw")
+shell.exec(normalizePath(path_fig))
+
+p_combined
+```
+
+# Session Info
+
+```{r}
+#| label: session-info
+
+sessionInfo()
+```

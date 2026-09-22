@@ -1,0 +1,5 @@
+benchmark,tier,window,rep,tool,elapsed_sec
+canopymodel_smooth,small_52K_pts,5,1,legacy,0.34
+canopymodel_smooth,small_52K_pts,5,1,fusion_update,1.01
+gridmetrics_ground_normalized,small_52K_pts,,1,legacy,1.21
+gridmetrics_ground_normalized,small_52K_pts,,1,fusion_update,1.25

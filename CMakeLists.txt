@@ -60,6 +60,7 @@ add_library(fusion_core STATIC
     src/libfusion_core/PipelineState.cpp
     src/libfusion_core/PointFilter.cpp
     src/libfusion_core/TableWriter.cpp
+    src/libfusion_core/ChmSmoothing.cpp
     deps/sqlite3_amalgamation/sqlite3.c
 )
 
@@ -169,6 +170,8 @@ add_executable(fusion_tests
     tests/cpp/test_point_filter.cpp
     tests/cpp/test_point_cloud_stats.cpp
     tests/cpp/test_las_writer.cpp
+    tests/cpp/test_chm_smoothing.cpp
+    tests/cpp/test_table_writer.cpp
 )
 target_link_libraries(fusion_tests PRIVATE fusion_core)
 add_test(NAME fusion_tests COMMAND fusion_tests)

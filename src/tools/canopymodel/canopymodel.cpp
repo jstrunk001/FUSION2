@@ -2,6 +2,7 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/raster/ChmSmoothing.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
@@ -129,56 +130,12 @@ int main(int argc, char* argv[]) {
     }
     reader.Close();
 
-    // Apply spatial smoothing filter if requested
+    // Apply spatial smoothing filter if requested -- see ChmSmoothing.cpp for
+    // why the separable two-pass box sum matches the brute-force WxW average.
     if (smoothWidth >= 3) {
         if (smoothWidth % 2 == 0) smoothWidth += 1; // Ensure odd window size
         std::cout << "[CanopyModel] Applying " << smoothWidth << "x" << smoothWidth << " spatial smoothing filter...\n";
-        int half = smoothWidth / 2;
-
-        // A WxW mean is separable into a horizontal 1D box sum followed by
-        // a vertical 1D box sum (2*W additions per cell instead of W*W).
-        // Nodata cells contribute 0 to both the value sum and the
-        // valid-neighbor count in each pass, so the two-pass result matches
-        // the original brute-force nodata-aware average exactly.
-        std::vector<double> horizSum(static_cast<size_t>(cols) * static_cast<size_t>(rows), 0.0);
-        std::vector<int> horizCount(static_cast<size_t>(cols) * static_cast<size_t>(rows), 0);
-        for (int r = 0; r < rows; ++r) {
-            for (int c = 0; c < cols; ++c) {
-                double sum = 0.0;
-                int count = 0;
-                int cLo = (std::max)(0, c - half);
-                int cHi = (std::min)(cols - 1, c + half);
-                for (int nc = cLo; nc <= cHi; ++nc) {
-                    float val = maxElevGrid[r * cols + nc];
-                    if (val != -9999.0f) {
-                        sum += val;
-                        count++;
-                    }
-                }
-                horizSum[r * cols + c] = sum;
-                horizCount[r * cols + c] = count;
-            }
-        }
-
-        std::vector<float> smoothedGrid = maxElevGrid;
-        for (int c = 0; c < cols; ++c) {
-            for (int r = 0; r < rows; ++r) {
-                if (maxElevGrid[r * cols + c] == -9999.0f) continue;
-
-                double sum = 0.0;
-                int count = 0;
-                int rLo = (std::max)(0, r - half);
-                int rHi = (std::min)(rows - 1, r + half);
-                for (int nr = rLo; nr <= rHi; ++nr) {
-                    sum += horizSum[nr * cols + c];
-                    count += horizCount[nr * cols + c];
-                }
-                if (count > 0) {
-                    smoothedGrid[r * cols + c] = static_cast<float>(sum / count);
-                }
-            }
-        }
-        maxElevGrid = std::move(smoothedGrid);
+        maxElevGrid = fusion::raster::SmoothNodataAwareBox(maxElevGrid, cols, rows, smoothWidth, -9999.0f);
     }
 
     double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };

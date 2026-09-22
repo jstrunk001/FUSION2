@@ -4,6 +4,8 @@ int RunPointFilterTests();
 int RunStrataStatBundleTests();
 int RunGetModeTests();
 int RunLASWriterTests();
+int RunChmSmoothingTests();
+int RunTableWriterTests();
 
 int main() {
     int failures = 0;
@@ -11,6 +13,8 @@ int main() {
     failures += RunStrataStatBundleTests();
     failures += RunGetModeTests();
     failures += RunLASWriterTests();
+    failures += RunChmSmoothingTests();
+    failures += RunTableWriterTests();
 
     if (failures == 0) {
         std::cout << "\nAll fusion_tests passed.\n";

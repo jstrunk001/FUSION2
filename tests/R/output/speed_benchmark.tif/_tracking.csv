@@ -1,0 +1,3 @@
+"file","version","base_name","version_suffix","exist","id","date","npad","pad","markerVS","markerDT","sep","note"
+"tests/R/output/speed_benchmark.tif","tests/R/output/speed_benchmark.tif/speed_benchmark_VS002_20260921172312.tif","speed_benchmark.tif","/_VS002_20260921172312",FALSE,2,"20260921172312",3,"0","VS","","_","measured elapsed-time comparison, legacy vs. fusion_update"
+"tests/R/output/speed_benchmark.tif","tests/R/output/speed_benchmark.tif/speed_benchmark_VS001_20260921171841.tif","speed_benchmark.tif","/_VS001_20260921171841",TRUE,1,"20260921171841",3,"0","VS",NA,"_","measured elapsed-time comparison, legacy vs. fusion_update"

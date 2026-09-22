@@ -1,0 +1,3 @@
+benchmark,tier,window,mean_sec_fusion_update,mean_sec_legacy,sd_sec_fusion_update,sd_sec_legacy,n_reps_fusion_update,n_reps_legacy,speedup_factor,note
+canopymodel_smooth,small_52K_pts,5,1.01,0.34,,,1,1,0.34,single repetition -- no variability estimate
+gridmetrics_ground_normalized,small_52K_pts,,1.25,1.21,,,1,1,0.97,single repetition -- no variability estimate
