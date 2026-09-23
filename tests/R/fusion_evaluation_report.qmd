@@ -391,8 +391,9 @@ Sections 1-6 above compare `fusion_update` against the legacy codebase using ill
 # Chunk 7: Build Real Multi-File Test Fixtures From One Sample Point Cloud
 # ==============================================================================
 
-#1. locate the built executables and a real sample point cloud shipped with the project -- normalizePath() is required here: system2() cannot resolve a relative "../.." executable path on Windows
-dir_bin = normalizePath(file.path("..", "..", "bin"))
+#1. locate the built executables and a real sample point cloud shipped with the project -- normalizePath() is required here: system2() cannot resolve a relative "../.." executable path on Windows. build.ps1 now writes bin/ outside Box Sync by default (see its -LocalRoot parameter); fall back to the repo-relative bin/ a manual dev build would still populate.
+dir_bin_local = file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "bin")
+dir_bin = if(file.exists(file.path(dir_bin_local, "canopymodel.exe"))) dir_bin_local else normalizePath(file.path("..", "..", "bin"))
 path_sample_las = normalizePath(file.path("..", "..", "..", "FUSION2-examples", "data", "raw", "lidar"
                                           ,"USGS_LPC_WA_6County_A24_w2049750n409500_clip200ft_las12.las"))
 dir_fixtures = file.path(tempdir(), "fusion_multi_input_fixtures")

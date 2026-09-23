@@ -8,8 +8,10 @@ Usage:
   .\build.ps1 -Publish         # also publish the bundle to GitHub Releases
                                  and delete the previous release
   .\build.ps1 -VcpkgRoot "C:\vcpkg"   # pass a vcpkg toolchain file
+  .\build.ps1 -LocalRoot "G:\fusion_update_build"   # use a different local drive
 
-Layout this script maintains (see .gitignore -- none of these are tracked):
+Layout this script maintains, rooted under $LocalRoot rather than the repo
+itself (see -LocalRoot's default below and its comment for why):
   build/    -- CMake configure + compile output
   bin/      -- flat copy of the 13 built .exe files
   dist/     -- the current versioned zip bundle only
@@ -19,7 +21,18 @@ Layout this script maintains (see .gitignore -- none of these are tracked):
 param(
     [switch]$Publish
   , [string]$VcpkgRoot = $env:VCPKG_ROOT
-  , [string]$BuildDir = "build"
+  # Build output was previously rooted directly under the repo, which lives
+  # under Box Sync -- real timed comparisons (see tests/R/speed_benchmark.qmd)
+  # showed Box Sync's filter driver adds erratic multi-second overhead to
+  # launching these ~26MB statically-linked GDAL binaries specifically (a
+  # local, non-synced copy of the identical binary was fast and stable; the
+  # same file under Box Sync spiked unpredictably), enough to make a
+  # small/fast tool run look slower than legacy FUSION even though it is
+  # actually faster once that hosting-location overhead is removed.
+  # $env:LOCALAPPDATA is per-user, never cloud-synced, and exists on any
+  # Windows machine without hardcoding a specific drive letter.
+  , [string]$LocalRoot = (Join-Path $env:LOCALAPPDATA "fusion_update_build")
+  , [string]$BuildDir = (Join-Path $LocalRoot "build")
   , [switch]$Reconfigure
   , [switch]$FullGDAL
   , [string]$GDALDir = ""
@@ -28,6 +41,14 @@ param(
 $ErrorActionPreference = "Stop"
 $repo_root = $PSScriptRoot
 Set-Location $repo_root
+
+$bin_dir = Join-Path $LocalRoot "bin"
+$dist_dir = Join-Path $LocalRoot "dist"
+$archive_dir = Join-Path $LocalRoot "archive"
+if (-not (Test-Path $LocalRoot)) {
+    New-Item -ItemType Directory -Path $LocalRoot | Out-Null
+}
+Write-Host "Build output root (outside Box Sync): $LocalRoot"
 
 # a freshly written .exe is sometimes briefly locked by antivirus real-time
 # scanning right after the file handle closes, which makes an immediate
@@ -175,8 +196,8 @@ Write-Host "Compiling (Release)..."
 #5. collect the built exes into a flat bin/ folder, regardless of whether
 #   the generator is single-config (exe lands in build/) or multi-config
 #   (exe lands in build/Release/)
-if (-not (Test-Path "bin")) {
-    New-Item -ItemType Directory -Path "bin" | Out-Null
+if (-not (Test-Path $bin_dir)) {
+    New-Item -ItemType Directory -Path $bin_dir | Out-Null
 }
 foreach ($tool_name in $tool_names) {
     $found_exe = Get-ChildItem -Path $BuildDir -Recurse -Filter "$tool_name.exe" -ErrorAction SilentlyContinue |
@@ -184,22 +205,22 @@ foreach ($tool_name in $tool_names) {
     if (-not $found_exe) {
         throw "Build did not produce $tool_name.exe -- check the compile output above."
     }
-    $destination_path = Join-Path "bin" "$tool_name.exe"
+    $destination_path = Join-Path $bin_dir "$tool_name.exe"
     Invoke-WithRetry { Copy-Item $found_exe.FullName $destination_path -Force }
 }
-Write-Host "Copied $($tool_names.Count) executables into bin/."
+Write-Host "Copied $($tool_names.Count) executables into $bin_dir."
 
 #4a. copy proj.db alongside the tools in bin/ -- see CMakeLists.txt's
 #    matching configure-time copy and GDALRaster.cpp's ConfigureProjData()
 #    for why every tool looks for proj_data/proj.db next to its own exe
 $proj_db_source = Join-Path $repo_root "deps\gdal_minimal\share\proj\proj.db"
 if (Test-Path $proj_db_source) {
-    $bin_proj_data_dir = Join-Path "bin" "proj_data"
+    $bin_proj_data_dir = Join-Path $bin_dir "proj_data"
     if (-not (Test-Path $bin_proj_data_dir)) {
         New-Item -ItemType Directory -Path $bin_proj_data_dir | Out-Null
     }
     Invoke-WithRetry { Copy-Item $proj_db_source (Join-Path $bin_proj_data_dir "proj.db") -Force }
-    Write-Host "Copied proj.db into bin/proj_data/."
+    Write-Host "Copied proj.db into $bin_proj_data_dir."
 } else {
     Write-Warning "proj.db not found at $proj_db_source -- run build_gdal_minimal.ps1 to vendor it. Tools in bin/ will fall back to PROJ's default (slower, warning-emitting) search at runtime."
 }
@@ -212,9 +233,9 @@ if (-not $strip_cmd) {
     if ($rtools_strip) { $strip_cmd = $rtools_strip.FullName }
 }
 if ($strip_cmd) {
-    Write-Host "Stripping symbols from executables in bin/..."
+    Write-Host "Stripping symbols from executables in $bin_dir..."
     foreach ($tool_name in $tool_names) {
-        $exe_path = Join-Path "bin" "$tool_name.exe"
+        $exe_path = Join-Path $bin_dir "$tool_name.exe"
         if (Test-Path $exe_path) {
             Invoke-WithRetry { & $strip_cmd $exe_path }
         }
@@ -247,27 +268,27 @@ if (Get-Command quarto -ErrorAction SilentlyContinue) {
 }
 
 #6. archive the previous bundle (if any) before making a new one
-if (-not (Test-Path "dist")) {
-    New-Item -ItemType Directory -Path "dist" | Out-Null
+if (-not (Test-Path $dist_dir)) {
+    New-Item -ItemType Directory -Path $dist_dir | Out-Null
 }
-if (-not (Test-Path "archive")) {
-    New-Item -ItemType Directory -Path "archive" | Out-Null
+if (-not (Test-Path $archive_dir)) {
+    New-Item -ItemType Directory -Path $archive_dir | Out-Null
 }
-$previous_bundles = Get-ChildItem -Path "dist" -Filter "*.zip" -ErrorAction SilentlyContinue
+$previous_bundles = Get-ChildItem -Path $dist_dir -Filter "*.zip" -ErrorAction SilentlyContinue
 foreach ($previous_bundle in $previous_bundles) {
-    Move-Item $previous_bundle.FullName (Join-Path "archive" $previous_bundle.Name) -Force
-    Write-Host "Archived previous bundle: archive/$($previous_bundle.Name)"
+    Move-Item $previous_bundle.FullName (Join-Path $archive_dir $previous_bundle.Name) -Force
+    Write-Host "Archived previous bundle: $(Join-Path $archive_dir $previous_bundle.Name)"
 }
 
 #7. zip the freshly built exes (and PDF manual if present) into the new versioned bundle
 $bundle_name = "fusion_update_tools_v$bundle_version.zip"
-$bundle_path = Join-Path "dist" $bundle_name
-$zip_paths = $tool_names | ForEach-Object { Join-Path "bin" "$_.exe" }
+$bundle_path = Join-Path $dist_dir $bundle_name
+$zip_paths = $tool_names | ForEach-Object { Join-Path $bin_dir "$_.exe" }
 if (Test-Path $pdf_doc_path) {
     $zip_paths += $pdf_doc_path
 }
-if (Test-Path (Join-Path "bin" "proj_data")) {
-    $zip_paths += Join-Path "bin" "proj_data"
+if (Test-Path (Join-Path $bin_dir "proj_data")) {
+    $zip_paths += Join-Path $bin_dir "proj_data"
 }
 
 Invoke-WithRetry {
@@ -286,11 +307,11 @@ $missing_names = $expected_names | Where-Object { $zipped_names -notcontains $_ 
 if ($missing_names.Count -gt 0) {
     throw "Bundle is missing executables: $($missing_names -join ', ') -- not publishing an incomplete zip."
 }
-Write-Host "Created bundle: dist/$bundle_name (verified all $($tool_names.Count) executables present)"
+Write-Host "Created bundle: $bundle_path (verified all $($tool_names.Count) executables present)"
 
 #8. publish to GitHub Releases, replacing the previous release, if -Publish was passed
 if ($Publish) {
-    Write-Host "Publishing dist/$bundle_name to GitHub Releases..."
+    Write-Host "Publishing $bundle_path to GitHub Releases..."
     $release_tag = "tools-v$bundle_version"
     $existing_releases = & gh release list --limit 100 2>$null |
         ForEach-Object { ($_ -split "`t")[0] } |

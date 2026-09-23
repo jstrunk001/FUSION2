@@ -163,14 +163,22 @@ Two comparisons, chosen because both sides expose the same CLI switch with the s
 #| label: locate-tools-and-data
 
 #1. legacy FUSION v4.40 install and this repo's freshly-built tools --
-#   deliberately build/, not bin/: bin/ is a periodically-refreshed
+#   deliberately the build/ tree, not bin/: bin/ is a periodically-refreshed
 #   packaged snapshot (stale by design between packaging runs) and would
-#   silently benchmark old code after a same-day fix
+#   silently benchmark old code after a same-day fix. build.ps1 now builds
+#   outside Box Sync by default (see its -LocalRoot parameter and comment --
+#   real timed comparisons showed Box Sync adds erratic multi-second
+#   overhead to launching these statically-linked GDAL binaries), so that
+#   local location is checked first; the repo-relative build/ directory
+#   (what a bare `cmake -B build` still produces) is the fallback for a
+#   manual dev build that bypassed build.ps1.
 dir_legacy = "C:/FUSION"
-dir_bin_new = "build"
+dir_bin_new_local = file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "build")
+dir_bin_new = if(file.exists(file.path(dir_bin_new_local, "canopymodel.exe"))) dir_bin_new_local else "build"
 if(!dir.exists(dir_legacy)) stop("Legacy FUSION install not found at ", dir_legacy)
 if(!file.exists(file.path(dir_bin_new, "canopymodel.exe"))) stop(
-  "fusion_update build not found under ", dir_bin_new, " -- build the project first.")
+  "fusion_update build not found under ", dir_bin_new_local, " or build/ -- build the project first (.\\build.ps1).")
+cat("Using fusion_update build at:", dir_bin_new, "\n")
 
 #2. the two real sample point clouds used as the small/large size tiers
 path_las_small = file.path("..", "FUSION2-examples", "data", "raw", "lidar",
