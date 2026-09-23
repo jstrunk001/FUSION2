@@ -102,24 +102,28 @@ int main(int argc, char* argv[]) {
         if (!pointFilter.Keep(pt)) continue;
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+        if (col == cols && pt.x == header.maxX) col = cols - 1;
+        if (row == rows && pt.y == header.minY) row = rows - 1;
 
         if (col >= 0 && col < cols && row >= 0 && row < rows) {
             double chmZ = pt.z;
             if (hasGround) {
-                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                    double normHt = pt.z - *gz;
-                    if (useSlope) {
-                        double gzE = groundRaster.GetElevation(pt.x + groundPixelSize, pt.y).value_or(*gz);
-                        double gzW = groundRaster.GetElevation(pt.x - groundPixelSize, pt.y).value_or(*gz);
-                        double gzN = groundRaster.GetElevation(pt.x, pt.y + groundPixelSize).value_or(*gz);
-                        double gzS = groundRaster.GetElevation(pt.x, pt.y - groundPixelSize).value_or(*gz);
-                        double dzdx = (gzE - gzW) / (2.0 * groundPixelSize);
-                        double dzdy = (gzN - gzS) / (2.0 * groundPixelSize);
-                        double slopeFactor = std::sqrt(1.0 + dzdx * dzdx + dzdy * dzdy);
-                        normHt /= slopeFactor;
-                    }
-                    chmZ = normHt;
+                auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                if (!gz) {
+                    continue;
                 }
+                double normHt = pt.z - *gz;
+                if (useSlope) {
+                    double gzE = groundRaster.GetElevation(pt.x + groundPixelSize, pt.y).value_or(*gz);
+                    double gzW = groundRaster.GetElevation(pt.x - groundPixelSize, pt.y).value_or(*gz);
+                    double gzN = groundRaster.GetElevation(pt.x, pt.y + groundPixelSize).value_or(*gz);
+                    double gzS = groundRaster.GetElevation(pt.x, pt.y - groundPixelSize).value_or(*gz);
+                    double dzdx = (gzE - gzW) / (2.0 * groundPixelSize);
+                    double dzdy = (gzN - gzS) / (2.0 * groundPixelSize);
+                    double slopeFactor = std::sqrt(1.0 + dzdx * dzdx + dzdy * dzdy);
+                    normHt /= slopeFactor;
+                }
+                chmZ = normHt;
             }
 
             size_t idx = row * cols + col;

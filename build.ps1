@@ -242,6 +242,28 @@ if ($strip_cmd) {
     }
 }
 
+#5aa. mirror executables and proj_data to the repo's own bin/ folder as well
+$repo_bin_dir = Join-Path $repo_root "bin"
+if (-not (Test-Path $repo_bin_dir)) {
+    New-Item -ItemType Directory -Path $repo_bin_dir | Out-Null
+}
+foreach ($tool_name in $tool_names) {
+    $src = Join-Path $bin_dir "$tool_name.exe"
+    $dest = Join-Path $repo_bin_dir "$tool_name.exe"
+    if (Test-Path $src) {
+        Invoke-WithRetry { Copy-Item $src $dest -Force }
+    }
+}
+if (Test-Path (Join-Path $bin_dir "proj_data")) {
+    $repo_proj_data_dir = Join-Path $repo_bin_dir "proj_data"
+    if (-not (Test-Path $repo_proj_data_dir)) {
+        New-Item -ItemType Directory -Path $repo_proj_data_dir | Out-Null
+    }
+    Invoke-WithRetry { Copy-Item (Join-Path $bin_dir "proj_data\proj.db") (Join-Path $repo_proj_data_dir "proj.db") -Force }
+}
+Write-Host "Mirrored $($tool_names.Count) executables and proj.db into $repo_bin_dir."
+
+
 #5b. render documentation (HTML website & PDF manual) via Quarto if available
 $pdf_doc_path = Join-Path "docs" "pdf\FUSION_Documentation.pdf"
 if (Get-Command quarto -ErrorAction SilentlyContinue) {

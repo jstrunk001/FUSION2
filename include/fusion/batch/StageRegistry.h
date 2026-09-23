@@ -56,13 +56,13 @@ struct StageSpec {
         const std::filesystem::path& outputPath)> resolveOutputPath;
 };
 
-// The 9 stages pipeline.exe can dispatch to. Order matches the tools this
-// was scoped to add: gridmetrics, canopymodel, groundfilter, returndensity,
-// filterdata, thindata, canopymaxima, topometrics, treeseg.
+// The 10 stages pipeline.exe can dispatch to: gridmetrics, canopymodel,
+// groundfilter, returndensity, filterdata, thindata, canopymaxima,
+// topometrics, treeseg, densitymetrics.
 const std::vector<StageSpec>& GetStageRegistry();
 
 // Looks up a stage by name (case-sensitive, matching /pipeline:/tool: values
-// exactly); returns nullptr if name isn't one of the 9 registered stages.
+// exactly); returns nullptr if name isn't one of the 10 registered stages.
 const StageSpec* FindStage(const std::string& name);
 
 } // namespace fusion::batch

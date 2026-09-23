@@ -71,11 +71,12 @@ SurfaceStatsGrid ComputeSurfaceStatsGrid(
 
     if (reference) {
         grid.volumeDiff.assign(numCells, noData);
+        double cellArea = cellSize * cellSize;
         for (size_t i = 0; i < numCells; ++i) {
             float elev = elevation[i];
             float ref = (*reference)[i];
             if (elev == noData || ref == noData) continue;
-            grid.volumeDiff[i] = elev - ref;
+            grid.volumeDiff[i] = static_cast<float>((elev - ref) * cellArea);
         }
     }
 
@@ -121,7 +122,7 @@ SurfaceStatsSummary SummarizeSurfaceStats(const SurfaceStatsGrid& grid,
         }
 
         if (!grid.volumeDiff.empty() && grid.volumeDiff[i] != noData) {
-            volumeDiffSum += grid.volumeDiff[i] * cellArea;
+            volumeDiffSum += grid.volumeDiff[i];
         }
     }
 

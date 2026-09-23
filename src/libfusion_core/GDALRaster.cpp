@@ -278,9 +278,15 @@ std::optional<double> GDALRaster::GetElevation(double x, double y, SampleMethod 
     double colDouble = m_impl->invGeotransform[0] + (x * m_impl->invGeotransform[1]) + (y * m_impl->invGeotransform[2]);
     double rowDouble = m_impl->invGeotransform[3] + (x * m_impl->invGeotransform[4]) + (y * m_impl->invGeotransform[5]);
 
+    // Check if within bounds or within 1.0 cell of bounds for edge clamping
+    if (colDouble < -1.0 || colDouble > static_cast<double>(m_info.width) ||
+        rowDouble < -1.0 || rowDouble > static_cast<double>(m_info.height)) {
+        return std::nullopt;
+    }
+
     if (method == SampleMethod::Nearest) {
-        int col = static_cast<int>(std::floor(colDouble));
-        int row = static_cast<int>(std::floor(rowDouble));
+        int col = std::clamp(static_cast<int>(std::floor(colDouble)), 0, m_info.width - 1);
+        int row = std::clamp(static_cast<int>(std::floor(rowDouble)), 0, m_info.height - 1);
         return GetCellValue(col, row, bandIdx);
     }
 
@@ -289,17 +295,32 @@ std::optional<double> GDALRaster::GetElevation(double x, double y, SampleMethod 
     int col1 = col0 + 1;
     int row1 = row0 + 1;
 
-    auto v00 = GetCellValue(col0, row0, bandIdx);
-    auto v10 = GetCellValue(col1, row0, bandIdx);
-    auto v01 = GetCellValue(col0, row1, bandIdx);
-    auto v11 = GetCellValue(col1, row1, bandIdx);
+    double tx = std::clamp(colDouble - (col0 + 0.5), 0.0, 1.0);
+    double ty = std::clamp(rowDouble - (row0 + 0.5), 0.0, 1.0);
+
+    int c0 = std::clamp(col0, 0, m_info.width - 1);
+    int c1 = std::clamp(col1, 0, m_info.width - 1);
+    int r0 = std::clamp(row0, 0, m_info.height - 1);
+    int r1 = std::clamp(row1, 0, m_info.height - 1);
+
+    auto v00 = GetCellValue(c0, r0, bandIdx);
+    auto v10 = GetCellValue(c1, r0, bandIdx);
+    auto v01 = GetCellValue(c0, r1, bandIdx);
+    auto v11 = GetCellValue(c1, r1, bandIdx);
 
     if (!v00 || !v10 || !v01 || !v11) {
-        return GetCellValue(static_cast<int>(std::round(colDouble)), static_cast<int>(std::round(rowDouble)), bandIdx);
+        int col = std::clamp(static_cast<int>(std::round(colDouble)), 0, m_info.width - 1);
+        int row = std::clamp(static_cast<int>(std::round(rowDouble)), 0, m_info.height - 1);
+        auto nearest = GetCellValue(col, row, bandIdx);
+        if (nearest) return nearest;
+        if (v00) return v00;
+        if (v10) return v10;
+        if (v01) return v01;
+        if (v11) return v11;
+        int cFloor = std::clamp(static_cast<int>(std::floor(colDouble)), 0, m_info.width - 1);
+        int rFloor = std::clamp(static_cast<int>(std::floor(rowDouble)), 0, m_info.height - 1);
+        return GetCellValue(cFloor, rFloor, bandIdx);
     }
-
-    double tx = colDouble - (col0 + 0.5);
-    double ty = rowDouble - (row0 + 0.5);
 
     double top = (1.0 - tx) * (*v00) + tx * (*v10);
     double bottom = (1.0 - tx) * (*v01) + tx * (*v11);

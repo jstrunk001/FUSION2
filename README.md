@@ -1,6 +1,6 @@
 # FUSION2 - Forest Monitoring Point Cloud Processing Tools (GDAL & Native LAS/LAZ Point Cloud Engine)
 
-Command line tools for processing Lidar point clouds for forest analyses. GDAL-based raster handling & native LAS/LAZ/COPC point cloud suite of forest monitoring focused point cloud processing tools. These tools are based on the stand-alone tools provided in the original FUSION package, prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)). This fork replaces the legacy binary `.dtm` raster format with native GDAL dataset (tiff only) reading and writing and native LAS/LAZ point cloud I/O, with accelerated COPC read support in `gridmetrics`'s batch mode.
+Command line tools for processing Lidar point clouds for forest analyses. GDAL-based raster handling & native LAS/LAZ/COPC point cloud suite of forest monitoring focused point cloud processing tools. These tools are derived from the stand-alone tools provided in the original FUSION package, prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)). This fork replaces the legacy binary `.dtm` raster format with native GDAL dataset (tiff only) reading and writing and native LAS/LAZ point cloud I/O, with accelerated COPC read support in `gridmetrics`'s batch mode.
 
 See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-examples) repository for example workflows and small sample datasets that exercise these tools end to end.
 
@@ -11,6 +11,7 @@ See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-exa
    - Reads any GDAL-supported ground surface DEM (GeoTIFF `.tif`, ERDAS Imagine `.img`, ENVI, AAIGrid, etc.).
    - Automatically mosaics directories of ground DTM raster tiles into in-memory virtual rasters (`.vrt`) on the fly across tools accepting ground DEM inputs (`cloudmetrics`, `canopymodel`, `gridmetrics`, `clipdata`, `pipeline`).
    - Outputs single-band or multi-band GeoTIFF rasters with GDAL band descriptions (e.g. `elev_mean`, `elev_p95`, `canopy_cover`, `point_density`).
+   - Every raster-producing tool (`gridmetrics`, `densitymetrics`, `canopymodel`, `groundfilter`, `returndensity`, `topometrics`, `gridsurfacestats`) can also write its per-cell values as a CSV or SQLite table via `/output-table:<path.csv|.sqlite>`; `/noraster` skips the GeoTIFF entirely and must be paired with `/output-table`, since a run needs at least one output.
 2. **Direct `.las` and `.laz` Point Cloud I/O with Directory Streaming**:
    - Built-in reading and writing of standard `.las` (versions 1.0 - 1.4) and compressed `.laz` point cloud formats using static `LASzip`.
    - All point cloud tools (`cloudmetrics`, `canopymodel`, `gridmetrics`, `clipdata`, `groundfilter`, `returndensity`, `thindata`, `filterdata`, `catalog`, `pipeline`) accept individual `.las`/`.laz` files OR directories of point clouds with seamless multi-file streaming.
@@ -19,7 +20,7 @@ See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-exa
    - **`canopymaxima`**: Variable Window Local Maxima (VLM) individual tree top detector on CHM rasters.
    - **`treeseg`**: Watershed region-growing individual tree crown segmentation and per-tree point clipping.
 4. **Comprehensive Lidar & Terrain Analytics Suite**:
-   - `gridmetrics.exe` generates rasters of point clouds statistics like 90th percentile height and proportion of returns above 2 meters -- either for a single file, or tiled/buffered/mosaicked across a whole directory (see its batch/tiled mode below).
+   - `gridmetrics.exe` generates rasters of point clouds statistics like 90th percentile height and proportion of returns above 2 meters -- either for a single file, or tiled/buffered/mosaicked across a whole directory (see its batch/tiled mode below). Single-file and batch/tiled mode compute the identical full metric set (elevation stats, `/rgb`, `/strata`/`/intstrata`, `/rgbstrata`, `/surfstats`, `/exp`) and can both export it as a per-cell `/output-table` CSV or SQLite table alongside (or, with `/noraster`, instead of) the raster.
    - `cloudmetrics.exe` computes statistical elevation, percentile, canopy cover, canopy relief ratio, and intensity metrics for point cloud files or plot boundaries.
    - `canopymodel.exe` interpolates point clouds to create Canopy Height Models (CHM) saved as GeoTIFF rasters with optional DEM height normalization.
    - `canopymaxima.exe` detects individual tree tops on CHM rasters using Variable Window Local Maxima (VLM) filtering with height-dependent window sizes.
@@ -37,7 +38,7 @@ See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-exa
    - Chains multiple tools per tile as child processes (e.g. `groundfilter,canopymodel,canopymaxima`), auto-wiring a `groundfilter` stage's DEM into any later stage's `/ground` option.
    - Interim per-tile products (and the run's resumable state) live in an `_processing/` subfolder under the output directory.
    - A CSV state manifest tracks tile x stage status, so re-runs skip finished work and `/retryfailed`/`/tiles:` can target a subset of tiles.
-   - Per-stage finalization: raster stages are mosaicked into a `.vrt` (optionally merged into one GeoTIFF), table stages are concatenated across tiles.
+   - Per-stage finalization: raster stages are mosaicked into a `.vrt` (optionally merged into one GeoTIFF), table stages are concatenated across tiles. `gridmetrics.exe`'s own internal batch/tiled mode does the same concatenation independently for its own per-tile `/output-table` output, without going through `pipeline.exe` at all.
 
 ## Project Structure & Executable Suite
 
@@ -51,6 +52,7 @@ fusion_update/
 │       ├── raster/GDALRaster.h
 │       ├── lidar/LASPointCloud.h
 │       ├── cli/ArgumentParser.h
+│       ├── table/TableWriter.h
 │       └── batch/
 │           ├── BatchPipeline.h
 │           └── StatusMessenger.h
@@ -91,7 +93,7 @@ FUSION Update provides two build configurations:
 1. **Minimal Standalone Profile (Default - Recommended for Distribution)**:
    - Built against a tailored, minimal static GDAL with only essential remote sensing formats: **GeoTIFF**, **Cloud Optimized GeoTIFF (COG)**, and **VRT (Virtual Raster)**.
    - Enables internal Deflate and LERC compression (ideal for floating-point Canopy Height Models and DEMs).
-   - Links static PROJ + SQLite3 for complete EPSG and coordinate reference system support.
+   - Links static PROJ + SQLite3 for complete EPSG and coordinate reference system support. (This is GDAL/PROJ's own internal SQLite3, used only for its EPSG database -- unrelated to the separate SQLite amalgamation vendored directly under `deps/sqlite3_amalgamation/`, which backs `/output-table`'s `.sqlite` output and isn't part of the GDAL build at all.)
    - Omits heavy, unneeded dependencies (OpenBLAS, Poppler, MySQL, PostgreSQL, NetCDF, HDF5).
    - Produces compact, self-contained executables (**~8–15 MB each**) with **zero external DLL dependencies**.
    - Builds automatically when running `.\build.ps1` (or via `.\build_gdal_minimal.ps1`).

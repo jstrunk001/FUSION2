@@ -357,6 +357,18 @@ bool LASWriter::Open(const std::filesystem::path& filePath, const LASHeaderInfo&
         return false;
     }
 
+    // Write OGC WKT coordinate system VLR ("LASF_Projection", record ID 2112)
+    // when present, so derived point clouds (e.g. tile clips in the batch
+    // pipeline) retain the CRS instead of becoming unprojected.
+    if (!headerInfo.projectionWKT.empty()) {
+        laszip_add_vlr(m_impl->handle,
+                       "LASF_Projection",
+                       2112,
+                       static_cast<laszip_U16>(headerInfo.projectionWKT.size() + 1),
+                       "OGC Coordinate System WKT",
+                       reinterpret_cast<const laszip_U8*>(headerInfo.projectionWKT.c_str()));
+    }
+
     m_impl->xScaleFactor = hdr.x_scale_factor;
     m_impl->yScaleFactor = hdr.y_scale_factor;
     m_impl->zScaleFactor = hdr.z_scale_factor;

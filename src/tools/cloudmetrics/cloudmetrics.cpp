@@ -431,9 +431,11 @@ int main(int argc, char* argv[]) {
 
             double h = pt.z;
             if (hasGround) {
-                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                    h -= *gz;
+                auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                if (!gz) {
+                    continue;
                 }
+                h -= *gz;
             }
 
             totalPtsByFeature[featureIdx]++;
@@ -549,9 +551,11 @@ int main(int argc, char* argv[]) {
         totalPts++;
         double h = pt.z;
         if (hasGround) {
-            if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                h -= *gz;
+            auto gz = groundRaster.GetElevation(pt.x, pt.y);
+            if (!gz) {
+                continue;
             }
+            h -= *gz;
         }
         if (enableExp) {
             allPoints.push_back({pt.x, pt.y, h});
@@ -563,6 +567,8 @@ int main(int argc, char* argv[]) {
         if (enableSurfStats) {
             int col = static_cast<int>((pt.x - header.minX) / cellSize);
             int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+            if (col == surfCols && pt.x == header.maxX) col = surfCols - 1;
+            if (row == surfRows && pt.y == header.minY) row = surfRows - 1;
             if (col >= 0 && col < surfCols && row >= 0 && row < surfRows) {
                 float& cellMax = surfCellMax[static_cast<size_t>(row) * surfCols + col];
                 cellMax = (cellMax == kSurfNoValue) ? static_cast<float>(h) : std::max(cellMax, static_cast<float>(h));

@@ -95,7 +95,7 @@ static bool ValidatePipeline(const std::vector<std::string>& stageNames, std::st
     for (const auto& name : stageNames) {
         const StageSpec* spec = fusion::batch::FindStage(name);
         if (!spec) {
-            errorOut = "Unknown stage \"" + name + "\". Valid stages: gridmetrics, canopymodel, "
+            errorOut = "Unknown stage \"" + name + "\". Valid stages: gridmetrics, densitymetrics, canopymodel, "
                        "groundfilter, returndensity, filterdata, thindata, canopymaxima, topometrics, treeseg.";
             return false;
         }
@@ -103,7 +103,7 @@ static bool ValidatePipeline(const std::vector<std::string>& stageNames, std::st
     }
 
     if (stages.front()->inputKind != ArtifactKind::PointCloud) {
-        errorOut = "The first pipeline stage must consume a point cloud (gridmetrics, canopymodel, "
+        errorOut = "The first pipeline stage must consume a point cloud (gridmetrics, densitymetrics, canopymodel, "
                    "groundfilter, returndensity, filterdata, or thindata) -- \"" + stages.front()->name +
                    "\" expects a raster as input, and no raster exists yet at the start of a tile.";
         return false;

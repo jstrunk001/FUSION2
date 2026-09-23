@@ -74,6 +74,39 @@ const std::vector<StageSpec>& GetStageRegistry() {
             stages.push_back(s);
         }
 
+        // densitymetrics: LAS/LAZ -> height-stratified return-density raster stack.
+        // Names its output from the input file's stem ("<stem>_densitymetrics.tif")
+        // into /outdir, exactly like gridmetrics.
+        {
+            StageSpec s;
+            s.name = "densitymetrics";
+            s.exeName = "densitymetrics.exe";
+            s.inputKind = ArtifactKind::PointCloud;
+            s.outputKind = ArtifactKind::Raster;
+            s.outputExt = ".tif";
+            s.acceptsGround = true;
+            s.buildArgs = [](const std::filesystem::path& primaryInput,
+                              const std::optional<std::filesystem::path>& groundDemPath,
+                              const std::filesystem::path& outputPath,
+                              const std::unordered_map<std::string, std::string>& forwardedOptions) {
+                std::vector<std::string> args;
+                args.push_back(primaryInput.string());
+                args.push_back("/outdir:" + outputPath.parent_path().string());
+                if (groundDemPath) args.push_back("/ground:" + groundDemPath->string());
+                else ForwardOption(args, forwardedOptions, "ground");
+                ForwardOption(args, forwardedOptions, "cellsize");
+                ForwardOption(args, forwardedOptions, "strata");
+                ForwardOption(args, forwardedOptions, "class");
+                ForwardOption(args, forwardedOptions, "return");
+                ForwardOption(args, forwardedOptions, "nodata");
+                return args;
+            };
+            s.resolveOutputPath = [](const std::filesystem::path& primaryInput, const std::filesystem::path& outputPath) {
+                return outputPath.parent_path() / (primaryInput.stem().string() + "_densitymetrics.tif");
+            };
+            stages.push_back(s);
+        }
+
         // canopymodel: LAS/LAZ -> CHM raster.
         {
             StageSpec s;

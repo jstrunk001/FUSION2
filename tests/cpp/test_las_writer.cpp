@@ -1,4 +1,5 @@
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/raster/GDALRaster.h"
 #include "test_assert.h"
 
 #include <cmath>
@@ -175,6 +176,65 @@ int RunLASWriterTests() {
         }
         std::filesystem::remove(path);
     }
+
+    // Coordinate reference system (WKT VLR 2112) propagation test:
+    // writing a point cloud with a non-empty projectionWKT must write the
+    // "LASF_Projection" VLR so the reader recovers the identical CRS.
+    {
+        auto path = ScratchPath("projection_roundtrip.laz");
+        auto header = MakeHeader(1, 2);
+        header.projectionWKT = "PROJCS[\"NAD83 / Washington North\",GEOGCS[\"NAD83\",DATUM[\"North_American_Datum_1983\",SPHEROID[\"GRS 1980\",6378137,298.257222101]],PRIMEM[\"Greenwich\",0],UNIT[\"degree\",0.0174532925199433]],PROJECTION[\"Lambert_Conformal_Conic_2SP\"],PARAMETER[\"standard_parallel_1\",48.73333333333333],PARAMETER[\"standard_parallel_2\",47.5],PARAMETER[\"latitude_of_origin\",47],PARAMETER[\"central_meridian\",-120.8333333333333],PARAMETER[\"false_easting\",500000],PARAMETER[\"false_northing\",0],UNIT[\"metre\",1]]";
+
+        fusion::lidar::LASWriter writer;
+        CHECK(writer.Open(path, header), failures);
+        writer.WritePoint(MakePoint(500005.0, 4000005.0, 42.0, 999.0, 2, 0, 0, 0));
+        writer.Close();
+
+        fusion::lidar::LASReader reader;
+        CHECK(reader.Open(path), failures);
+        if (reader.IsOpen()) {
+            CHECK(reader.GetHeader().projectionWKT == header.projectionWKT, failures);
+            reader.Close();
+        }
+        std::filesystem::remove(path);
+
+        // Raster, VRT, and merged GeoTIFF CRS propagation:
+        // GeoTIFF created with projectionWKT must preserve the CRS, and
+        // GDALRaster::BuildVRT and MergeVRTToGeoTIFF must carry it through.
+        auto rasterPath = ScratchPath("crs_tile.tif");
+        auto vrtPath = ScratchPath("crs_mosaic.vrt");
+        auto mergedPath = ScratchPath("crs_merged.tif");
+
+        double geotransform[6] = {500000.0, 10.0, 0.0, 4000100.0, 0.0, -10.0};
+        std::vector<float> dummyData(10 * 10, 42.0f);
+
+        fusion::raster::GDALRaster outRaster;
+        CHECK(outRaster.Create(rasterPath, 10, 10, 1, "Float32", "GTiff", header.projectionWKT, geotransform, -9999.0), failures);
+        outRaster.WriteBandData(1, dummyData);
+        outRaster.Close();
+
+        fusion::raster::GDALRaster inRaster;
+        CHECK(inRaster.Open(rasterPath), failures);
+        CHECK(!inRaster.GetInfo().projectionWKT.empty(), failures);
+        inRaster.Close();
+
+        CHECK(fusion::raster::GDALRaster::BuildVRT(vrtPath, {rasterPath}), failures);
+        fusion::raster::GDALRaster inVrt;
+        CHECK(inVrt.Open(vrtPath), failures);
+        CHECK(!inVrt.GetInfo().projectionWKT.empty(), failures);
+        inVrt.Close();
+
+        CHECK(fusion::raster::GDALRaster::MergeVRTToGeoTIFF(vrtPath, mergedPath), failures);
+        fusion::raster::GDALRaster inMerged;
+        CHECK(inMerged.Open(mergedPath), failures);
+        CHECK(!inMerged.GetInfo().projectionWKT.empty(), failures);
+        inMerged.Close();
+
+        std::filesystem::remove(rasterPath);
+        std::filesystem::remove(vrtPath);
+        std::filesystem::remove(mergedPath);
+    }
+
 
     std::cout << (failures == 0 ? "  all passed\n" : ("  " + std::to_string(failures) + " failure(s)\n"));
     return failures;

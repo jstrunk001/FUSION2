@@ -166,7 +166,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const auto& header = lasReader.GetHeader();
+    auto header = lasReader.GetHeader();
     std::cout << "[DensityMetrics] Processing Point Cloud: "
               << (inputFiles.size() == 1 ? inputFiles[0].filename().string() : ("merged " + std::to_string(inputFiles.size()) + " files"))
               << " (" << header.pointCount << " points) across " << (strata.size() + 1) << " height stratum bucket(s)\n";
@@ -192,17 +192,21 @@ int main(int argc, char* argv[]) {
 
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+        if (col == cols && pt.x == header.maxX) col = cols - 1;
+        if (row == rows && pt.y == header.minY) row = rows - 1;
 
         if (col >= 0 && col < cols && row >= 0 && row < rows) {
-            auto& cell = grid[row * cols + col];
-            cell.totalReturns++;
-
             double elevation = pt.z;
             if (hasGround) {
-                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                    elevation -= *gz;
+                auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                if (!gz) {
+                    continue;
                 }
+                elevation -= *gz;
             }
+
+            auto& cell = grid[row * cols + col];
+            cell.totalReturns++;
 
             size_t sIdx = 0;
             while (sIdx < strata.size() && elevation >= strata[sIdx]) {
@@ -251,12 +255,17 @@ int main(int argc, char* argv[]) {
 
     double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
 
+    std::string projWKT = !header.projectionWKT.empty()
+        ? header.projectionWKT
+        : (hasGround ? groundRaster.GetInfo().projectionWKT : "");
+
+
     if (!noRaster) {
         std::filesystem::path outRasterPath = outDir / (stem + "_densitymetrics.tif");
         fusion::raster::GDALRaster outRaster;
         std::cout << "[DensityMetrics] Writing Multi-band GeoTIFF raster to: " << outRasterPath << " ("
                   << bandDefs.size() << " bands)...\n";
-        if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, noDataValue)) {
+        if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", projWKT, geotransform, noDataValue)) {
             for (size_t b = 0; b < bandDefs.size(); ++b) {
                 outRaster.SetBandDescription(static_cast<int>(b + 1), bandDefs[b].name);
                 outRaster.WriteBandData(static_cast<int>(b + 1), bandDefs[b].data);

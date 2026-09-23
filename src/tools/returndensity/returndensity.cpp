@@ -5,6 +5,7 @@
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
+#include "fusion/lidar/PointFilter.h"
 #include "fusion/table/TableWriter.h"
 
 #include <iostream>
@@ -13,10 +14,11 @@
 #include <cmath>
 
 int main(int argc, char* argv[]) {
-    fusion::cli::ArgumentParser parser("returndensity", "Generates Point Density (pts/m2) and Return Ratio GeoTIFF Rasters");
+    fusion::cli::ArgumentParser parser("returndensity", "Generates Point Density and Return Ratio GeoTIFF Rasters");
     parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("output", "Output multi-band GeoTIFF raster path", "density_metrics.tif");
-    parser.AddOption("cellsize", "Output grid cell size (m)", "5.0");
+    parser.AddOption("cellsize", "Output grid cell size", "5.0");
+    fusion::lidar::PointFilter::RegisterOptions(parser);
     parser.AddOption("output-table", "Also write a multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
 
@@ -59,18 +61,22 @@ int main(int argc, char* argv[]) {
     if (cols <= 0) cols = 1;
     if (rows <= 0) rows = 1;
 
-    std::cout << "[ReturnDensity] Grid dimensions: " << cols << "x" << rows << " | Cell size: " << cellSize << "m\n";
+    std::cout << "[ReturnDensity] Grid dimensions: " << cols << "x" << rows << " | Cell size: " << cellSize << "\n";
 
     std::vector<uint32_t> totalCount(cols * rows, 0);
     std::vector<uint32_t> firstReturnCount(cols * rows, 0);
 
+    fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
     fusion::lidar::PointRecord pt;
     uint64_t ptsRead = 0;
 
     while (reader.ReadNextPoint(pt)) {
+        if (!pointFilter.Keep(pt)) continue;
         ptsRead++;
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+        if (col == cols && pt.x == header.maxX) col = cols - 1;
+        if (row == rows && pt.y == header.minY) row = rows - 1;
 
         if (col >= 0 && col < cols && row >= 0 && row < rows) {
             size_t idx = row * cols + col;
@@ -98,7 +104,7 @@ int main(int argc, char* argv[]) {
     if (!noRaster) {
         fusion::raster::GDALRaster outRaster;
         if (outRaster.Create(outputPath, cols, rows, 2, "Float32", "GTiff", header.projectionWKT, geotransform, -9999.0)) {
-            outRaster.SetBandDescription(1, "point_density_pts_m2");
+            outRaster.SetBandDescription(1, "point_density");
             outRaster.WriteBandData(1, densityData);
 
             outRaster.SetBandDescription(2, "first_return_ratio_pct");
@@ -112,7 +118,7 @@ int main(int argc, char* argv[]) {
 
     if (wantTable) {
         std::vector<fusion::table::BandDef> bandDefs = {
-            {"point_density_pts_m2", &densityData},
+            {"point_density", &densityData},
             {"first_return_ratio_pct", &firstReturnRatioData}
         };
         std::filesystem::path tablePath = *parser.GetOption("output-table");

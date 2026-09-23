@@ -91,6 +91,12 @@ struct PipelineJobOptions {
     // way it already mosaics per-tile rasters into a VRT.
     std::filesystem::path outputTablePath;
     bool noRaster{false};
+
+    // OGC WKT coordinate system string resolved from the input point clouds
+    // (or ground surface DEM) before tiling starts -- forwarded into each
+    // tile task so individual tile GeoTIFFs, and downstream VRT / merged
+    // rasters, carry the spatial reference.
+    std::string projectionWKT;
 };
 
 class BatchPipeline {

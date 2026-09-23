@@ -96,11 +96,13 @@ int main(int argc, char* argv[]) {
     fusion::lidar::PointRecord pt;
     while (reader.ReadNextPoint(pt)) {
         if (!pointFilter.Keep(pt)) continue;
-        if (wantOutputPoints) {
+        if (wantOutputPoints && pt.classification == 2) {
             pointWriter.WritePoint(pt);
         }
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+        if (col == cols && pt.x == header.maxX) col = cols - 1;
+        if (row == rows && pt.y == header.minY) row = rows - 1;
 
         if (col >= 0 && col < cols && row >= 0 && row < rows) {
             size_t idx = row * cols + col;

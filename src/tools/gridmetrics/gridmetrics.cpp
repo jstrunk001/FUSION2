@@ -219,13 +219,10 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     jobOpts.nodataValue = batchSentinel.nodata.value;
     jobOpts.noheightValue = batchSentinel.noheight.value;
 
-    // Resolve one representative point format from the input directory --
-    // every tile's /rgb channel selection uses this single value (both for
-    // ingestion and for table/raster column naming) so every tile's table
-    // schema matches and can be concatenated, the same way single-file mode
-    // resolves one pointFormat from its merged reader across all its input
-    // files rather than re-resolving it per file.
-    if (!jobOpts.rgb.empty() && std::filesystem::exists(inputDir)) {
+    // Resolve representative point format (for /rgb) and coordinate reference
+    // system (WKT) from the input directory. Every tile uses these single
+    // values so every tile's table schema and raster CRS match.
+    if (std::filesystem::exists(inputDir)) {
         for (const auto& entry : std::filesystem::directory_iterator(inputDir)) {
             if (!entry.is_regular_file()) continue;
             std::string ext = entry.path().extension().string();
@@ -233,10 +230,26 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
             if (ext != ".las" && ext != ".laz") continue;
             fusion::lidar::LASReader probeReader;
             if (probeReader.Open(entry.path())) {
-                jobOpts.pointFormat = probeReader.GetHeader().pointFormat;
+                const auto& h = probeReader.GetHeader();
+                if (!jobOpts.rgb.empty() && jobOpts.pointFormat == 0) {
+                    jobOpts.pointFormat = h.pointFormat;
+                }
+                if (jobOpts.projectionWKT.empty() && !h.projectionWKT.empty()) {
+                    jobOpts.projectionWKT = h.projectionWKT;
+                }
                 probeReader.Close();
-                break;
+                bool formatResolved = jobOpts.rgb.empty() || (jobOpts.pointFormat != 0);
+                if (formatResolved && !jobOpts.projectionWKT.empty()) break;
             }
+        }
+    }
+
+    // Fall back to ground DEM projection if point clouds carried no WKT VLR
+    if (jobOpts.projectionWKT.empty() && !jobOpts.groundPath.empty()) {
+        fusion::raster::GDALRaster groundProbe;
+        if (groundProbe.Open(jobOpts.groundPath)) {
+            jobOpts.projectionWKT = groundProbe.GetInfo().projectionWKT;
+            groundProbe.Close();
         }
     }
 
@@ -328,21 +341,25 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
                         int col = static_cast<int>((pt.x - tile.minX) / res);
                         int row = static_cast<int>((tile.maxY - pt.y) / res);
+                        if (col == cols && pt.x == tile.maxX) col = cols - 1;
+                        if (row == rows && pt.y == tile.minY) row = rows - 1;
 
                         if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                            double elevation = pt.z;
+                            if (hasGround) {
+                                auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                                if (!gz) {
+                                    return;
+                                }
+                                elevation -= *gz;
+                            }
+
                             auto& cell = grid[row * cols + col];
                             cell.totalReturns++;
                             if (pt.returnNumber == 1) cell.firstReturns++;
                             {
                                 int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
                                 cell.returnNumberCounts[rnIdx]++;
-                            }
-
-                            double elevation = pt.z;
-                            if (hasGround) {
-                                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                                    elevation -= *gz;
-                                }
                             }
 
                             if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
@@ -563,7 +580,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
         if (!opts.noRaster) {
             fusion::raster::GDALRaster raster;
-            if (!raster.Create(outTif, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, -9999.0)) {
+            if (!raster.Create(outTif, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", opts.projectionWKT, geotransform, -9999.0)) {
                 return false;
             }
             for (size_t b = 0; b < bandDefs.size(); ++b) {
@@ -862,7 +879,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const auto& header = lasReader.GetHeader();
+    auto header = lasReader.GetHeader();
     std::cout << "[GridMetrics] Processing Point Cloud: " << (inputFiles.size() == 1 ? inputFiles[0].filename().string() : ("merged " + std::to_string(inputFiles.size()) + " files"))
               << " (" << header.pointCount << " points)\n";
 
@@ -913,21 +930,25 @@ int main(int argc, char* argv[]) {
 
         int col = static_cast<int>((pt.x - header.minX) / cellSize);
         int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+        if (col == cols && pt.x == header.maxX) col = cols - 1;
+        if (row == rows && pt.y == header.minY) row = rows - 1;
 
         if (col >= 0 && col < cols && row >= 0 && row < rows) {
+            double elevation = pt.z;
+            if (hasGround) {
+                auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                if (!gz) {
+                    continue;
+                }
+                elevation -= *gz;
+            }
+
             auto& cell = grid[row * cols + col];
             cell.totalReturns++;
             if (pt.returnNumber == 1) cell.firstReturns++;
             {
                 int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
                 cell.returnNumberCounts[rnIdx]++;
-            }
-
-            double elevation = pt.z;
-            if (hasGround) {
-                if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                    elevation -= *gz;
-                }
             }
 
             if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
@@ -1404,12 +1425,16 @@ int main(int argc, char* argv[]) {
     bool noRaster = parser.HasFlag("noraster");
     bool wantTable = parser.WasExplicit("output-table");
 
+    std::string projWKT = !header.projectionWKT.empty()
+        ? header.projectionWKT
+        : (hasGround ? groundRaster.GetInfo().projectionWKT : "");
+
     if (!noRaster) {
         if (outputMode == "singleband") {
             std::cout << "[GridMetrics] Writing Single-band GeoTIFF rasters to: " << outDir << "...\n";
             for (const auto& bdef : bandDefs) {
                 std::filesystem::path bpath = outDir / (stem + "_" + bdef.name + ".tif");
-                if (outRaster.Create(bpath, cols, rows, 1, "Float32", "GTiff", "", geotransform, rasterNoData.value)) {
+                if (outRaster.Create(bpath, cols, rows, 1, "Float32", "GTiff", projWKT, geotransform, rasterNoData.value)) {
                     outRaster.SetBandDescription(1, bdef.name);
                     outRaster.WriteBandData(1, bdef.data);
                     outRaster.Close();
@@ -1418,7 +1443,7 @@ int main(int argc, char* argv[]) {
         } else {
             std::cout << "[GridMetrics] Writing Multi-band GeoTIFF raster to: " << outRasterPath << " ("
                       << bandDefs.size() << " bands)...\n";
-            if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", "", geotransform, rasterNoData.value)) {
+            if (outRaster.Create(outRasterPath, cols, rows, static_cast<int>(bandDefs.size()), "Float32", "GTiff", projWKT, geotransform, rasterNoData.value)) {
                 for (size_t b = 0; b < bandDefs.size(); ++b) {
                     outRaster.SetBandDescription(static_cast<int>(b + 1), bandDefs[b].name);
                     outRaster.WriteBandData(static_cast<int>(b + 1), bandDefs[b].data);

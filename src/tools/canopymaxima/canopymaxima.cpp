@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 #include <vector>
 #include <filesystem>
 #include <cmath>
@@ -108,6 +109,7 @@ int main(int argc, char* argv[]) {
     }
 
     outFile << "TreeID,X,Y,Height,CrownDiameter\n";
+    outFile << std::fixed << std::setprecision(2);
     for (const auto& t : trees) {
         outFile << t.id << "," << t.x << "," << t.y << "," << t.z << "," << t.crownDiameter << "\n";
     }

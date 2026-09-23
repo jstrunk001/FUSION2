@@ -8,6 +8,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 #include <vector>
 #include <filesystem>
 #include <cmath>
@@ -41,6 +42,7 @@ int main(int argc, char* argv[]) {
     if (auto outCsv = parser.GetOption("output")) {
         csv.open(*outCsv);
         if (csv.is_open()) {
+            csv << std::fixed << std::setprecision(2);
             csv << "FileName,PointCount,MinX,MaxX,MinY,MaxY,MinZ,MaxZ,Format,IsCompressed\n";
         }
     }

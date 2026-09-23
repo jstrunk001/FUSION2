@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 #include <vector>
 #include <queue>
 #include <filesystem>
@@ -140,7 +141,8 @@ int main(int argc, char* argv[]) {
 
     std::ofstream csvFile(outCsvPath);
     if (csvFile.is_open()) {
-        csvFile << "TreeID,MaxHeight,CrownArea_m2,PixelCount\n";
+        csvFile << "TreeID,MaxHeight,CrownArea,PixelCount\n";
+        csvFile << std::fixed << std::setprecision(2);
         double pixelArea = cellSize * cellSize;
         for (int id = 1; id <= currentTreeId; ++id) {
             if (crownPixelCounts[id] > 0) {
