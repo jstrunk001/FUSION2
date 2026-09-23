@@ -11,6 +11,7 @@ format:
     toc: true
     toc-depth: 3
     toc-location: left
+    lof: true
     code-fold: show
     code-tools: true
     df-print: paged
@@ -77,7 +78,6 @@ This report presents an **intensive evaluation and performance benchmark** of th
 # ==============================================================================
 # Chunk 1: Setup & Initialization
 # ==============================================================================
-set.seed(42)
 
 # Load Required R Libraries
 library(terra)
@@ -123,31 +123,80 @@ cat("Setup completed successfully. R libraries and custom design themes initiali
 
 ```{r input-data, include=TRUE, message=FALSE, warning=FALSE}
 # ==============================================================================
-# Chunk 2: Input Data Generation & Point Cloud Metadata Setup
+# Chunk 2: Input Data -- Real Point Cloud Metadata via catalog.exe
 # ==============================================================================
 
-# Define Study Area Bounding Envelope (UTM Zone 10N)
-xmin <- 500000; xmax <- 501000
-ymin <- 5000000; ymax <- 5001000
-area_ha <- (xmax - xmin) * (ymax - ymin) / 10000
+#1. locate the built executables and the two real sample point clouds this
+#   project ships with -- a small 200ft clip and a full-size tile, both
+#   real USGS LPC LiDAR, not generated/simulated data. Candidates are
+#   checked for every tool this report actually calls (not just
+#   canopymodel), in order of how likely each is to be a complete, current
+#   build during active development: the repo-relative build/ this session
+#   has been compiling into directly, then build.ps1's newer local-disk
+#   locations (see its -LocalRoot parameter), then the repo-relative bin/
+#   packaged snapshot last, since that one is stale by design between
+#   packaging runs.
+fn_resolve_dir_bin = function(required_tools, candidates){
+  for(candidate in candidates){
+    if(all(file.exists(file.path(candidate, paste0(required_tools, ".exe"))))){
+      return(candidate)
+      }
+    }
+  stop("No candidate build directory has all of: ", paste(required_tools, collapse = ", "),
+       "\nChecked: ", paste(candidates, collapse = "; "))
+  }
 
-# Generate Synthetic Point Cloud Dataset Metadata
-n_points <- 1500000
+tools_needed = c("catalog", "groundfilter", "canopymodel", "gridmetrics", "topometrics")
+dir_bin = fn_resolve_dir_bin(tools_needed, c(
+    normalizePath(file.path("..", "..", "build"), mustWork = FALSE)
+  , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "build")
+  , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "bin")
+  , normalizePath(file.path("..", "..", "bin"), mustWork = FALSE)
+  ))
+cat("Using executables from:", dir_bin, "\n")
+
+path_sample_las_small = normalizePath(file.path("..", "..", "..", "FUSION2-examples", "data", "raw", "lidar"
+                                                 ,"USGS_LPC_WA_6County_A24_w2049750n409500_clip200ft_las12.las"))
+path_sample_las_large = normalizePath(file.path("..", "..", "test_output", "USGS_uncompressed.las"))
+
+dir_report_real = file.path(tempdir(), "fusion_report_real")
+dir.create(dir_report_real, showWarnings = FALSE, recursive = TRUE)
+
+#2. run catalog.exe on both real tiles -- real point counts, real extents,
+#   real Z range, real LAS point format, straight from the file headers
+path_catalog_small = file.path(dir_report_real, "catalog_small.csv")
+path_catalog_large = file.path(dir_report_real, "catalog_large.csv")
+system2(file.path(dir_bin, "catalog.exe")
+       , args = c(shQuote(path_sample_las_small), paste0("/output:", shQuote(path_catalog_small)))
+       , stdout = FALSE)
+system2(file.path(dir_bin, "catalog.exe")
+       , args = c(shQuote(path_sample_las_large), paste0("/output:", shQuote(path_catalog_large)))
+       , stdout = FALSE)
+
+dt_catalog_small = data.table::fread(path_catalog_small)
+dt_catalog_large = data.table::fread(path_catalog_large)
+dt_catalog_both = rbind(dt_catalog_small, dt_catalog_large)
+
+#3. build the real metadata table -- every value below is read from the
+#   LAS headers via catalog.exe, none of it is generated
+las_format_label = c("0" = "LAS 1.2 (Format 0)", "1" = "LAS 1.2 (Format 1)"
+                     ,"6" = "LAS 1.4 (Format 6)", "7" = "LAS 1.4 (Format 7)")
 pc_summary <- data.frame(
-  Dataset_ID = c("Tile_001_Ground", "Tile_001_Canopy", "Tile_002_Ground", "Tile_002_Canopy"),
-  Point_Count = c(450000, 1050000, 480000, 1120000),
-  Density_pts_m2 = c(4.5, 10.5, 4.8, 11.2),
-  Min_Z_m = c(210.2, 212.5, 208.1, 210.0),
-  Max_Z_m = c(345.8, 388.4, 340.2, 385.1),
-  LAS_Version = rep("LAS 1.4 (Format 6)", 4),
-  Compression = c("LAZ (LASzip)", "LAZ (LASzip)", "LAS (Uncompressed)", "LAZ (LASzip)"),
-  Status = c("Verified", "Verified", "Verified", "Verified")
+  Dataset_ID = c("Small tile (200ft clip)", "Large tile (full extent)"),
+  Point_Count = dt_catalog_both$PointCount,
+  Density_pts_m2 = round(dt_catalog_both$PointCount /
+                          ((dt_catalog_both$MaxX - dt_catalog_both$MinX) * (dt_catalog_both$MaxY - dt_catalog_both$MinY)), 2),
+  Min_Z_m = round(dt_catalog_both$MinZ, 1),
+  Max_Z_m = round(dt_catalog_both$MaxZ, 1),
+  LAS_Version = las_format_label[as.character(dt_catalog_both$Format)],
+  Compression = ifelse(dt_catalog_both$IsCompressed == 1, "LAZ (LASzip)", "LAS (Uncompressed)"),
+  Status = "Verified (catalog.exe)"
 )
 
 # Display Interactive Point Cloud Metadata Datatable
 datatable(
   pc_summary,
-  caption = "Table 1: Input LiDAR Point Cloud Tiles & Technical Parameters",
+  caption = "Table 1: Input LiDAR Point Cloud Tiles & Technical Parameters (real, via catalog.exe)",
   options = list(pageLength = 5, dom = 't'),
   rownames = FALSE
 ) %>%
@@ -159,44 +208,47 @@ datatable(
   )
 ```
 
-```{r study-area, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=5}
+```{r fig-study-area, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=5, fig.cap="Real ground elevation surface (groundfilter.exe) and real LiDAR point density (catalog.exe /density:), large tile."}
 # ==============================================================================
-# Chunk 3: Study Area Spatial Visualization
+# Chunk 3: Study Area Spatial Visualization -- Real Ground Surface & Point Density
 # ==============================================================================
 
-# Create Synthetic Elevation DEM Raster using terra
-r_base <- rast(nrows = 100, ncols = 100, xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, crs = "EPSG:32610")
-values(r_base) <- 220 + 50 * sin(seq(0, 3*pi, length.out = 10000)) + 30 * cos(seq(0, 2*pi, length.out = 10000))
+#1. build a real ground DEM from the large tile via groundfilter.exe, and a
+#   real point-density raster via catalog.exe's /density: option -- neither
+#   is generated from a formula
+path_ground_tif = file.path(dir_report_real, "ground_large.tif")
+system2(file.path(dir_bin, "groundfilter.exe")
+       , args = c(shQuote(path_sample_las_large), paste0("/output-raster:", shQuote(path_ground_tif)), "/cellsize:2.0")
+       , stdout = FALSE)
 
-# Create Spatial Sampling Plots (sf points)
-plot_coords <- data.frame(
-  x = runif(35, xmin + 50, xmax - 50),
-  y = runif(35, ymin + 50, ymax - 50),
-  plot_id = paste0("Plot_", sprintf("%02d", 1:35))
-)
-sf_plots <- st_as_sf(plot_coords, coords = c("x", "y"), crs = 32610)
+path_density_csv = file.path(dir_report_real, "catalog_large_density.csv")
+system2(file.path(dir_bin, "catalog.exe")
+       , args = c(shQuote(path_sample_las_large), paste0("/output:", shQuote(path_density_csv)), "/density:5.0")
+       , stdout = FALSE)
+# catalog.exe names the density raster after /output's own stem, not the input LAS file's stem
+path_density_tif = sub("\\.csv$", ".tif", path_density_csv)
+if(!file.exists(path_density_tif)) stop("catalog.exe did not produce the expected density raster at ", path_density_tif)
 
-# Convert DEM raster to dataframe for ggplot
-df_dem <- as.data.frame(r_base, xy = TRUE)
-colnames(df_dem) <- c("x", "y", "Elevation")
+r_ground = terra::rast(path_ground_tif)
+r_density = terra::rast(path_density_tif)
 
-# Plot 1: Study Area DEM & Sampling Plots
+df_ground = as.data.frame(r_ground, xy = TRUE)
+colnames(df_ground) = c("x", "y", "Elevation")
+df_density = as.data.frame(r_density, xy = TRUE)
+colnames(df_density)[3] = "Density"
+
+#2. Plot 1: real ground elevation surface (from groundfilter.exe, the large tile)
 p_dem <- ggplot() +
-  geom_raster(data = df_dem, aes(x = x, y = y, fill = Elevation)) +
-  geom_sf(data = sf_plots, color = "white", fill = PALETTE_CRIMSON, shape = 21, size = 2.5, stroke = 0.8) +
+  geom_raster(data = df_ground, aes(x = x, y = y, fill = Elevation)) +
   scale_fill_viridis_c(option = "mako", name = "Elevation (m)") +
-  labs(title = "Study Area Elevation Surface (DEM)", subtitle = "Overlaid with 35 Inventory Field Sample Plots") +
+  labs(title = "Study Area Ground Surface (real, groundfilter.exe)", subtitle = "USGS LPC large tile, 6.1M points") +
   theme(legend.position = "right")
 
-# Plot 2: Point Density Distribution Map
-values(r_base) <- 8 + 6 * dnorm(seq(-2, 2, length.out = 10000)) * 5
-df_density <- as.data.frame(r_base, xy = TRUE)
-colnames(df_density) <- c("x", "y", "Density")
-
+#3. Plot 2: real point density raster (from catalog.exe /density:)
 p_density <- ggplot() +
   geom_raster(data = df_density, aes(x = x, y = y, fill = Density)) +
   scale_fill_viridis_c(option = "inferno", name = "pts / m²") +
-  labs(title = "LiDAR Pulse Density Distribution", subtitle = "High-density coverage across study site extent") +
+  labs(title = "LiDAR Pulse Density (real, catalog.exe /density:)", subtitle = "Same large tile, 5m cells") +
   theme(legend.position = "right")
 
 # Combine Plots side-by-side
@@ -207,58 +259,69 @@ p_dem + p_density
 
 # 4. Rendered Spatial Derivatives
 
-```{r derivatives, include=TRUE, message=FALSE, warning=FALSE, fig.width=11, fig.height=8}
+```{r fig-derivatives, include=TRUE, message=FALSE, warning=FALSE, fig.width=11, fig.height=8, fig.cap="Real spatial derivatives, large tile: canopy height model (canopymodel.exe), slope and aspect (topometrics.exe), and canopy cover (gridmetrics.exe)."}
 # ==============================================================================
-# Chunk 4: Rendered Derivatives Calculation & Multi-Panel Visualization
+# Chunk 4: Rendered Derivatives -- Real CHM, Slope, Aspect, and Cover
 # ==============================================================================
 
-# Re-instantiate Base Rasters for Spatial Derivatives
-r_dem <- rast(nrows = 100, ncols = 100, xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, crs = "EPSG:32610")
-grid_vals <- outer(seq(-3, 3, length.out = 100), seq(-3, 3, length.out = 100), function(x, y) 250 + 40*sin(x) + 30*cos(y))
-values(r_dem) <- grid_vals
+#1. real CHM: canopymodel.exe on the large real tile, normalized to the real
+#   ground surface built in Chunk 3, with a light smoothing pass
+path_chm_tif = file.path(dir_report_real, "real_chm.tif")
+system2(file.path(dir_bin, "canopymodel.exe")
+       , args = c(shQuote(path_sample_las_large), paste0("/ground:", shQuote(path_ground_tif)),
+                   "/cellsize:2.0", "/smooth:3", paste0("/output:", shQuote(path_chm_tif)))
+       , stdout = FALSE)
+r_chm = terra::rast(path_chm_tif)
 
-# Compute Topographic Derivatives using terra
-r_slope  <- terrain(r_dem, v = "slope", unit = "degrees")
-r_aspect <- terrain(r_dem, v = "aspect", unit = "degrees")
+#2. real slope/aspect: topometrics.exe on that same real ground surface
+path_topo_tif = file.path(dir_report_real, "real_topo.tif")
+system2(file.path(dir_bin, "topometrics.exe")
+       , args = c(shQuote(path_ground_tif), paste0("/output:", shQuote(path_topo_tif)))
+       , stdout = FALSE)
+r_topo = terra::rast(path_topo_tif)
+r_slope = r_topo[["slope_degrees"]]
+r_aspect = r_topo[["aspect_degrees"]]
 
-# Generate Synthetic Canopy Height Model (CHM)
-r_chm <- r_dem
-values(r_chm) <- pmax(0, 28 * sin(seq(0, 4*pi, length.out = 10000))^2 + runif(10000, 0, 4))
+#3. real canopy cover: gridmetrics.exe on the large real tile, same ground
+#   surface, default /minht:2.0 -- canopy_cover is one of its 96 output bands
+path_gm_real_root = "real_derivatives_gm"
+system2(file.path(dir_bin, "gridmetrics.exe")
+       , args = c(shQuote(path_sample_las_large), paste0("/ground:", shQuote(path_ground_tif)),
+                   "/cellsize:2.0", paste0("/outdir:", shQuote(dir_report_real)), paste0("/outroot:", path_gm_real_root))
+       , stdout = FALSE)
+r_gm = terra::rast(file.path(dir_report_real, paste0(path_gm_real_root, "_gridmetrics.tif")))
+r_cover = r_gm[["canopy_cover"]]
 
-# Convert Rasters to Data Frames for Multi-panel Display
-df_chm    <- cbind(as.data.frame(r_chm, xy = TRUE), Derivative = "Canopy Height Model (CHM)")
-df_slope  <- cbind(as.data.frame(r_slope, xy = TRUE), Derivative = "Slope (Degrees)")
-df_aspect <- cbind(as.data.frame(r_aspect, xy = TRUE), Derivative = "Aspect (Degrees)")
-
-colnames(df_chm)[3]    <- "Value"
-colnames(df_slope)[3]  <- "Value"
-colnames(df_aspect)[3] <- "Value"
+#4. convert to data frames for ggplot -- CHM display is clipped at its 99th
+#   percentile (a small number of edge cells read far above any real canopy
+#   height, a known artifact of ground-surface edge effects on this tile, not
+#   hidden here but not allowed to wash out the color scale for every other
+#   cell either)
+df_chm = as.data.frame(r_chm, xy = TRUE); colnames(df_chm)[3] = "Value"
+df_slope = as.data.frame(r_slope, xy = TRUE); colnames(df_slope)[3] = "Value"
+df_aspect = as.data.frame(r_aspect, xy = TRUE); colnames(df_aspect)[3] = "Value"
+df_cover = as.data.frame(r_cover, xy = TRUE); colnames(df_cover)[3] = "Value"
+chm_p99 = as.numeric(quantile(df_chm$Value, 0.99, na.rm = TRUE))
 
 p_chm_map <- ggplot(df_chm, aes(x = x, y = y, fill = Value)) +
   geom_raster() +
-  scale_fill_viridis_c(option = "viridis", name = "CHM Height (m)") +
-  labs(title = "A) Canopy Height Model (CHM)", subtitle = "Generated via fusion_update /canopymodel")
+  scale_fill_viridis_c(option = "viridis", name = "CHM Height (m)", limits = c(0, chm_p99), oob = scales::squish) +
+  labs(title = "A) Canopy Height Model (CHM)", subtitle = "Real: canopymodel.exe, /smooth:3, large tile; display clipped at the 99th pct.")
 
 p_slope_map <- ggplot(df_slope, aes(x = x, y = y, fill = Value)) +
   geom_raster() +
   scale_fill_viridis_c(option = "magma", name = "Slope (°)") +
-  labs(title = "B) Topographic Slope", subtitle = "Derived from GeoTIFF DEM Surface")
+  labs(title = "B) Topographic Slope", subtitle = "Real: topometrics.exe on the real ground surface")
 
 p_aspect_map <- ggplot(df_aspect, aes(x = x, y = y, fill = Value)) +
   geom_raster() +
   scale_fill_gradientn(colors = c("#D9534F", "#F0AD4E", "#5CB85C", "#0275D8", "#D9534F"), name = "Aspect (°)") +
-  labs(title = "C) Solar Aspect Surface", subtitle = "Cardinal Orientation (0° - 360°)")
-
-# Synthetic Canopy Cover Derivative (p95 / cover ratio)
-r_cover <- r_chm
-values(r_cover) <- pmin(100, pmax(0, values(r_chm) * 3 + runif(10000, 0, 15)))
-df_cover <- cbind(as.data.frame(r_cover, xy = TRUE), Derivative = "Canopy Cover (%)")
-colnames(df_cover)[3] <- "Value"
+  labs(title = "C) Solar Aspect Surface", subtitle = "Real: topometrics.exe, cardinal orientation (0°-360°)")
 
 p_cover_map <- ggplot(df_cover, aes(x = x, y = y, fill = Value)) +
   geom_raster() +
   scale_fill_viridis_c(option = "cividis", name = "Cover (%)") +
-  labs(title = "D) GridMetrics Canopy Cover (>2.0m)", subtitle = "Computed via /gridmetrics /minht:2.0")
+  labs(title = "D) GridMetrics Canopy Cover (>2.0m)", subtitle = "Real: gridmetrics.exe canopy_cover band, /minht:2.0")
 
 (p_chm_map + p_slope_map) / (p_aspect_map + p_cover_map)
 ```
@@ -269,7 +332,7 @@ p_cover_map <- ggplot(df_cover, aes(x = x, y = y, fill = Value)) +
 
 The numbers and charts below are real `proc.time()` wall-clock measurements from actually running the compiled legacy FUSION v4.40 executables and the compiled `fusion_update` executables against real point-cloud tiles -- produced by [`speed_benchmark.qmd`](speed_benchmark.qmd) in this same folder, not estimated or hand-entered. That script should be re-run after any change to performance-sensitive code (raster sampling, point-cloud I/O, per-cell metric accumulation, smoothing/filtering passes), and this chunk always displays its latest saved results rather than re-running those tool timings itself, since the large-tile `GridMetrics` run alone takes several minutes.
 
-```{r speed-tests, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9}
+```{r fig-speed-benchmark, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.cap="Measured elapsed time, legacy vs. fusion_update: CanopyModel across smoothing windows, and GridMetrics across both output-format modes (from speed_benchmark.qmd)."}
 # ==============================================================================
 # Chunk 5: Real Execution Speed Benchmark (from speed_benchmark.qmd)
 # ==============================================================================
@@ -301,7 +364,7 @@ if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
   dt_gm_labels = dt_speed_raw[
       benchmark == "gridmetrics_ground_normalized"
       , .(y_label = max(elapsed_sec) * 1.08, label_text = paste0(tool_short_name[tool], "\n", round(mean(elapsed_sec), 1), "s"))
-      , by = .(tier, tool)
+      , by = .(tier, output_mode, tool)
       ]
 
   p_time = ggplot(dt_speed_raw[benchmark == "canopymodel_smooth"], aes(x = factor(window), y = elapsed_sec, fill = tool)) +
@@ -324,10 +387,11 @@ if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
       , aes(x = tier, y = y_label, label = label_text, group = tool)
       , position = position_dodge(width = 0.75), size = 3.2, fontface = "bold", show.legend = FALSE
       ) +
+    facet_wrap(~output_mode, scales = "free_y") +
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.18))) +
     scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = PALETTE_BLUE)) +
-    labs(title = "GridMetrics (ground-normalized) measured elapsed time",
-         subtitle = "Not apples-to-apples in scope -- see speed_benchmark.qmd Step 5",
+    labs(title = "GridMetrics measured elapsed time -- height strata + intensity matched on both tools",
+         subtitle = "csv_only and raster_and_csv are each tool's real output-format counterpart -- see speed_benchmark.qmd Step 5",
          y = "Elapsed seconds (measured)", x = "Dataset tier", fill = "Codebase Version") +
     theme(legend.position = "bottom")
 
@@ -339,42 +403,81 @@ if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
 
 # 6. Output Results Comparison & Numerical Fidelity
 
-```{r output-comparison, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=4.5}
+This section compares two genuinely different algorithms -- legacy FUSION's TIN-based canopy surface fit and `fusion_update`'s max-elevation-per-cell grid -- run on the same real tile with matching ground normalization, smoothing window, and cell size. It reports how they actually differ, not an assumed perfect match.
+
+```{r fig-output-comparison, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=4.5, fig.cap="Cell-by-cell difference and agreement between real legacy and fusion_update canopy height models, same real tile, matched ground/smoothing/cell size."}
 # ==============================================================================
-# Chunk 6: Cell-by-Cell Raster Agreement & Statistical Diff Testing
+# Chunk 6: Cell-by-Cell Raster Agreement -- Real Legacy vs. fusion_update CHM
 # ==============================================================================
 
-# Simulate Legacy DTM Output vs. Modern GeoTIFF Output for GridMetrics Height Mean
-val_update <- values(r_chm)
-# Add minimal floating-point representation noise (1e-6) to simulate IO conversion check
-val_old    <- val_update + rnorm(length(val_update), mean = 0, sd = 0.0001)
+dir_legacy = "C:/FUSION"
+
+#1. build the matching legacy-format (.dtm) ground surface from the same
+#   real ground GeoTIFF Chunk 3 already built, via an ESRI ASCII round trip
+#   -- ASCII2DTM64.exe takes coordinate system as numeric switches, not a
+#   CRS string, so the CRS tag is dropped before export
+path_ground_asc = file.path(dir_report_real, "ground_large.asc")
+r_ground_nocrs = r_ground
+terra::crs(r_ground_nocrs) = ""
+terra::writeRaster(r_ground_nocrs, path_ground_asc, filetype = "AAIGrid", overwrite = TRUE)
+path_ground_dtm = file.path(dir_report_real, "ground_large.dtm")
+system2(file.path(dir_legacy, "ASCII2DTM64.exe")
+       , args = c(path_ground_dtm, "M", "M", "0", "0", "0", "0", path_ground_asc)
+       , stdout = FALSE)
+
+#2. run legacy CanopyModel with the same ground surface, smoothing window,
+#   and cell size as fusion_update's real CHM in Chunk 4, in float-precision
+#   ASCII output (DTM2TIF's grayscale conversion would lose precision)
+path_legacy_chm_dtm = file.path(dir_report_real, "legacy_chm.dtm")
+path_legacy_chm_asc = file.path(dir_report_real, "legacy_chm.asc")
+system2(file.path(dir_legacy, "canopymodel64.exe")
+       , args = c(paste0("/ground:", path_ground_dtm), "/smooth:3", "/ascii", path_legacy_chm_dtm,
+                   "2.0", "M", "M", "0", "0", "0", "0", shQuote(path_sample_las_large))
+       , stdout = FALSE)
+r_chm_legacy_raw = terra::rast(path_legacy_chm_asc)
+
+#3. legacy and fusion_update snap their grid origins slightly differently --
+#   resample legacy's surface onto fusion_update's exact grid (bilinear) so
+#   the two can be differenced cell-for-cell; both were built at the same
+#   2m cell size, so this resampling is a sub-cell alignment correction,
+#   not a resolution change
+terra::crs(r_chm_legacy_raw) = terra::crs(r_chm)
+r_chm_legacy = terra::resample(r_chm_legacy_raw, r_chm, method = "bilinear")
+
+val_update <- terra::values(r_chm)[, 1]
+val_legacy <- terra::values(r_chm_legacy)[, 1]
+keep = is.finite(val_update) & is.finite(val_legacy)
 
 r_diff <- r_chm
-values(r_diff) <- val_update - val_old
+terra::values(r_diff) <- ifelse(keep, val_update - val_legacy, NA)
 df_diff <- as.data.frame(r_diff, xy = TRUE)
 colnames(df_diff) <- c("x", "y", "Difference")
 
-# Summary Equivalence Statistics
-mae  <- mean(abs(values(r_diff)), na.rm = TRUE)
-rmse <- sqrt(mean(values(r_diff)^2, na.rm = TRUE))
-r2   <- cor(val_update, val_old, use = "complete.obs")^2
-max_delta <- max(abs(values(r_diff)), na.rm = TRUE)
+# Summary Agreement Statistics -- real, computed from the two real rasters above
+mae  <- mean(abs(val_update[keep] - val_legacy[keep]))
+rmse <- sqrt(mean((val_update[keep] - val_legacy[keep])^2))
+r2   <- cor(val_update[keep], val_legacy[keep])^2
+max_delta <- max(abs(val_update[keep] - val_legacy[keep]))
 
 # Spatial Difference Map
 p_diff_map <- ggplot(df_diff, aes(x = x, y = y, fill = Difference)) +
   geom_raster() +
-  scale_fill_gradient2(low = PALETTE_BLUE, mid = "white", high = PALETTE_CRIMSON, midpoint = 0, name = "Delta (m)") +
-  labs(title = "Raster Difference Map (fusion_update - Legacy)", subtitle = "Cell-by-cell numerical difference across grid cells")
+  scale_fill_gradient2(low = PALETTE_BLUE, mid = "white", high = PALETTE_CRIMSON, midpoint = 0, name = "Delta (m)",
+                        limits = quantile(df_diff$Difference, c(0.01, 0.99), na.rm = TRUE), oob = scales::squish) +
+  labs(title = "Raster Difference Map (fusion_update - Legacy)", subtitle = "Real CHMs, same ground/smooth/cellsize; display clipped at 1st-99th pct.")
 
-# Scatter Plot Agreement
-df_scatter <- data.frame(Update = val_update[1:500], Legacy = val_old[1:500])
+# Scatter Plot Agreement -- a random subsample of real cells, not the first N
+# (the first N cells are one spatial corner, not a representative sample)
+set.seed(1)
+sample_idx = sample(which(keep), min(2000, sum(keep)))
+df_scatter <- data.frame(Update = val_update[sample_idx], Legacy = val_legacy[sample_idx])
 p_scatter <- ggplot(df_scatter, aes(x = Legacy, y = Update)) +
-  geom_point(color = PALETTE_BLUE, alpha = 0.5) +
+  geom_point(color = PALETTE_BLUE, alpha = 0.4, size = 0.8) +
   geom_abline(intercept = 0, slope = 1, color = PALETTE_CRIMSON, linetype = "dashed", linewidth = 1) +
   labs(
-    title = paste0("Linear Agreement (R² = ", round(r2, 6), ")"),
-    subtitle = paste0("RMSE: ", sprintf("%.2e", rmse), " m | MAE: ", sprintf("%.2e", mae), " m"),
-    x = "Legacy Output Value", y = "fusion_update GeoTIFF Value"
+    title = paste0("Linear Agreement (R² = ", round(r2, 4), ")"),
+    subtitle = paste0("RMSE: ", sprintf("%.3f", rmse), " m | MAE: ", sprintf("%.3f", mae), " m | max |delta|: ", sprintf("%.2f", max_delta), " m"),
+    x = "Legacy Output Value (m)", y = "fusion_update GeoTIFF Value (m)"
   )
 
 p_diff_map + p_scatter
@@ -384,16 +487,25 @@ p_diff_map + p_scatter
 
 # 7. Directory, DTM-Tile, and Multi-File Input Validation
 
-Sections 1-6 above compare `fusion_update` against the legacy codebase using illustrative/simulated data. This section is different: it runs the real, compiled `fusion_update` executables (`catalog.exe`, `clipdata.exe`, `groundfilter.exe`, `cloudmetrics.exe`, `canopymodel.exe`) against a real sample point cloud, to confirm that the newly added directory/multi-file input support (Goal 5 above) produces the same numbers as the original single-file inputs it is meant to stand in for.
+Sections 3-6 above already run the real, compiled executables against the project's two real sample tiles (a small 200ft clip and a full-extent tile, both real USGS LPC LiDAR). This section is different in what it validates, not in whether the data is real: it confirms that the newly added directory/multi-file input support (Goal 5 above) produces the same numbers as the original single-file inputs it is meant to stand in for, using the same real sample point cloud split into real multi-file fixtures.
 
 ```{r multi-input-fixtures, include=TRUE, message=FALSE, warning=FALSE}
 # ==============================================================================
 # Chunk 7: Build Real Multi-File Test Fixtures From One Sample Point Cloud
 # ==============================================================================
 
-#1. locate the built executables and a real sample point cloud shipped with the project -- normalizePath() is required here: system2() cannot resolve a relative "../.." executable path on Windows. build.ps1 now writes bin/ outside Box Sync by default (see its -LocalRoot parameter); fall back to the repo-relative bin/ a manual dev build would still populate.
-dir_bin_local = file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "bin")
-dir_bin = if(file.exists(file.path(dir_bin_local, "canopymodel.exe"))) dir_bin_local else normalizePath(file.path("..", "..", "bin"))
+#1. reuse Chunk 2's already-resolved, verified-complete build directory
+#   (fn_resolve_dir_bin) rather than re-deriving one with weaker checks --
+#   this section additionally needs clipdata and cloudmetrics, so verify
+#   those are present in that same directory too
+if(!all(file.exists(file.path(dir_bin, c("clipdata.exe", "cloudmetrics.exe"))))){
+  dir_bin = fn_resolve_dir_bin(c(tools_needed, "clipdata", "cloudmetrics"), c(
+      normalizePath(file.path("..", "..", "build"), mustWork = FALSE)
+    , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "build")
+    , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "bin")
+    , normalizePath(file.path("..", "..", "bin"), mustWork = FALSE)
+    ))
+  }
 path_sample_las = normalizePath(file.path("..", "..", "..", "FUSION2-examples", "data", "raw", "lidar"
                                           ,"USGS_LPC_WA_6County_A24_w2049750n409500_clip200ft_las12.las"))
 dir_fixtures = file.path(tempdir(), "fusion_multi_input_fixtures")
@@ -584,7 +696,7 @@ datatable(
 
 Every height-normalized metric in Table 4 is identical between the single-file ground DTM and the 2-tile DTM directory. The one difference is not in the metrics but in a diagnostic message: the single-file run reports its raster's `NoData` value as `r nodata_single`, while the directory-mosaic run reports it as `r nodata_dir`. The in-memory VRT that mosaics the tile directory is not carrying the source tiles' NoData value through to that log line -- worth a follow-up fix -- but it did not change any computed metric here, since no cell actually needed a NoData fallback within this point cloud's extent.
 
-```{r multi-input-chm-diff, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=4.5}
+```{r fig-multi-input-chm-diff, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=4.5, fig.cap="CHM agreement between directory-of-tiles inputs and single-file inputs, real data, same tool."}
 # ==============================================================================
 # Chunk 11: CHM Raster Agreement -- All-Directory Inputs vs. All-Single-File Inputs
 # ==============================================================================
@@ -659,31 +771,44 @@ dir.create(dir_sentinel_grid_noheight, showWarnings = FALSE, recursive = TRUE)
 
 #1. run gridmetrics on the all-empty clip -- the lone cell in its 1x1 grid
 #   should read /nodata (default "NA") on every column, including the raw
-#   TotalReturns/FirstReturns counts and point_density
+#   TotalReturns/FirstReturns counts and point_density. gridmetrics' CSV
+#   table is opt-in via /output-table: (its default output is the raster
+#   alone), so the table path is requested explicitly rather than guessed
+#   from an auto-generated filename.
+path_grid_empty_csv = file.path(dir_sentinel_grid, "empty_table.csv")
 system2(
     file.path(dir_bin, "gridmetrics.exe")
-  , args = c(shQuote(path_empty_clip), "/cellsize:10", paste0("/outdir:", shQuote(dir_sentinel_grid)))
+  , args = c(shQuote(path_empty_clip), "/cellsize:10", paste0("/outdir:", shQuote(dir_sentinel_grid)),
+              paste0("/output-table:", shQuote(path_grid_empty_csv)))
   , stdout = FALSE
   )
-path_grid_empty_csv = list.files(dir_sentinel_grid, pattern = "_grid_elevation_metrics\\.csv$", full.names = TRUE)[1]
-dt_grid_empty = data.table::fread(path_grid_empty_csv, na.strings = "NA")
 
-cols_must_be_na = c("TotalReturns", "FirstReturns", "elev_mean", "CanopyCover", "PointDensity")
-all_na_empty = all(sapply(dt_grid_empty[1, ..cols_must_be_na], is.na))
-cat("gridmetrics /nodata check (empty cell, all columns including counts/density are NA):"
-   , if (all_na_empty) "PASS" else "FAIL", "\n")
+if(!file.exists(path_grid_empty_csv)){
+  cat("gridmetrics /nodata check (empty cell, all columns including counts/density are NA):"
+     , "FAIL -- gridmetrics.exe did not produce", path_grid_empty_csv, "\n")
+  } else {
+  dt_grid_empty = data.table::fread(path_grid_empty_csv, na.strings = "NA")
+  cols_must_be_na = c("TotalReturns", "FirstReturns", "elev_mean", "CanopyCover", "PointDensity")
+  all_na_empty = all(sapply(dt_grid_empty[1, ..cols_must_be_na], is.na))
+  cat("gridmetrics /nodata check (empty cell, all columns including counts/density are NA):"
+     , if (all_na_empty) "PASS" else "FAIL", "\n")
+  }
 
 #2. run gridmetrics on the real sample with an unreachably high /minht --
 #   elev_* should read /noheight (default 0), while CanopyCover (well-
 #   defined directly from the unfiltered return count) should read a real
 #   0, and TotalReturns should be the real, non-empty return count
+path_grid_noheight_csv = file.path(dir_sentinel_grid_noheight, "noheight_table.csv")
 system2(
     file.path(dir_bin, "gridmetrics.exe")
   , args = c(shQuote(path_sample_las), "/cellsize:200", "/minht:10000"
-            ,paste0("/outdir:", shQuote(dir_sentinel_grid_noheight)))
+            ,paste0("/outdir:", shQuote(dir_sentinel_grid_noheight))
+            ,paste0("/output-table:", shQuote(path_grid_noheight_csv)))
   , stdout = FALSE
   )
-path_grid_noheight_csv = list.files(dir_sentinel_grid_noheight, pattern = "_grid_elevation_metrics\\.csv$", full.names = TRUE)[1]
+if(!file.exists(path_grid_noheight_csv)){
+  stop("gridmetrics.exe did not produce ", path_grid_noheight_csv)
+  }
 dt_grid_noheight = data.table::fread(path_grid_noheight_csv, na.strings = "NA")
 row_noheight = dt_grid_noheight[TotalReturns > 0][1]
 
@@ -819,38 +944,54 @@ datatable(
 
 ```{r executive-summary, include=TRUE, message=FALSE, warning=FALSE}
 # ==============================================================================
-# Chunk 13: Formatted Executive Summary Table
+# Chunk 13: Executive Summary -- Built From This Report's Own Measured Results
 # ==============================================================================
+
+#1. re-load the same speed-benchmark summary Section 5 displays, so every
+#   number below is read from that file, not retyped by hand
+dt_exec_speed = data.table::fread(RForInvt::file_version(file.path("output", "speed_benchmark_summary.csv")))
+cm_large = dt_exec_speed[benchmark == "canopymodel_smooth" & tier == "large_6.1M_pts"]
+gm_large = dt_exec_speed[benchmark == "gridmetrics_ground_normalized" & tier == "large_6.1M_pts"]
+
+canopymodel_range = paste0(round(min(cm_large$speedup_factor), 1), "x - ", round(max(cm_large$speedup_factor), 1), "x")
+gm_csv_speedup = round(gm_large[output_mode == "csv_only"]$speedup_factor, 1)
+gm_raster_speedup = round(gm_large[output_mode == "raster_and_csv"]$speedup_factor, 1)
 
 summary_tbl <- data.frame(
   Evaluation_Category = c(
-    "Processing Throughput",
+    "CanopyModel Throughput (large tile, /smooth: W=5-21)",
+    "GridMetrics Throughput, CSV-only (large tile, strata+intensity matched)",
+    "GridMetrics Throughput, raster+CSV (large tile, strata+intensity matched)",
     "Memory Efficiency",
     "Output Raster Format",
-    "Numerical Precision",
+    "Numerical Agreement (real CHM, matched params, Section 6)",
     "Point Cloud IO Support",
     "Directory / Multi-File Inputs",
     "Production Readiness"
   ),
   Legacy_v440 = c(
-    "~100k points/sec",
-    "Linear growth (~8.4 GB for 20M pts)",
+    paste0(round(min(cm_large$mean_sec_legacy),1), "-", round(max(cm_large$mean_sec_legacy),1), "s (measured)"),
+    paste0(round(gm_large[output_mode == "csv_only"]$mean_sec_legacy,1), "s (measured)"),
+    paste0(round(gm_large[output_mode == "raster_and_csv"]$mean_sec_legacy,1), "s -- one PLANS DTM file per requested layer"),
+    "Not measured in this report",
     "Proprietary binary .dtm format",
-    "32-bit floating point DTM",
+    "Reference surface (TIN-based fit)",
     "Legacy LAS / external conversion",
     "Single file only, per tool invocation",
     "Baseline (Deprecated)"
   ),
   Fusion_Update = c(
-    "~140k - 600k points/sec (4.5x - 6.6x faster)",
-    "Streamed memory buffers (< 2.0 GB for 20M pts)",
+    paste0(round(min(cm_large$mean_sec_fusion_update),1), "-", round(max(cm_large$mean_sec_fusion_update),1), "s (", canopymodel_range, " faster, widens with window size)"),
+    paste0(round(gm_large[output_mode == "csv_only"]$mean_sec_fusion_update,1), "s (", gm_csv_speedup, "x faster)"),
+    paste0(round(gm_large[output_mode == "raster_and_csv"]$mean_sec_fusion_update,1), "s (", gm_raster_speedup, "x faster) -- one multiband GeoTIFF write"),
+    "Not measured in this report",
     "Industry standard GeoTIFF via GDAL",
-    "IEEE Float32/Float64 GeoTIFF",
+    paste0("R²=", round(r2,3), ", RMSE=", sprintf("%.3f", rmse), "m, MAE=", sprintf("%.3f", mae), "m vs. legacy -- different algorithm (max-per-cell vs. TIN), not identical by design"),
     "Native LAS & compressed LAZ (LASzip)",
     "Single file or directory of tiles, both point clouds and ground DTMs (Section 7)",
-    "Validated (Ready for Intensive Suite)"
+    "Validated for the workflows this report exercises"
   ),
-  Status = c("PASS", "PASS", "PASS", "PASS", "PASS", "PASS", "RECOMMENDED")
+  Status = c("MEASURED", "MEASURED", "MEASURED", "NOT MEASURED", "MEASURED", "MEASURED", "MEASURED", "MEASURED", "SEE NOTES")
 )
 
 flextable(summary_tbl) %>%
@@ -858,20 +999,22 @@ flextable(summary_tbl) %>%
     Evaluation_Category = "Evaluation Category",
     Legacy_v440 = "Legacy FUSION v4.40",
     Fusion_Update = "Modernized fusion_update",
-    Status = "Validation Status"
+    Status = "Basis"
   ) %>%
   theme_vanilla() %>%
-  bg(i = ~ Status == "PASS", j = "Status", bg = "#D1FAE5") %>%
-  bg(i = ~ Status == "RECOMMENDED", j = "Status", bg = "#DBEAFE") %>%
-  color(i = ~ Status == "PASS", j = "Status", color = "#065F46") %>%
-  color(i = ~ Status == "RECOMMENDED", j = "Status", color = "#1E40AF") %>%
+  bg(i = ~ Status == "MEASURED", j = "Status", bg = "#D1FAE5") %>%
+  bg(i = ~ Status == "NOT MEASURED", j = "Status", bg = "#FEE2E2") %>%
+  bg(i = ~ Status == "SEE NOTES", j = "Status", bg = "#DBEAFE") %>%
+  color(i = ~ Status == "MEASURED", j = "Status", color = "#065F46") %>%
+  color(i = ~ Status == "NOT MEASURED", j = "Status", color = "#991B1B") %>%
+  color(i = ~ Status == "SEE NOTES", j = "Status", color = "#1E40AF") %>%
   bold(j = c("Evaluation_Category", "Status")) %>%
   autofit()
 ```
 
 ::: {.callout-tip}
 ## Key Conclusion & Strategic Recommendation
-The **`fusion_update`** codebase successfully eliminates the legacy `.dtm` file format dependency in favor of modern **GDAL GeoTIFF rasters** and **LAS/LAZ point cloud IO**. Benchmark results confirm a **4.5x to 6.6x execution speedup** alongside a **75% reduction in peak RAM consumption**. Section 7's live executable runs confirm that directory-of-tiles inputs (point clouds and ground DTMs alike) produce the same metrics and rasters as their single-file equivalents, with one open item: the ground-DTM directory path does not carry the source tiles' NoData value through to its own diagnostic log line.
+`fusion_update` eliminates the legacy `.dtm` file format dependency in favor of GDAL GeoTIFF rasters and native LAS/LAZ point cloud IO. Measured on this report's real large tile (6.1M points): CanopyModel's `/smooth:` fix delivers `r canopymodel_range` faster wall-clock time, widening as the smoothing window grows -- the expected signature of its O(W²)→O(W) algorithmic change. GridMetrics, with height-strata and intensity metrics matched between both tools, is `r gm_csv_speedup`x faster in CSV-only mode and `r gm_raster_speedup`x faster when both tools write their native raster output -- the latter number reflecting legacy's one-file-per-layer write pattern at least as much as any per-point computation difference (see `speed_benchmark.qmd` Step 5). Section 6's real cell-by-cell comparison shows the two tools' CHM outputs do **not** match exactly (R²=`r round(r2,3)`) -- expected, since they use different surface-fitting algorithms, not a defect in either. Memory usage was not profiled in this report; that claim from an earlier draft is removed rather than restated without evidence. Section 7's live executable runs confirm that directory-of-tiles inputs (point clouds and ground DTMs alike) produce the same metrics and rasters as their single-file equivalents, with one open item: the ground-DTM directory path does not carry the source tiles' NoData value through to its own diagnostic log line.
 
 We recommend proceeding with the **6-domain intensive test matrix** (Table 2) prior to deploying `fusion_update` into automated production pipelines.
 :::

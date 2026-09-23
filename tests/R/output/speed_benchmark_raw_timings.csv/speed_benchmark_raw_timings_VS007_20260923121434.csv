@@ -1,0 +1,7 @@
+benchmark,tier,window,rep,tool,elapsed_sec,output_mode
+canopymodel_smooth,small_52K_pts,5,1,legacy,0.44,
+canopymodel_smooth,small_52K_pts,5,1,fusion_update,0.32,
+gridmetrics_ground_normalized,small_52K_pts,,1,legacy,3.14,csv_only
+gridmetrics_ground_normalized,small_52K_pts,,1,fusion_update,2.77,csv_only
+gridmetrics_ground_normalized,small_52K_pts,,1,legacy,5.32,raster_and_csv
+gridmetrics_ground_normalized,small_52K_pts,,1,fusion_update,0.579999999999998,raster_and_csv

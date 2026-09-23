@@ -1,0 +1,11 @@
+benchmark,tier,window,output_mode,mean_sec_fusion_update,mean_sec_legacy,sd_sec_fusion_update,sd_sec_legacy,n_reps_fusion_update,n_reps_legacy,speedup_factor,note
+canopymodel_smooth,large_6.1M_pts,5,,2.41,7.46,0.155563491861045,0.169705627484773,2,2,3.1,
+canopymodel_smooth,large_6.1M_pts,11,,2.565,9.865,0.0636396103067917,0.106066017177986,2,2,3.85,
+canopymodel_smooth,large_6.1M_pts,21,,2.76499999999999,16.38,0.0636396103067816,0.523259018078042,2,2,5.92,
+canopymodel_smooth,small_52K_pts,5,,0.310000000000001,0.44,0.0700000000000002,0,3,3,1.42,
+canopymodel_smooth,small_52K_pts,11,,0.383333333333333,0.486666666666667,0.0585946527708229,0.0723417813807023,3,3,1.27,
+canopymodel_smooth,small_52K_pts,21,,0.439999999999999,0.560000000000001,0.00999999999999979,0.0173205080756894,3,3,1.27,
+gridmetrics_ground_normalized,large_6.1M_pts,,csv_only,285.94,323.7,,,1,1,1.13,single repetition -- no variability estimate
+gridmetrics_ground_normalized,large_6.1M_pts,,raster_and_csv,13.4499999999998,378.52,,,1,1,28.14,single repetition -- no variability estimate
+gridmetrics_ground_normalized,small_52K_pts,,csv_only,2.73666666666666,2.99,0.0635085296108626,0.0458257569495601,3,3,1.09,
+gridmetrics_ground_normalized,small_52K_pts,,raster_and_csv,0.720000000000008,5.67333333333333,0.0556776436283083,0.579770069366585,3,3,7.88,
