@@ -189,6 +189,21 @@ foreach ($tool_name in $tool_names) {
 }
 Write-Host "Copied $($tool_names.Count) executables into bin/."
 
+#4a. copy proj.db alongside the tools in bin/ -- see CMakeLists.txt's
+#    matching configure-time copy and GDALRaster.cpp's ConfigureProjData()
+#    for why every tool looks for proj_data/proj.db next to its own exe
+$proj_db_source = Join-Path $repo_root "deps\gdal_minimal\share\proj\proj.db"
+if (Test-Path $proj_db_source) {
+    $bin_proj_data_dir = Join-Path "bin" "proj_data"
+    if (-not (Test-Path $bin_proj_data_dir)) {
+        New-Item -ItemType Directory -Path $bin_proj_data_dir | Out-Null
+    }
+    Invoke-WithRetry { Copy-Item $proj_db_source (Join-Path $bin_proj_data_dir "proj.db") -Force }
+    Write-Host "Copied proj.db into bin/proj_data/."
+} else {
+    Write-Warning "proj.db not found at $proj_db_source -- run build_gdal_minimal.ps1 to vendor it. Tools in bin/ will fall back to PROJ's default (slower, warning-emitting) search at runtime."
+}
+
 #5a. strip debug/relocation symbols from all executables in bin/
 $strip_cmd = Get-Command strip -ErrorAction SilentlyContinue
 if (-not $strip_cmd) {
@@ -250,6 +265,9 @@ $bundle_path = Join-Path "dist" $bundle_name
 $zip_paths = $tool_names | ForEach-Object { Join-Path "bin" "$_.exe" }
 if (Test-Path $pdf_doc_path) {
     $zip_paths += $pdf_doc_path
+}
+if (Test-Path (Join-Path "bin" "proj_data")) {
+    $zip_paths += Join-Path "bin" "proj_data"
 }
 
 Invoke-WithRetry {

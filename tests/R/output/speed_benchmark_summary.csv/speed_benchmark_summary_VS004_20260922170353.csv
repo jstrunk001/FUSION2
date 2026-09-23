@@ -1,0 +1,9 @@
+benchmark,tier,window,mean_sec_fusion_update,mean_sec_legacy,sd_sec_fusion_update,sd_sec_legacy,n_reps_fusion_update,n_reps_legacy,speedup_factor,note
+canopymodel_smooth,large_6.1M_pts,5,6.26000000000001,19.535,4.08707719525825,2.11424927574777,2,2,3.12,
+canopymodel_smooth,large_6.1M_pts,11,10.44,23.93,1.48492424049175,2.70114790413263,2,2,2.29,
+canopymodel_smooth,large_6.1M_pts,21,9.50999999999999,33.96,3.53553390593274,1.03237590053239,2,2,3.57,
+canopymodel_smooth,small_52K_pts,5,3.81333333333333,0.890000000000001,5.5321093023668,0.386910842443062,3,3,0.23,
+canopymodel_smooth,small_52K_pts,11,2.95000000000001,0.936666666666663,1.52233373476384,0.215483951451917,3,3,0.32,
+canopymodel_smooth,small_52K_pts,21,1.16333333333333,0.996666666666655,0.669054058603141,0.663350083540611,3,3,0.86,
+gridmetrics_ground_normalized,large_6.1M_pts,,14.97,325.92,,,1,1,21.77,single repetition -- no variability estimate
+gridmetrics_ground_normalized,small_52K_pts,,4.44999999999999,3.41000000000001,1.57264109064974,1.08087927170431,3,3,0.77,

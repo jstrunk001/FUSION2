@@ -9,9 +9,33 @@
 #include <algorithm>
 #include <iostream>
 #include <atomic>
+#include <filesystem>
 #include <mutex>
 
 namespace fusion::raster {
+
+// Points PROJ at the proj.db vendored beside this executable (see
+// CMakeLists.txt's configure-time copy and build_gdal_minimal.ps1's
+// Install-ProjDb) instead of letting PROJ search its own default locations
+// for one. This project's statically-linked PROJ ships no proj.db of its
+// own, so every unconfigured run was searching for one, failing to find it,
+// and printing a "Cannot find proj.db" warning on every invocation.
+// Measured contribution to wall-clock time was within noise (see
+// speed_benchmark.qmd's commit history) -- the fix is worth keeping for
+// eliminating the failed search and the warning, not as a performance claim
+// on its own. A missing proj_data/ folder is not an error: PROJ just falls
+// back to its own (slower) default search, same as before this existed.
+static void ConfigureProjData() {
+    char execPathBuf[2048];
+    if (!CPLGetExecPath(execPathBuf, sizeof(execPathBuf))) return;
+
+    std::filesystem::path projDataDir = std::filesystem::path(execPathBuf).parent_path() / "proj_data";
+    if (!std::filesystem::exists(projDataDir / "proj.db")) return;
+
+    std::string projDataDirStr = projDataDir.string();
+    CPLSetConfigOption("PROJ_DATA", projDataDirStr.c_str()); // PROJ >= 9.1
+    CPLSetConfigOption("PROJ_LIB", projDataDirStr.c_str());  // PROJ < 9.1, harmless if unused
+}
 
 // GDALAllRegister() must run before any GDAL entry point is used, but
 // several GDALRaster methods (BuildVRT, MergeVRTToGeoTIFF, ConvertToCOG,
@@ -22,7 +46,10 @@ namespace fusion::raster {
 // an instance was ever constructed in the calling process.
 static void EnsureRegistered() {
     static std::once_flag registeredOnce;
-    std::call_once(registeredOnce, []() { GDALAllRegister(); });
+    std::call_once(registeredOnce, []() {
+        ConfigureProjData();
+        GDALAllRegister();
+    });
 }
 
 // Recognized single-tile raster file extensions when a directory is passed

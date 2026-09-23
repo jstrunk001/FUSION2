@@ -23,6 +23,21 @@ endif()
 # Find GDAL using CMake Config mode to automatically pull in static dependencies
 find_package(GDAL CONFIG REQUIRED)
 
+# Copy PROJ's proj.db (vendored by build_gdal_minimal.ps1 -- see its
+# Install-ProjDb function) next to this build's own executables, in the
+# proj_data/ subfolder GDALRaster.cpp's EnsureRegistered() looks for beside
+# each tool's own exe. Without it, PROJ searches for a database it never
+# finds and prints a warning on every single process launch; measured
+# wall-clock impact was within noise, so this is a correctness/noise fix,
+# not a performance one. A configure-time copy is enough since proj.db
+# doesn't change between builds.
+set(PROJ_DB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/deps/gdal_minimal/share/proj/proj.db")
+if(EXISTS "${PROJ_DB_SOURCE}")
+    file(COPY "${PROJ_DB_SOURCE}" DESTINATION "${CMAKE_BINARY_DIR}/proj_data")
+else()
+    message(WARNING "proj.db not found at ${PROJ_DB_SOURCE} -- re-run build_gdal_minimal.ps1 to vendor it. Built tools will fall back to PROJ's default (slower, warning-emitting) search at runtime.")
+endif()
+
 # LASzip has no exported CMake config (see build_laszip_minimal.ps1, which
 # vendors it the same way build_gdal_minimal.ps1 vendors GDAL) -- locate its
 # static libs and headers directly instead of find_package().

@@ -30,6 +30,39 @@ if (-not $InstallDir) {
 $deps_root = Join-Path $script_root "deps"
 $source_tar = Join-Path $deps_root "gdal-$GdalVersion.tar.gz"
 
+# Vendors PROJ's own proj.db (its EPSG/CRS lookup database) alongside the
+# minimal GDAL install. GDAL links PROJ from this machine's Rtools install
+# (see PROJ_DIR in build/CMakeCache.txt after configuring), but Rtools'
+# static PROJ build ships no proj.db of its own -- every tool run was
+# searching for one, failing to find it, and printing a "Cannot find
+# proj.db" warning on every invocation (see GDALRaster.cpp's
+# EnsureRegistered(), which points PROJ_DATA at this file at runtime).
+# Measured wall-clock impact of the fix was within noise -- this closes a
+# real failed-search/warning-spam gap, not a performance one. Copied from
+# the same Rtools install GDAL's PROJ comes from, so the database schema
+# always matches the linked PROJ version -- called both when GDAL is
+# freshly built below and when this script exits early because GDAL is
+# already installed, so an existing install can still pick up a missing
+# proj.db without a full -Clean rebuild.
+function Install-ProjDb {
+    param([string]$GdalInstallDir)
+    $proj_data_dir = Join-Path $GdalInstallDir "share\proj"
+    if (Test-Path (Join-Path $proj_data_dir "proj.db")) {
+        return
+    }
+    $rtools_proj_db = Get-ChildItem "C:\rtools*" -Recurse -Filter "proj.db" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($rtools_proj_db) {
+        if (-not (Test-Path $proj_data_dir)) {
+            New-Item -ItemType Directory -Path $proj_data_dir | Out-Null
+        }
+        Copy-Item $rtools_proj_db.FullName (Join-Path $proj_data_dir "proj.db") -Force
+        Write-Host "Vendored proj.db from $($rtools_proj_db.FullName) into $proj_data_dir"
+    } else {
+        Write-Warning "No proj.db found under C:\rtools* -- built tools will fall back to PROJ's default (slower, warning-emitting) search at runtime."
+    }
+}
+
 # Build in local temp directory to avoid cloud drive (Box Sync) locking and speed up compilation
 $local_temp = Join-Path $env:TEMP "fusion_gdal"
 $source_dir = Join-Path $local_temp "gdal-$GdalVersion"
@@ -41,6 +74,7 @@ $installed_cmake64 = Join-Path $InstallDir "lib64\cmake\gdal\GDALConfig.cmake"
 if (-not $Clean -and ((Test-Path $installed_cmake) -or (Test-Path $installed_cmake64))) {
     Write-Host "Minimal static GDAL is already installed at: $InstallDir"
     Write-Host "Pass -Clean to force a rebuild."
+    Install-ProjDb -GdalInstallDir $InstallDir
     exit 0
 }
 
@@ -205,7 +239,11 @@ if ($LASTEXITCODE -ne 0) {
     throw "Installation of minimal GDAL failed."
 }
 
-# 7. Clean up local temp directory to save disk space
+# 7. Vendor proj.db alongside the freshly built GDAL install (see
+# Install-ProjDb's definition above for why).
+Install-ProjDb -GdalInstallDir $InstallDir
+
+# 8. Clean up local temp directory to save disk space
 Write-Host "Cleaning up local temp build directory..."
 Remove-Item -Recurse -Force $local_temp -ErrorAction SilentlyContinue
 
