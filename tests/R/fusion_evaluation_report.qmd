@@ -11,7 +11,6 @@ format:
     toc: true
     toc-depth: 3
     toc-location: left
-    lof: true
     code-fold: show
     code-tools: true
     df-print: paged
@@ -58,6 +57,24 @@ h1.title {
 .badge-medium { background-color: #FEF3C7; color: #92400E; }
 .badge-pass { background-color: #D1FAE5; color: #065F46; }
 ```
+
+## List of Figures
+
+<!--
+Quarto's lof: true option (set in this document's YAML) only produces a
+rendered list-of-figures section for LaTeX/PDF and Word output, not
+standalone HTML -- confirmed by inspecting a rendered copy of this exact
+document, which had no such section despite the option being set. This
+manual list is the HTML-working equivalent: @fig-xxx cross-references
+still resolve to the right auto-number and link to the right figure, only
+the auto-generated index page does not exist for this output format.
+-->
+
+- @fig-study-area -- Real ground elevation surface and LiDAR point density, large tile
+- @fig-derivatives -- Real canopy height model, slope, aspect, and canopy cover
+- @fig-speed-benchmark -- Measured elapsed time, legacy vs. fusion_update
+- @fig-output-comparison -- Cell-by-cell difference and agreement, real legacy vs. fusion_update CHM
+- @fig-multi-input-chm-diff -- CHM agreement, directory-of-tiles inputs vs. single-file inputs
 
 # 1. Overview & Objectives
 
