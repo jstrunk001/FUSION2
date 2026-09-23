@@ -270,15 +270,28 @@ if(any(!is.finite(dt_canopymodel_times$elapsed_sec) | dt_canopymodel_times$elaps
 print(dt_canopymodel_times[, .(mean_sec = mean(elapsed_sec)), by = .(tier, window, tool)])
 ```
 
-# Step 5: Time GridMetrics -- legacy vs. fusion_update, ground-normalized
+# Step 5: Time GridMetrics -- legacy vs. fusion_update, ground-normalized and feature-matched
 
-This comparison is not apples-to-apples in scope, and that difference is stated here before any number is shown. `fusion_update`'s `gridmetrics` writes a comprehensive multiband raster (elevation, strata, spectral, and experimental metric bands together) by default; the legacy run below uses `/nointensity` to skip only intensity metrics, which still leaves legacy computing a much smaller default bundle than the new tool's default multiband output. Any elapsed-time difference measured here reflects that scope difference at least as much as the raster-sampling cache fix from commit `6afb2cc` -- it measures what a user actually experiences running each tool's default configuration today, not an isolated per-point throughput comparison the way Step 4 is. The large tile's `fusion_update` run alone takes several minutes, so it gets a single repetition; the small tile still gets three.
+Both tools are given the same height-strata and intensity-strata thresholds (legacy FUSION's own documented defaults: `/strata:0.15,1.37,5,10,20,30`, `/intstrata:0.25,1.37`), and intensity metrics are turned on for both -- neither side uses `/nointensity`. This closes the metric-bundle gap Step 5 previously flagged. A second, separate gap remains: the two tools default to different *output formats* -- legacy defaults to CSV-only (no raster unless `/raster:` is given); `fusion_update` defaults to writing a multiband GeoTIFF raster alongside its CSV. Rather than force one tool into the other's shape, both output modes are timed explicitly on both tools:
+
+1. **`csv_only`** -- legacy's own CSV-only default vs. `fusion_update` with `/noraster /output-table:<path>.csv` (verified this genuinely suppresses the raster, not just the CLI help text's claim).
+2. **`raster_and_csv`** -- legacy with `/raster:<29 matching stat layers>` (its closest equivalent to `fusion_update`'s multiband stat bundle) vs. `fusion_update`'s own raster+CSV default.
+
+Neither arm is a perfect band-for-band match (legacy writes one PLANS DTM file per requested layer; `fusion_update` writes one multiband GeoTIFF plus per-return-type/strata columns a flat layer list doesn't have an equivalent for) -- but both arms now measure real, comparable-scope work on both sides, not one tool's minimal default against the other's maximal one. The large tile's runs take tens of seconds to minutes each, so they get fewer repetitions than the small tile.
 
 ```{r}
 #| label: step-5-gridmetrics-benchmark
 
 heightbreak = 5.0
 cellsize_metrics = 2.0
+strata_thresholds = "0.15,1.37,5,10,20,30"       # legacy FUSION's own documented default
+intstrata_thresholds = "0.25,1.37"               # legacy FUSION's own documented default
+legacy_raster_layers = paste(c(
+    "min", "max", "mean", "stddev", "variance", "cv", "mode", "skewness", "kurtosis", "aad"
+  , "p01", "p05", "p10", "p20", "p25", "p30", "p40", "p50", "p60", "p70", "p75", "p80", "p90", "p95", "p99"
+  , "iq", "cover", "count", "densitytotal"
+  ), collapse = ",")
+output_modes = c("csv_only", "raster_and_csv")
 reps_by_tier_gm = c(small_52K_pts = 3L, large_6.1M_pts = 1L)
 
 list_gm_rows = list()
@@ -288,31 +301,50 @@ for(tier_i in dt_datasets$tier){
   ground_i = list_ground[[tier_i]]
   n_reps_i = reps_by_tier_gm[[tier_i]]
 
-  for(rep_i in seq_len(n_reps_i)){
+  for(output_mode_i in output_modes){
+    for(rep_i in seq_len(n_reps_i)){
 
-    #1. time the legacy GridMetrics run against the matched .dtm ground surface
-    path_legacy_out = file.path(dir_scratch, paste0("legacy_gm_", tier_i, "_r", rep_i))
-    res_legacy = fn_run_timed(
-        file.path(dir_legacy, "gridmetrics64.exe")
-      , args = c("/nointensity", ground_i$dtm, as.character(heightbreak), as.character(cellsize_metrics),
-                  path_legacy_out, shQuote(las_path_i))
-      , label = paste("legacy gridmetrics", tier_i)
-      )
+      #1. time the legacy GridMetrics run -- CSV-only is legacy's own default (no
+      #   extra switch needed); raster_and_csv adds /raster: on top of that same default
+      path_legacy_out = file.path(dir_scratch, paste0("legacy_gm_", tier_i, "_", output_mode_i, "_r", rep_i))
+      legacy_args = c(
+          paste0("/strata:", strata_thresholds), paste0("/intstrata:", intstrata_thresholds)
+        , ground_i$dtm, as.character(heightbreak), as.character(cellsize_metrics)
+        , path_legacy_out, shQuote(las_path_i)
+        )
+      if(output_mode_i == "raster_and_csv"){
+        legacy_args = c(paste0("/raster:", legacy_raster_layers), legacy_args)
+        }
+      res_legacy = fn_run_timed(
+          file.path(dir_legacy, "gridmetrics64.exe")
+        , args = legacy_args
+        , label = paste("legacy gridmetrics", tier_i, output_mode_i)
+        )
 
-    #2. time the fusion_update GridMetrics run against the matched .tif ground surface
-    res_new = fn_run_timed(
-        file.path(dir_bin_new, "gridmetrics.exe")
-      , args = c(shQuote(las_path_i), paste0("/ground:", ground_i$tif), paste0("/cellsize:", cellsize_metrics),
-                  paste0("/minht:", heightbreak), "/nointensity", paste0("/outdir:", dir_scratch),
-                  paste0("/outroot:new_gm_", tier_i, "_r", rep_i))
-      , label = paste("fusion_update gridmetrics", tier_i)
-      )
+      #2. time the fusion_update GridMetrics run -- raster_and_csv is fusion_update's
+      #   own default (no extra switch needed); csv_only adds /noraster + /output-table
+      new_outroot = paste0("new_gm_", tier_i, "_", output_mode_i, "_r", rep_i)
+      new_args = c(
+          shQuote(las_path_i), paste0("/ground:", ground_i$tif), paste0("/cellsize:", cellsize_metrics)
+        , paste0("/minht:", heightbreak), paste0("/strata:", strata_thresholds), paste0("/intstrata:", intstrata_thresholds)
+        , paste0("/outdir:", dir_scratch), paste0("/outroot:", new_outroot)
+        )
+      if(output_mode_i == "csv_only"){
+        new_args = c(new_args, "/noraster", paste0("/output-table:", file.path(dir_scratch, paste0(new_outroot, "_table.csv"))))
+        }
+      res_new = fn_run_timed(
+          file.path(dir_bin_new, "gridmetrics.exe")
+        , args = new_args
+        , label = paste("fusion_update gridmetrics", tier_i, output_mode_i)
+        )
 
-    row_i = row_i + 1L
-    list_gm_rows[[row_i]] = data.table(
-        benchmark = "gridmetrics_ground_normalized", tier = tier_i, window = NA_real_, rep = rep_i
-      , tool = c("legacy", "fusion_update"), elapsed_sec = c(res_legacy$elapsed_sec, res_new$elapsed_sec)
-      )
+      row_i = row_i + 1L
+      list_gm_rows[[row_i]] = data.table(
+          benchmark = "gridmetrics_ground_normalized", tier = tier_i, window = NA_real_
+        , output_mode = output_mode_i, rep = rep_i
+        , tool = c("legacy", "fusion_update"), elapsed_sec = c(res_legacy$elapsed_sec, res_new$elapsed_sec)
+        )
+      }
     }
   }
 dt_gridmetrics_times = rbindlist(list_gm_rows)
@@ -320,7 +352,7 @@ dt_gridmetrics_times = rbindlist(list_gm_rows)
 if(any(!is.finite(dt_gridmetrics_times$elapsed_sec) | dt_gridmetrics_times$elapsed_sec <= 0)){
   stop("step-5: one or more GridMetrics timed runs produced a non-positive or non-finite elapsed time.")
   }
-print(dt_gridmetrics_times[, .(mean_sec = mean(elapsed_sec)), by = .(tier, tool)])
+print(dt_gridmetrics_times[, .(mean_sec = mean(elapsed_sec)), by = .(tier, output_mode, tool)])
 ```
 
 # Step 6: Summarize measured timings and compute speedup factors
@@ -333,17 +365,18 @@ Speedup factors below are `legacy mean / fusion_update mean`, computed from the 
 #1. combine both benchmarks into one long table
 dt_all_times = rbind(dt_canopymodel_times, dt_gridmetrics_times, fill = TRUE)
 
-#2. mean/sd/n per benchmark x tier x window x tool
+#2. mean/sd/n per benchmark x tier x window x output_mode x tool -- output_mode
+#   is NA for the canopymodel rows (that benchmark has no output-format split)
 dt_summary_long = dt_all_times[
     , .(mean_sec = mean(elapsed_sec), sd_sec = sd(elapsed_sec), n_reps = .N)
-    , by = .(benchmark, tier, window, tool)
+    , by = .(benchmark, tier, window, output_mode, tool)
     ]
 
 #3. reshape legacy vs. fusion_update onto one row per configuration, then
 #   compute the real speedup factor from those measured means
 dt_summary_wide = dcast(
     dt_summary_long
-  , benchmark + tier + window ~ tool
+  , benchmark + tier + window + output_mode ~ tool
   , value.var = c("mean_sec", "sd_sec", "n_reps")
   )
 dt_summary_wide[, speedup_factor := round(mean_sec_legacy / mean_sec_fusion_update, 2)]
@@ -390,7 +423,7 @@ dt_cm_labels = dt_canopymodel_times[
     ]
 dt_gm_labels = dt_gridmetrics_times[
     , .(y_label = max(elapsed_sec) * 1.08, label_text = paste0(tool_short_name[tool], "\n", round(mean(elapsed_sec), 1), "s"))
-    , by = .(tier, tool)
+    , by = .(tier, output_mode, tool)
     ]
 
 #3. plot CanopyModel elapsed time by window size and tool, faceted by tier
@@ -406,7 +439,7 @@ p_canopymodel = ggplot(dt_canopymodel_times, aes(x = factor(window), y = elapsed
   scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = "#2563EB")) +
   labs(title = "CanopyModel /smooth: elapsed time", x = "Smoothing window (W)", y = "Elapsed seconds (measured)", fill = "Codebase")
 
-#4. plot GridMetrics elapsed time by tier and tool
+#4. plot GridMetrics elapsed time by tier, output mode, and tool
 p_gridmetrics = ggplot(dt_gridmetrics_times, aes(x = tier, y = elapsed_sec, fill = tool)) +
   geom_boxplot(position = position_dodge(width = 0.75), width = 0.6) +
   geom_text(
@@ -414,9 +447,10 @@ p_gridmetrics = ggplot(dt_gridmetrics_times, aes(x = tier, y = elapsed_sec, fill
     , aes(x = tier, y = y_label, label = label_text, group = tool)
     , position = position_dodge(width = 0.75), size = 3.2, fontface = "bold", show.legend = FALSE
     ) +
+  facet_wrap(~output_mode, scales = "free_y") +
   scale_y_continuous(expand = expansion(mult = c(0.05, 0.18))) +
   scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = "#2563EB")) +
-  labs(title = "GridMetrics (ground-normalized) elapsed time -- not apples-to-apples in scope, see Step 5",
+  labs(title = "GridMetrics elapsed time -- height strata + intensity matched on both tools (Step 5)",
        x = "Dataset tier", y = "Elapsed seconds (measured)", fill = "Codebase")
 
 p_combined = p_canopymodel / p_gridmetrics
