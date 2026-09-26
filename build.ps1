@@ -50,6 +50,35 @@ if (-not (Test-Path $LocalRoot)) {
 }
 Write-Host "Build output root (outside Box Sync): $LocalRoot"
 
+# Only one build may use a build root at a time. Two overlapping runs
+# share build/, bin/, dist/, and the repo's bin/ mirror: a -Reconfigure run
+# deletes build/ while the other compiles in it, both copy executables into
+# bin/ (leaving a mix of two builds), and step 6 moves the other run's
+# half-written zip into archive/ (an IOException, and an incomplete zip).
+# The lock is an exclusive open handle on build.lock, not a marker file:
+# Windows closes the handle when this process exits, even on a crash, so
+# a lock can never be left behind. A second run waits for the first.
+$lock_path = Join-Path $LocalRoot "build.lock"
+$build_lock = $null
+$lock_deadline = (Get-Date).AddMinutes(30)
+while ($null -eq $build_lock) {
+    try {
+        $build_lock = [System.IO.File]::Open($lock_path, 'OpenOrCreate', 'ReadWrite', 'None')
+    } catch [System.IO.IOException] {
+        if ((Get-Date) -gt $lock_deadline) {
+            throw "Another build.ps1 has held $lock_path for 30 minutes -- giving up. Check for a stuck build process."
+        }
+        Write-Host "Another build.ps1 is running in $LocalRoot -- waiting for it to finish..."
+        Start-Sleep -Seconds 10
+    }
+}
+# release the lock if a later step throws; the normal path releases it at
+# the end of the script
+trap {
+    if ($build_lock) { $build_lock.Dispose() }
+    break
+}
+
 # a freshly written .exe is sometimes briefly locked by antivirus real-time
 # scanning right after the file handle closes, which makes an immediate
 # Copy-Item or Compress-Archive read fail with "used by another process" --
@@ -352,5 +381,5 @@ if ($Publish) {
     Write-Host "Published release: $release_tag"
 }
 
-
+$build_lock.Dispose()
 Write-Host "Done."
