@@ -8,6 +8,15 @@ README's "Distributing built tools" section.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-26
+
+- Ground-height lookups (`GDALRaster::GetElevation`, used by every tool that
+  reads a ground DEM) now give a point up to one cell past the right or
+  bottom edge of the DEM the edge value, as they already did past the left
+  and top edges. Such points previously got no ground height.
+- Added tests for ground-height lookups near raster edges and nodata cells,
+  surface-statistics volume units and patchy grids, and the `pipeline`
+  stage list's `densitymetrics` entry.
 - `groundfilter` now classifies ground with the Kraus & Pfeifer iterative
   robust filter (legacy FUSION's `/gparam`, `/wparam`, `/aparam`,
   `/bparam`, `/iterations`, `/tolerance`, plus `/filtercell`,
