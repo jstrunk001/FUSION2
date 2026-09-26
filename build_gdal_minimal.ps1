@@ -44,20 +44,36 @@ $source_tar = Join-Path $deps_root "gdal-$GdalVersion.tar.gz"
 # freshly built below and when this script exits early because GDAL is
 # already installed, so an existing install can still pick up a missing
 # proj.db without a full -Clean rebuild.
+#
+# The proj.db schema must match the PROJ library the tools link, which comes
+# from the newest Rtools install (the same one the toolchain step below and
+# build.ps1 select). A proj.db vendored under an older Rtools is replaced
+# when it differs -- otherwise, after an Rtools upgrade, PROJ rejects it at
+# runtime ("DATABASE.LAYOUT.VERSION.MINOR ... comes from another PROJ
+# installation") and CRS lookups fail.
 function Install-ProjDb {
     param([string]$GdalInstallDir)
     $proj_data_dir = Join-Path $GdalInstallDir "share\proj"
-    if (Test-Path (Join-Path $proj_data_dir "proj.db")) {
-        return
-    }
-    $rtools_proj_db = Get-ChildItem "C:\rtools*" -Recurse -Filter "proj.db" -ErrorAction SilentlyContinue |
+    $vendored_proj_db = Join-Path $proj_data_dir "proj.db"
+    $rtools_proj_db = Get-ChildItem "C:\" -Directory -Filter "rtools*" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        ForEach-Object { Get-ChildItem $_.FullName -Recurse -Filter "proj.db" -ErrorAction SilentlyContinue } |
         Select-Object -First 1
     if ($rtools_proj_db) {
+        if (Test-Path $vendored_proj_db) {
+            $same = (Get-FileHash $vendored_proj_db).Hash -eq (Get-FileHash $rtools_proj_db.FullName).Hash
+            if ($same) {
+                return
+            }
+            Write-Host "Vendored proj.db differs from $($rtools_proj_db.FullName) -- replacing it to match the linked PROJ."
+        }
         if (-not (Test-Path $proj_data_dir)) {
             New-Item -ItemType Directory -Path $proj_data_dir | Out-Null
         }
-        Copy-Item $rtools_proj_db.FullName (Join-Path $proj_data_dir "proj.db") -Force
+        Copy-Item $rtools_proj_db.FullName $vendored_proj_db -Force
         Write-Host "Vendored proj.db from $($rtools_proj_db.FullName) into $proj_data_dir"
+    } elseif (Test-Path $vendored_proj_db) {
+        return
     } else {
         Write-Warning "No proj.db found under C:\rtools* -- built tools will fall back to PROJ's default (slower, warning-emitting) search at runtime."
     }

@@ -88,15 +88,23 @@ if(WIN32)
     # own -- a separate start-group/end-group pair here previously broke
     # resolution of unrelated symbols (libcrypto's zlib/winsock refs) by
     # splitting what GNU ld needs to treat as one atomic resolution pass.
-    # deflate, nghttp2, psl, brotlidec, and brotlicommon are not present as
-    # static libraries in the current Rtools 4.3 toolchain (they were
-    # present under a previous Rtools 4.5 install this project was last
-    # built against) -- dropped from this group since GDAL is vendored with
+    # deflate, nghttp2, psl, brotlidec, and brotlicommon ship as static
+    # libraries in Rtools 4.5 but not in Rtools 4.3. GDAL is vendored with
     # GDAL_USE_CURL=OFF/GDAL_USE_DEFLATE=OFF (see build_gdal_minimal.ps1),
-    # so libgdal.a itself never calls into them; PROJ's own curl usage
-    # (found transitively via find_dependency(PROJ CONFIG)) is limited to
-    # optional network grid downloads this project's local-file-only tools
-    # never trigger.
+    # so libgdal.a itself never calls into them, but PROJ pulls in the
+    # toolchain's static libcurl (found transitively via
+    # find_dependency(PROJ CONFIG)), and Rtools 4.5's libcurl.a references
+    # nghttp2/psl/brotli symbols. Each is added to the group only when the
+    # toolchain actually has it, so the same file links under either Rtools.
+    set(FUSION_OPTIONAL_CURL_DEPS "")
+    foreach(optional_lib nghttp2 psl brotlidec brotlicommon deflate)
+        find_library(FUSION_LIB_${optional_lib} NAMES ${optional_lib})
+        if(FUSION_LIB_${optional_lib})
+            list(APPEND FUSION_OPTIONAL_CURL_DEPS ${optional_lib})
+        endif()
+    endforeach()
+    message(STATUS "Optional static curl dependencies linked: ${FUSION_OPTIONAL_CURL_DEPS}")
+
     target_link_libraries(fusion_core PUBLIC
         -Wl,--start-group
         ${LASZIP_BASE_LIBRARY}
@@ -122,6 +130,7 @@ if(WIN32)
         gpg-error
         idn2
         unistring
+        ${FUSION_OPTIONAL_CURL_DEPS}
         -Wl,--end-group
     )
 endif()
