@@ -125,8 +125,9 @@ Write-Host "Building FUSION2 tools v$bundle_version"
 #    released, and remind about the changelog -- checked now, before the
 #    (potentially long) compile step, not after
 if ($Publish) {
-    $prior_release_tags = & gh release list --limit 100 2>$null |
-        ForEach-Object { ($_ -split "`t")[0] } |
+    # (ask gh for tag names directly: the first column of gh's plain-text
+    # listing is the release title, not its tag)
+    $prior_release_tags = & gh release list --limit 100 --json tagName --jq ".[].tagName" 2>$null |
         Where-Object { $_ -like "tools-v*" }
     $prior_versions = $prior_release_tags | ForEach-Object {
         [regex]::Match($_, '^tools-v([0-9]+\.[0-9]+\.[0-9]+)').Groups[1].Value
@@ -364,8 +365,7 @@ Write-Host "Created bundle: $bundle_path (verified all $($tool_names.Count) exec
 if ($Publish) {
     Write-Host "Publishing $bundle_path to GitHub Releases..."
     $release_tag = "tools-v$bundle_version"
-    $existing_releases = & gh release list --limit 100 2>$null |
-        ForEach-Object { ($_ -split "`t")[0] } |
+    $existing_releases = & gh release list --limit 100 --json tagName --jq ".[].tagName" 2>$null |
         Where-Object { $_ -like "tools-v*" }
     foreach ($existing_tag in $existing_releases) {
         Write-Host "Deleting previous release: $existing_tag"
