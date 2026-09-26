@@ -1,4 +1,4 @@
-// topometrics.cpp : Modernized TopoMetrics Executable for FUSION Update
+// topometrics.cpp : Modernized TopoMetrics Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"

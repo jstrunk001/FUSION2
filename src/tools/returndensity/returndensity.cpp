@@ -1,4 +1,4 @@
-// returndensity.cpp : Modernized ReturnDensity Executable for FUSION Update
+// returndensity.cpp : Modernized ReturnDensity Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"

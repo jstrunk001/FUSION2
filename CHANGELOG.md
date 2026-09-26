@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to the FUSION Update tool suite, one section per published
+Notable changes to the FUSION2 tool suite, one section per published
 version. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 Versions match the `VERSION` set in `CMakeLists.txt`'s `project()` call,
 which `build.ps1` reads to build each release's tag and title -- see the
@@ -8,6 +8,13 @@ README's "Distributing built tools" section.
 
 ## [Unreleased]
 
+- Renamed the project from "FUSION Update" (`fusion_update`) to FUSION2,
+  matching the GitHub repository name: CMake project name, `vcpkg.json`
+  name, LAS header generating-software field, docs, and source headers.
+  `build.ps1` now builds under `%LOCALAPPDATA%\FUSION2_build` and names
+  bundles `FUSION2_tools_v<version>.zip`. `speed_benchmark.qmd` records
+  the new tools as `fusion2`; `fusion_evaluation_report.qmd` still reads
+  earlier results labeled `fusion_update`.
 - Point cloud outputs (`filterdata`, `thindata`, `clipdata`,
   `groundfilter /output-points`, `pipeline` tile clips) now keep the
   input's header global encoding bits (GPS time type; WKT flag) and its

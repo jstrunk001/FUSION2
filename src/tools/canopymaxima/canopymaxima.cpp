@@ -1,4 +1,4 @@
-// canopymaxima.cpp : Modernized CanopyMaxima Executable for FUSION Update
+// canopymaxima.cpp : Modernized CanopyMaxima Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"

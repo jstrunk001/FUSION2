@@ -1,6 +1,6 @@
 <#
 Builds a minimal static build of LASzip (LAZ compression/decompression)
-tailored for FUSION Update tools.
+tailored for FUSION2 tools.
 
 Produces a static liblaszip3.a / liblaszip_api3.a plus the laszip_api.h C API
 header in deps/laszip_minimal/, with zero external DLL dependencies. Mirrors

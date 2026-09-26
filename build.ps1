@@ -1,5 +1,5 @@
 <#
-Builds all FUSION Update tools, bundles the resulting .exe files into a
+Builds all FUSION2 tools, bundles the resulting .exe files into a
 versioned zip, and (optionally) publishes that zip as a GitHub Release
 asset.
 
@@ -8,7 +8,7 @@ Usage:
   .\build.ps1 -Publish         # also publish the bundle to GitHub Releases
                                  and delete the previous release
   .\build.ps1 -VcpkgRoot "C:\vcpkg"   # pass a vcpkg toolchain file
-  .\build.ps1 -LocalRoot "G:\fusion_update_build"   # use a different local drive
+  .\build.ps1 -LocalRoot "G:\FUSION2_build"   # use a different local drive
 
 Layout this script maintains, rooted under $LocalRoot rather than the repo
 itself (see -LocalRoot's default below and its comment for why):
@@ -31,7 +31,7 @@ param(
   # actually faster once that hosting-location overhead is removed.
   # $env:LOCALAPPDATA is per-user, never cloud-synced, and exists on any
   # Windows machine without hardcoding a specific drive letter.
-  , [string]$LocalRoot = (Join-Path $env:LOCALAPPDATA "fusion_update_build")
+  , [string]$LocalRoot = (Join-Path $env:LOCALAPPDATA "FUSION2_build")
   , [string]$BuildDir = (Join-Path $LocalRoot "build")
   , [switch]$Reconfigure
   , [switch]$FullGDAL
@@ -90,7 +90,7 @@ if (-not $version_match.Success) {
 $project_version = $version_match.Groups[1].Value
 $build_stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $bundle_version = "$project_version-$build_stamp"
-Write-Host "Building FUSION Update tools v$bundle_version"
+Write-Host "Building FUSION2 tools v$bundle_version"
 
 #1a. when publishing, request a version bump if this version was already
 #    released, and remind about the changelog -- checked now, before the
@@ -303,7 +303,7 @@ foreach ($previous_bundle in $previous_bundles) {
 }
 
 #7. zip the freshly built exes (and PDF manual if present) into the new versioned bundle
-$bundle_name = "fusion_update_tools_v$bundle_version.zip"
+$bundle_name = "FUSION2_tools_v$bundle_version.zip"
 $bundle_path = Join-Path $dist_dir $bundle_name
 $zip_paths = $tool_names | ForEach-Object { Join-Path $bin_dir "$_.exe" }
 if (Test-Path $pdf_doc_path) {

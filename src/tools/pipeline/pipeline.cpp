@@ -1,4 +1,4 @@
-// pipeline.cpp : Multi-tool batch pipeline orchestrator for FUSION Update
+// pipeline.cpp : Multi-tool batch pipeline orchestrator for FUSION2
 //
 // Tiles/buffers the input point cloud once, then -- per tile -- chains any
 // of the registered tools (see fusion/batch/StageRegistry.h) by spawning

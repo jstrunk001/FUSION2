@@ -1,4 +1,4 @@
-// cloudmetrics.cpp : Modernized CloudMetrics Executable for FUSION Update
+// cloudmetrics.cpp : Modernized CloudMetrics Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"

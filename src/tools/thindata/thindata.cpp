@@ -1,4 +1,4 @@
-// thindata.cpp : Modernized ThinData Executable for FUSION Update
+// thindata.cpp : Modernized ThinData Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/lidar/InputResolver.h"

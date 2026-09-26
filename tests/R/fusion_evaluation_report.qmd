@@ -1,6 +1,6 @@
 ---
 title: "Intensive Evaluation & Performance Benchmark Report"
-subtitle: "Comparative Analysis of Modernized `fusion_update` vs. Legacy `FUSION v4.40` Codebase"
+subtitle: "Comparative Analysis of Modernized FUSION2 vs. Legacy `FUSION v4.40` Codebase"
 author: "Forestry & LiDAR Data Science Team"
 date: "`r Sys.Date()`"
 format:
@@ -72,19 +72,19 @@ the auto-generated index page does not exist for this output format.
 
 - @fig-study-area -- Real ground elevation surface and LiDAR point density, large tile
 - @fig-derivatives -- Real canopy height model, slope, aspect, and canopy cover
-- @fig-speed-benchmark -- Measured elapsed time, legacy vs. fusion_update
-- @fig-output-comparison -- Cell-by-cell difference and agreement, real legacy vs. fusion_update CHM
+- @fig-speed-benchmark -- Measured elapsed time, legacy vs. FUSION2
+- @fig-output-comparison -- Cell-by-cell difference and agreement, real legacy vs. FUSION2 CHM
 - @fig-multi-input-chm-diff -- CHM agreement, directory-of-tiles inputs vs. single-file inputs
 
 # 1. Overview & Objectives
 
-This report presents an **intensive evaluation and performance benchmark** of the modernized `fusion_update` C++ codebase compared to the legacy `FUSION v4.40` software suite. 
+This report presents an **intensive evaluation and performance benchmark** of the modernized FUSION2 C++ codebase compared to the legacy `FUSION v4.40` software suite. 
 
 ### Key Modernization Goals Evaluated:
 1. **Raster Handling Modernization**: Transition from custom proprietary `.dtm` binary structures to industry-standard GDAL/GeoTIFF raster formats.
 2. **Point Cloud Format Expansion**: Native support for LAS and LAZ compressed point cloud files via modern point cloud IO libraries.
 3. **Execution Speed & Scalability**: Multi-threaded parallel processing and SIMD vectorization for high-throughput metric generation.
-4. **Output Result Fidelity**: Rigorous numerical cell-by-cell equivalence testing between `fusion_update` rasters and legacy outputs.
+4. **Output Result Fidelity**: Rigorous numerical cell-by-cell equivalence testing between FUSION2 rasters and legacy outputs.
 5. **Directory & Multi-File Input Flexibility**: Verifying that every point-cloud tool accepts a directory of `.las`/`.laz` tiles in place of one file, and that every ground-normalizing tool accepts a directory of DTM raster tiles in place of one pre-mosaicked surface, with no change in the numbers produced.
 
 ---
@@ -166,8 +166,8 @@ fn_resolve_dir_bin = function(required_tools, candidates){
 tools_needed = c("catalog", "groundfilter", "canopymodel", "gridmetrics", "topometrics")
 dir_bin = fn_resolve_dir_bin(tools_needed, c(
     normalizePath(file.path("..", "..", "build"), mustWork = FALSE)
-  , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "build")
-  , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "bin")
+  , file.path(Sys.getenv("LOCALAPPDATA"), "FUSION2_build", "build")
+  , file.path(Sys.getenv("LOCALAPPDATA"), "FUSION2_build", "bin")
   , normalizePath(file.path("..", "..", "bin"), mustWork = FALSE)
   ))
 cat("Using executables from:", dir_bin, "\n")
@@ -345,11 +345,11 @@ p_cover_map <- ggplot(df_cover, aes(x = x, y = y, fill = Value)) +
 
 ---
 
-# 5. Speed Benchmarks: `fusion_update` vs Old Code
+# 5. Speed Benchmarks: FUSION2 vs Old Code
 
-The numbers and charts below are real `proc.time()` wall-clock measurements from actually running the compiled legacy FUSION v4.40 executables and the compiled `fusion_update` executables against real point-cloud tiles -- produced by [`speed_benchmark.qmd`](speed_benchmark.qmd) in this same folder, not estimated or hand-entered. That script should be re-run after any change to performance-sensitive code (raster sampling, point-cloud I/O, per-cell metric accumulation, smoothing/filtering passes), and this chunk always displays its latest saved results rather than re-running those tool timings itself, since the large-tile `GridMetrics` run alone takes several minutes.
+The numbers and charts below are real `proc.time()` wall-clock measurements from actually running the compiled legacy FUSION v4.40 executables and the compiled FUSION2 executables against real point-cloud tiles -- produced by [`speed_benchmark.qmd`](speed_benchmark.qmd) in this same folder, not estimated or hand-entered. That script should be re-run after any change to performance-sensitive code (raster sampling, point-cloud I/O, per-cell metric accumulation, smoothing/filtering passes), and this chunk always displays its latest saved results rather than re-running those tool timings itself, since the large-tile `GridMetrics` run alone takes several minutes.
 
-```{r fig-speed-benchmark, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.cap="Measured elapsed time, legacy vs. fusion_update: CanopyModel across smoothing windows, and GridMetrics across both output-format modes (from speed_benchmark.qmd)."}
+```{r fig-speed-benchmark, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9, fig.cap="Measured elapsed time, legacy vs. FUSION2: CanopyModel across smoothing windows, and GridMetrics across both output-format modes (from speed_benchmark.qmd)."}
 # ==============================================================================
 # Chunk 5: Real Execution Speed Benchmark (from speed_benchmark.qmd)
 # ==============================================================================
@@ -367,12 +367,18 @@ if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
 } else {
   dt_speed_summary = data.table::fread(path_speed_summary)
   dt_speed_raw = data.table::fread(path_speed_raw)
+
+  # results saved before the FUSION2 rename label the new tools
+  # "fusion_update" (and name the summary columns *_fusion_update);
+  # translate those so older and newer result files read the same way
+  dt_speed_raw[tool == "fusion_update", tool := "fusion2"]
+  data.table::setnames(dt_speed_summary, gsub("_fusion_update$", "_fusion2", names(dt_speed_summary)))
   print(dt_speed_summary)
 
   # mean-elapsed-seconds labels above each box -- with as few as 1-3 reps
   # per cell, box height alone is hard to compare across free-scaled
   # facets, so the exact measured mean is printed above every box
-  tool_short_name = c(legacy = "legacy", fusion_update = "update")
+  tool_short_name = c(legacy = "legacy", fusion2 = "FUSION2")
   dt_cm_labels = dt_speed_raw[
       benchmark == "canopymodel_smooth"
       , .(y_label = max(elapsed_sec) * 1.08, label_text = paste0(tool_short_name[tool], "\n", round(mean(elapsed_sec), 1), "s"))
@@ -393,7 +399,7 @@ if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
       ) +
     facet_wrap(~tier, scales = "free_y") +
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.18))) +
-    scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = PALETTE_BLUE)) +
+    scale_fill_manual(values = c(legacy = "#94A3B8", fusion2 = PALETTE_BLUE)) +
     labs(title = "CanopyModel /smooth: measured elapsed time", y = "Elapsed seconds (measured)", x = "Smoothing window (W)", fill = "Codebase Version") +
     theme(legend.position = "bottom")
 
@@ -406,7 +412,7 @@ if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
       ) +
     facet_wrap(~output_mode, scales = "free_y") +
     scale_y_continuous(expand = expansion(mult = c(0.05, 0.18))) +
-    scale_fill_manual(values = c(legacy = "#94A3B8", fusion_update = PALETTE_BLUE)) +
+    scale_fill_manual(values = c(legacy = "#94A3B8", fusion2 = PALETTE_BLUE)) +
     labs(title = "GridMetrics measured elapsed time -- height strata + intensity matched on both tools",
          subtitle = "csv_only and raster_and_csv are each tool's real output-format counterpart -- see speed_benchmark.qmd Step 5",
          y = "Elapsed seconds (measured)", x = "Dataset tier", fill = "Codebase Version") +
@@ -420,11 +426,11 @@ if (!file.exists(path_speed_summary) || !file.exists(path_speed_raw)) {
 
 # 6. Output Results Comparison & Numerical Fidelity
 
-This section compares two genuinely different algorithms -- legacy FUSION's TIN-based canopy surface fit and `fusion_update`'s max-elevation-per-cell grid -- run on the same real tile with matching ground normalization, smoothing window, and cell size. It reports how they actually differ, not an assumed perfect match.
+This section compares two genuinely different algorithms -- legacy FUSION's TIN-based canopy surface fit and FUSION2's max-elevation-per-cell grid -- run on the same real tile with matching ground normalization, smoothing window, and cell size. It reports how they actually differ, not an assumed perfect match.
 
-```{r fig-output-comparison, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=4.5, fig.cap="Cell-by-cell difference and agreement between real legacy and fusion_update canopy height models, same real tile, matched ground/smoothing/cell size."}
+```{r fig-output-comparison, include=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=4.5, fig.cap="Cell-by-cell difference and agreement between real legacy and FUSION2 canopy height models, same real tile, matched ground/smoothing/cell size."}
 # ==============================================================================
-# Chunk 6: Cell-by-Cell Raster Agreement -- Real Legacy vs. fusion_update CHM
+# Chunk 6: Cell-by-Cell Raster Agreement -- Real Legacy vs. FUSION2 CHM
 # ==============================================================================
 
 dir_legacy = "C:/FUSION"
@@ -443,7 +449,7 @@ system2(file.path(dir_legacy, "ASCII2DTM64.exe")
        , stdout = FALSE)
 
 #2. run legacy CanopyModel with the same ground surface, smoothing window,
-#   and cell size as fusion_update's real CHM in Chunk 4, in float-precision
+#   and cell size as FUSION2's real CHM in Chunk 4, in float-precision
 #   ASCII output (DTM2TIF's grayscale conversion would lose precision)
 path_legacy_chm_dtm = file.path(dir_report_real, "legacy_chm.dtm")
 path_legacy_chm_asc = file.path(dir_report_real, "legacy_chm.asc")
@@ -453,8 +459,8 @@ system2(file.path(dir_legacy, "canopymodel64.exe")
        , stdout = FALSE)
 r_chm_legacy_raw = terra::rast(path_legacy_chm_asc)
 
-#3. legacy and fusion_update snap their grid origins slightly differently --
-#   resample legacy's surface onto fusion_update's exact grid (bilinear) so
+#3. legacy and FUSION2 snap their grid origins slightly differently --
+#   resample legacy's surface onto FUSION2's exact grid (bilinear) so
 #   the two can be differenced cell-for-cell; both were built at the same
 #   2m cell size, so this resampling is a sub-cell alignment correction,
 #   not a resolution change
@@ -481,7 +487,7 @@ p_diff_map <- ggplot(df_diff, aes(x = x, y = y, fill = Difference)) +
   geom_raster() +
   scale_fill_gradient2(low = PALETTE_BLUE, mid = "white", high = PALETTE_CRIMSON, midpoint = 0, name = "Delta (m)",
                         limits = quantile(df_diff$Difference, c(0.01, 0.99), na.rm = TRUE), oob = scales::squish) +
-  labs(title = "Raster Difference Map (fusion_update - Legacy)", subtitle = "Real CHMs, same ground/smooth/cellsize; display clipped at 1st-99th pct.")
+  labs(title = "Raster Difference Map (FUSION2 - Legacy)", subtitle = "Real CHMs, same ground/smooth/cellsize; display clipped at 1st-99th pct.")
 
 # Scatter Plot Agreement -- a random subsample of real cells, not the first N
 # (the first N cells are one spatial corner, not a representative sample)
@@ -494,7 +500,7 @@ p_scatter <- ggplot(df_scatter, aes(x = Legacy, y = Update)) +
   labs(
     title = paste0("Linear Agreement (R² = ", round(r2, 4), ")"),
     subtitle = paste0("RMSE: ", sprintf("%.3f", rmse), " m | MAE: ", sprintf("%.3f", mae), " m | max |delta|: ", sprintf("%.2f", max_delta), " m"),
-    x = "Legacy Output Value (m)", y = "fusion_update GeoTIFF Value (m)"
+    x = "Legacy Output Value (m)", y = "FUSION2 GeoTIFF Value (m)"
   )
 
 p_diff_map + p_scatter
@@ -518,8 +524,8 @@ Sections 3-6 above already run the real, compiled executables against the projec
 if(!all(file.exists(file.path(dir_bin, c("clipdata.exe", "cloudmetrics.exe"))))){
   dir_bin = fn_resolve_dir_bin(c(tools_needed, "clipdata", "cloudmetrics"), c(
       normalizePath(file.path("..", "..", "build"), mustWork = FALSE)
-    , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "build")
-    , file.path(Sys.getenv("LOCALAPPDATA"), "fusion_update_build", "bin")
+    , file.path(Sys.getenv("LOCALAPPDATA"), "FUSION2_build", "build")
+    , file.path(Sys.getenv("LOCALAPPDATA"), "FUSION2_build", "bin")
     , normalizePath(file.path("..", "..", "bin"), mustWork = FALSE)
     ))
   }
@@ -649,7 +655,7 @@ system2(
   , stdout = FALSE
   )
 
-cat("All 5 real fusion_update.exe comparison runs completed.\n")
+cat("All 5 real FUSION2 comparison runs completed.\n")
 ```
 
 ```{r multi-input-pc-comparison, include=TRUE, message=FALSE, warning=FALSE}
@@ -893,9 +899,9 @@ The `PASS`/`FAIL` lines above are the re-runnable form of the sentinel-policy ru
 
 ---
 
-# 9. Proposed Intensive Testing Suite for `fusion_update`
+# 9. Proposed Intensive Testing Suite for FUSION2
 
-To guarantee production robustness, we propose a **6-domain intensive testing matrix** specifically tailored for validating `fusion_update` CLI executables (`canopymodel`, `groundfilter`, `gridmetrics`, `catalog`, `clipdata`, `ltktools`).
+To guarantee production robustness, we propose a **6-domain intensive testing matrix** specifically tailored for validating FUSION2 CLI executables (`canopymodel`, `groundfilter`, `gridmetrics`, `catalog`, `clipdata`, `ltktools`).
 
 ```{r intensive-tests-proposal, include=TRUE, message=FALSE, warning=FALSE}
 # ==============================================================================
@@ -943,7 +949,7 @@ test_matrix <- data.frame(
 # Display Interactive Test Matrix
 datatable(
   test_matrix,
-  caption = "Table 2: Proposed Intensive Test Suite for fusion_update Validation",
+  caption = "Table 2: Proposed Intensive Test Suite for FUSION2 Validation",
   options = list(pageLength = 6, searchHighlight = TRUE),
   rownames = FALSE
 ) %>%
@@ -967,6 +973,7 @@ datatable(
 #1. re-load the same speed-benchmark summary Section 5 displays, so every
 #   number below is read from that file, not retyped by hand
 dt_exec_speed = data.table::fread(RForInvt::file_version(file.path("output", "speed_benchmark_summary.csv")))
+data.table::setnames(dt_exec_speed, gsub("_fusion_update$", "_fusion2", names(dt_exec_speed)))
 cm_large = dt_exec_speed[benchmark == "canopymodel_smooth" & tier == "large_6.1M_pts"]
 gm_large = dt_exec_speed[benchmark == "gridmetrics_ground_normalized" & tier == "large_6.1M_pts"]
 
@@ -997,10 +1004,10 @@ summary_tbl <- data.frame(
     "Single file only, per tool invocation",
     "Baseline (Deprecated)"
   ),
-  Fusion_Update = c(
-    paste0(round(min(cm_large$mean_sec_fusion_update),1), "-", round(max(cm_large$mean_sec_fusion_update),1), "s (", canopymodel_range, " faster, widens with window size)"),
-    paste0(round(gm_large[output_mode == "csv_only"]$mean_sec_fusion_update,1), "s (", gm_csv_speedup, "x faster)"),
-    paste0(round(gm_large[output_mode == "raster_and_csv"]$mean_sec_fusion_update,1), "s (", gm_raster_speedup, "x faster) -- one multiband GeoTIFF write"),
+  FUSION2 = c(
+    paste0(round(min(cm_large$mean_sec_fusion2),1), "-", round(max(cm_large$mean_sec_fusion2),1), "s (", canopymodel_range, " faster, widens with window size)"),
+    paste0(round(gm_large[output_mode == "csv_only"]$mean_sec_fusion2,1), "s (", gm_csv_speedup, "x faster)"),
+    paste0(round(gm_large[output_mode == "raster_and_csv"]$mean_sec_fusion2,1), "s (", gm_raster_speedup, "x faster) -- one multiband GeoTIFF write"),
     "Not measured in this report",
     "Industry standard GeoTIFF via GDAL",
     paste0("R²=", round(r2,3), ", RMSE=", sprintf("%.3f", rmse), "m, MAE=", sprintf("%.3f", mae), "m vs. legacy -- different algorithm (max-per-cell vs. TIN), not identical by design"),
@@ -1015,7 +1022,7 @@ flextable(summary_tbl) %>%
   set_header_labels(
     Evaluation_Category = "Evaluation Category",
     Legacy_v440 = "Legacy FUSION v4.40",
-    Fusion_Update = "Modernized fusion_update",
+    FUSION2 = "Modernized FUSION2",
     Status = "Basis"
   ) %>%
   theme_vanilla() %>%
@@ -1031,7 +1038,7 @@ flextable(summary_tbl) %>%
 
 ::: {.callout-tip}
 ## Key Conclusion & Strategic Recommendation
-`fusion_update` eliminates the legacy `.dtm` file format dependency in favor of GDAL GeoTIFF rasters and native LAS/LAZ point cloud IO. Measured on this report's real large tile (6.1M points): CanopyModel's `/smooth:` fix delivers `r canopymodel_range` faster wall-clock time, widening as the smoothing window grows -- the expected signature of its O(W²)→O(W) algorithmic change. GridMetrics, with height-strata and intensity metrics matched between both tools, is `r gm_csv_speedup`x faster in CSV-only mode and `r gm_raster_speedup`x faster when both tools write their native raster output -- the latter number reflecting legacy's one-file-per-layer write pattern at least as much as any per-point computation difference (see `speed_benchmark.qmd` Step 5). Section 6's real cell-by-cell comparison shows the two tools' CHM outputs do **not** match exactly (R²=`r round(r2,3)`) -- expected, since they use different surface-fitting algorithms, not a defect in either. Memory usage was not profiled in this report; that claim from an earlier draft is removed rather than restated without evidence. Section 7's live executable runs confirm that directory-of-tiles inputs (point clouds and ground DTMs alike) produce the same metrics and rasters as their single-file equivalents, with one open item: the ground-DTM directory path does not carry the source tiles' NoData value through to its own diagnostic log line.
+FUSION2 eliminates the legacy `.dtm` file format dependency in favor of GDAL GeoTIFF rasters and native LAS/LAZ point cloud IO. Measured on this report's real large tile (6.1M points): CanopyModel's `/smooth:` fix delivers `r canopymodel_range` faster wall-clock time, widening as the smoothing window grows -- the expected signature of its O(W²)→O(W) algorithmic change. GridMetrics, with height-strata and intensity metrics matched between both tools, is `r gm_csv_speedup`x faster in CSV-only mode and `r gm_raster_speedup`x faster when both tools write their native raster output -- the latter number reflecting legacy's one-file-per-layer write pattern at least as much as any per-point computation difference (see `speed_benchmark.qmd` Step 5). Section 6's real cell-by-cell comparison shows the two tools' CHM outputs do **not** match exactly (R²=`r round(r2,3)`) -- expected, since they use different surface-fitting algorithms, not a defect in either. Memory usage was not profiled in this report; that claim from an earlier draft is removed rather than restated without evidence. Section 7's live executable runs confirm that directory-of-tiles inputs (point clouds and ground DTMs alike) produce the same metrics and rasters as their single-file equivalents, with one open item: the ground-DTM directory path does not carry the source tiles' NoData value through to its own diagnostic log line.
 
-We recommend proceeding with the **6-domain intensive test matrix** (Table 2) prior to deploying `fusion_update` into automated production pipelines.
+We recommend proceeding with the **6-domain intensive test matrix** (Table 2) prior to deploying FUSION2 into automated production pipelines.
 :::

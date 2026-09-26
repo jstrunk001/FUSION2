@@ -1,6 +1,6 @@
-# FUSION Update Documentation Suite
+# FUSION2 Documentation Suite
 
-Welcome to the technical documentation suite for **FUSION Update**, a modern GDAL-based raster handling and native LAS/LAZ point cloud engine for forestry lidar data processing, terrain analysis, individual tree detection, and batch processing.
+Welcome to the technical documentation suite for **FUSION2**, a modern GDAL-based raster handling and native LAS/LAZ point cloud engine for forestry lidar data processing, terrain analysis, individual tree detection, and batch processing.
 
 Originally developed by Robert J. McGaughey at the USDA Forest Service / Pacific Northwest Research Station, the FUSION software suite provides comprehensive tools for processing airborne laser scanning (ALS) and terrestrial point cloud datasets. This modern update replaces legacy binary formats with standard GDAL rasters (GeoTIFF, VRT) and direct `.las`/`.laz` reader/writer infrastructure.
 

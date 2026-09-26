@@ -362,7 +362,7 @@ bool LASWriter::Open(const std::filesystem::path& filePath, const LASHeaderInfo&
     if (!headerInfo.systemID.empty()) {
         std::strncpy(hdr.system_identifier, headerInfo.systemID.c_str(), sizeof(hdr.system_identifier) - 1);
     }
-    std::strncpy(hdr.generating_software, "FUSION Update", sizeof(hdr.generating_software) - 1);
+    std::strncpy(hdr.generating_software, "FUSION2", sizeof(hdr.generating_software) - 1);
 
     // Global encoding: carry bit 0 (GPS time type) through from the input so
     // point timestamps keep their meaning. Set bit 4 (WKT) whenever a WKT

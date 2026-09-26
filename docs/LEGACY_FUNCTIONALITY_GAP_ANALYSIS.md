@@ -1,14 +1,14 @@
-# Functional Comparison: Legacy FUSION (v4.40) vs. Modernized `fusion_update`
+# Functional Comparison: Legacy FUSION (v4.40) vs. Modernized FUSION2
 
-This document inventories the functionality present in the original USDA Forest Service FUSION suite (Version 4.40 and LiDAR Toolkit / LTK) that is not currently implemented in the modernized `fusion_update` codebase.
+This document inventories the functionality present in the original USDA Forest Service FUSION suite (Version 4.40 and LiDAR Toolkit / LTK) that is not currently implemented in the modernized FUSION2 codebase.
 
 Per guidance, format-conversion programs dedicated strictly to legacy PLANS `.dtm`, binary `.lda`, and ASCII raster formats (such as `ASCII2DTM`, `DTM2ASCII`, `DTM2ENVI`, `DTM2TIF`, `DTM2XYZ`, `XYZ2DTM`, `ClipDTM`, `MergeDTM`, `SplitDTM`, `RepairGridDTM`, `DTMDescribe`, `LDA2LAS`, `LDAtoASCII`, `LDAConvert`, `ASC2ASC`, `ASCII3D`, and `ASCImport`) are excluded from this comparison.
 
 ---
 
-## 1. Summary of Current `fusion_update` Toolset
+## 1. Summary of Current FUSION2 Toolset
 
-The `fusion_update` suite focuses on replacing the legacy `.dtm` raster format with native GDAL GeoTIFF support, streaming direct `.las` and `.laz` point cloud input and output, and multithreading batch execution. It provides 15 command-line tools:
+The FUSION2 suite focuses on replacing the legacy `.dtm` raster format with native GDAL GeoTIFF support, streaming direct `.las` and `.laz` point cloud input and output, and multithreading batch execution. It provides 15 command-line tools:
 
 1. `gridmetrics` (gridded canopy and elevation metric rasters, single-file and batch/tiled mode, with height and intensity strata)
 2. `cloudmetrics` (point cloud summary metrics, for the whole cloud or one row per `/shape` polygon)
@@ -30,7 +30,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-## 2. Functionality in Original FUSION Missing from `fusion_update`
+## 2. Functionality in Original FUSION Missing from FUSION2
 
 ### A. Interactive Graphical Environments
 
@@ -57,7 +57,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
    - Clips point clouds using polygon geometries from ESRI shapefiles.
    - **Multi-file Clipping (`/multifile`)**: Automatically iterates over features in a shapefile (such as forest inventory plots, harvest units, or stand boundaries) and writes a distinct, properly attributed LAS/LAZ file for each polygon, named using a designated attribute column (via `/shape:field`).
    - Supports inverted clipping (`/outside`) to extract points outside polygon boundaries.
-   - *Status in `fusion_update`*: ported into `clipdata`. `/shape:<file.shp>` clips to polygon features (in addition to any `/extent`), `/multifile` writes one LAS/LAZ per feature named by `/field:<attribute>` (falling back to a zero-padded feature index), and `/outside` keeps points outside every polygon (single-clip mode only). `cloudmetrics /shape` similarly computes one metrics row per polygon.
+   - *Status in FUSION2*: ported into `clipdata`. `/shape:<file.shp>` clips to polygon features (in addition to any `/extent`), `/multifile` writes one LAS/LAZ per feature named by `/field:<attribute>` (falling back to a zero-padded feature index), and `/outside` keeps points outside every polygon (single-clip mode only). `cloudmetrics /shape` similarly computes one metrics row per polygon.
 
 ---
 
@@ -82,7 +82,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
    - **3D Surface Area vs. Planimetric Area**: Calculates the true 3D surface area of complex terrain (accounting for slope and micro-topography) compared to nominal 2D planimetric area.
    - **Volume & Cut/Fill**: Calculates volume between a surface and a reference datum or bare-earth ground model.
    - **Roughness & Topographic Complexity**: Computes surface roughness and terrain texture metrics across user-specified sample factors.
-   - *Status in `fusion_update`*: largely ported. `gridsurfacestats` writes per-cell surface area ratio and roughness bands from a surface GeoTIFF, plus a `volume_diff` cut/fill band when given a second surface with `/reference`. `cloudmetrics /surfstats` reports surface area ratio, roughness, planimetric area, and 3D surface area for a point cloud's top-of-cloud grid. Legacy's user-specified sample factors have no direct equivalent.
+   - *Status in FUSION2*: largely ported. `gridsurfacestats` writes per-cell surface area ratio and roughness bands from a surface GeoTIFF, plus a `volume_diff` cut/fill band when given a second surface with `/reference`. `cloudmetrics /surfstats` reports surface area ratio, roughness, planimetric area, and 3D surface area for a point cloud's top-of-cloud grid. Legacy's user-specified sample factors have no direct equivalent.
 2. **`GridSample` & `SurfaceSample`**:
    - Extracts surface model elevations at specific point coordinates provided in a CSV or text table (such as field inventory plot centers), with optional window neighborhood sampling.
 3. **`ModelMath` & `SRSGridMath`**:
@@ -108,7 +108,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
    - Includes the `/lastnotfirst` switch, which isolates true penetrated returns (last returns from pulses that had multiple returns) from single-return pulses.
 4. **`DensityMetrics`**:
    - Computes return density across vertical height slices (elevation bands above ground) on a spatial grid, evaluating vertical distribution and foliage layer density.
-   - *Status in `fusion_update`*: ported as `densitymetrics`. Height-slice breaks are set with `/strata`, heights are taken above a `/ground` DEM, and output is a multi-band GeoTIFF plus an optional per-cell CSV or SQLite table (`/output-table`) of stratum counts and total returns.
+   - *Status in FUSION2*: ported as `densitymetrics`. Height-slice breaks are set with `/strata`, heights are taken above a `/ground` DEM, and output is a multi-band GeoTIFF plus an optional per-cell CSV or SQLite table (`/output-table`) of stratum counts and total returns.
 5. **`Cover`**:
    - Dedicated canopy closure tool calculating cover and penetration ratios across multiple height thresholds.
 6. **`VegMask`**:
@@ -128,7 +128,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 2. **Stem Mapping with Lean & DBH**:
    - In legacy FUSION 4.40, tree data structures incorporated explicit support for DBH, lean angle from vertical, and lean azimuth, with visual representation in LDV.
 3. **`TreeSeg` Individual Tree Point Extraction**:
-   - Legacy `TreeSeg` supported clipping and exporting point clouds for each individual segmented tree crown basin into separate files. In `fusion_update`, `treeseg` produces the crown raster and tabular metrics, but point clipping for individual segments is not yet enabled.
+   - Legacy `TreeSeg` supported clipping and exporting point clouds for each individual segmented tree crown basin into separate files. In FUSION2, `treeseg` produces the crown raster and tabular metrics, but point clipping for individual segments is not yet enabled.
 
 ---
 
@@ -154,7 +154,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ## 3. Option and Feature Gaps Within Ported Tools
 
-Beyond entirely omitted tools, several tools that were ported to `fusion_update` omit specific options or capabilities found in their legacy equivalents:
+Beyond entirely omitted tools, several tools that were ported to FUSION2 omit specific options or capabilities found in their legacy equivalents:
 
 | Ported Tool | Missing Legacy Feature or Parameter | Practical Impact |
 | :--- | :--- | :--- |
@@ -170,7 +170,7 @@ Beyond entirely omitted tools, several tools that were ported to `fusion_update`
 
 ## 4. Architectural Summary
 
-The modernized `fusion_update` toolset provides substantial performance gains (4.5x to 6.6x throughput improvement, streaming point cloud I/O, multi-threading, and native GeoTIFF raster support). However, the modernization focused on the core automated forest modeling pipeline:
+The modernized FUSION2 toolset provides substantial performance gains (4.5x to 6.6x throughput improvement, streaming point cloud I/O, multi-threading, and native GeoTIFF raster support). However, the modernization focused on the core automated forest modeling pipeline:
 
 $$\text{Point Cloud} \longrightarrow \text{Ground Filter} \longrightarrow \text{CHM} \longrightarrow \text{Tree Detection / GridMetrics}$$
 

@@ -1,4 +1,4 @@
-// catalog.cpp : Modernized Catalog Executable for FUSION Update
+// catalog.cpp : Modernized Catalog Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/lidar/InputResolver.h"

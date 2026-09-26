@@ -1,4 +1,4 @@
-// densitymetrics.cpp : Vertical Height-Slice Return Density Raster Stack for FUSION Update
+// densitymetrics.cpp : Vertical Height-Slice Return Density Raster Stack for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"

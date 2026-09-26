@@ -1,4 +1,4 @@
-// gridsurfacestats.cpp : Surface Area Ratio / Roughness / Cut-Fill Volume Executable for FUSION Update
+// gridsurfacestats.cpp : Surface Area Ratio / Roughness / Cut-Fill Volume Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"

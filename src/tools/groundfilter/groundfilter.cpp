@@ -1,4 +1,4 @@
-// groundfilter.cpp : Modernized GroundFilter Executable for FUSION Update
+// groundfilter.cpp : Modernized GroundFilter Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"

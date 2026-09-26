@@ -1,4 +1,4 @@
-// treeseg.cpp : Modernized TreeSeg Executable for FUSION Update
+// treeseg.cpp : Modernized TreeSeg Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"

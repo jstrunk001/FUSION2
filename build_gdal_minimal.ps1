@@ -1,6 +1,6 @@
 <#
 Builds a lightweight, minimal static build of GDAL tailored specifically for
-FUSION Update tools (GeoTIFF, Cloud Optimized GeoTIFF / COG, and VRT only).
+FUSION2 tools (GeoTIFF, Cloud Optimized GeoTIFF / COG, and VRT only).
 
 Produces a static libgdal.a and associated CMake configuration in deps/gdal_minimal/
 with zero external DLL dependencies.

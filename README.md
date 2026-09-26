@@ -43,7 +43,7 @@ See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-exa
 ## Project Structure & Executable Suite
 
 ```
-fusion_update/
+FUSION2/
 ├── CMakeLists.txt              # CMake build configuration
 ├── build.ps1                   # Configure, compile, bundle (and optionally publish) all tools
 ├── vcpkg.json                  # C++ dependencies (GDAL, LASlib, LASzip)
@@ -88,7 +88,7 @@ fusion_update/
 
 ### Build Profiles: Minimal (Default) vs Full GDAL
 
-FUSION Update provides two build configurations:
+FUSION2 provides two build configurations:
 
 1. **Minimal Standalone Profile (Default - Recommended for Distribution)**:
    - Built against a tailored, minimal static GDAL with only essential remote sensing formats: **GeoTIFF**, **Cloud Optimized GeoTIFF (COG)**, and **VRT (Virtual Raster)**.
@@ -108,13 +108,13 @@ FUSION Update provides two build configurations:
 
 ### Quick Build (`build.ps1`)
 
-From inside the `fusion_update` directory, in PowerShell:
+From inside the `FUSION2` directory, in PowerShell:
 
 ```powershell
 .\build.ps1
 ```
 
-This ensures the minimal static GDAL is ready (compiling it if not already present), configures CMake in Release mode, compiles all 13 tools, strips debug symbols, collects the resulting `.exe` files into `bin/`, and zips them into a versioned bundle at `dist/fusion_update_tools_v<version>-<timestamp>.zip`. If `dist/` already holds a bundle from a previous run, that older zip is moved into `archive/` first.
+This ensures the minimal static GDAL is ready (compiling it if not already present), configures CMake in Release mode, compiles all 13 tools, strips debug symbols, collects the resulting `.exe` files into `bin/`, and zips them into a versioned bundle at `dist/FUSION2_tools_v<version>-<timestamp>.zip`. If `dist/` already holds a bundle from a previous run, that older zip is moved into `archive/` first.
 
 Useful options:
 - `.\build.ps1` -- build minimal, lightweight standalone tools (~8–15 MB each).

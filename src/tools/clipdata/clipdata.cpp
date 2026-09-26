@@ -1,4 +1,4 @@
-// clipdata.cpp : Modernized ClipData Executable for FUSION Update
+// clipdata.cpp : Modernized ClipData Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"

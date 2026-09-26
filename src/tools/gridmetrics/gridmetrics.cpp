@@ -1,4 +1,4 @@
-// gridmetrics.cpp : Comprehensive GridMetrics Executable for FUSION Update
+// gridmetrics.cpp : Comprehensive GridMetrics Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"

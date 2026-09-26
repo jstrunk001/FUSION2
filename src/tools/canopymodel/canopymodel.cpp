@@ -1,4 +1,4 @@
-// canopymodel.cpp : Modernized CanopyModel Executable for FUSION Update
+// canopymodel.cpp : Modernized CanopyModel Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
