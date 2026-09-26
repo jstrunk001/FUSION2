@@ -170,17 +170,35 @@ treeseg <input_chm.tif> [other /options]
 ---
 
 ### 6. `groundfilter.exe`
-Filters ground points from a LAS/LAZ point cloud file or directory and generates a bare-earth GeoTIFF DEM.
+Classifies ground points in a LAS/LAZ point cloud file or directory with the Kraus & Pfeifer iterative robust filter (the algorithm behind legacy FUSION's GroundFilter), and generates a bare-earth GeoTIFF DEM from them. The input's existing classification is not used, so unclassified data works.
 
 ```bash
 groundfilter <input.las/laz or directory> [other /options]
 ```
 
+How it works, in brief:
+1. A coarse stage fits a rough ground surface on `/coarsecell` cells. Any point more than `/coarsecut` above it is ruled out as ground. This removes canopy over gaps in the ground returns that are too wide for the fine stage to see across.
+2. The fine stage repeats `/iterations` passes on `/filtercell` cells. Each pass fits, per cell, a weighted least-squares plane through the points in that cell and its 8 neighbours. Each point then gets a weight from its residual *v* (elevation minus surface): 1 for *v* ≤ g, 0 for *v* > g + w, and 1 / (1 + (a (*v* − g))^b) in between. Points above the surface lose weight, so the surface sinks through the canopy to the ground.
+3. Points with *v* ≤ g + w against the final surface (or within `/tolerance` of it) are ground. The DEM is each `/cellsize` cell's mean ground elevation. Cells without a ground point are filled outward from their neighbours, so the DEM has no empty cells.
+
+g, w, `/coarsecut`, and `/tolerance` are in the point cloud's vertical units. The defaults follow legacy FUSION.
+
+All points passing `/class`/`/return` are held in memory (about 24 bytes each). For very large inputs, run it per tile through `pipeline`.
+
 #### Options & Flags
 - `/cellsize:<val>`: Output DEM cell size (default: `1.0`).
+- `/filtercell:<val>`: Cell size of the fine stage's surfaces. Each cell's plane is fitted over its 3 x 3 neighbourhood (default: `10.0`).
+- `/coarsecell:<val>`: Cell size of the coarse stage (default: 3 x `/filtercell`; `0` disables the coarse stage).
+- `/coarsecut:<val>`: Height above the coarse surface beyond which a point cannot be ground (default: 4 x `/wparam`).
+- `/gparam:<val>`: g, the residual at or below which a point gets full weight (default: `-2.0`).
+- `/wparam:<val>`: w, the width above g over which the weight falls to 0 (default: `2.5`).
+- `/aparam:<val>`: a, steepness of the weight function (default: `1.0`).
+- `/bparam:<val>`: b, exponent of the weight function (default: `4.0`).
+- `/iterations:<n>`: Number of fine-stage passes (default: `5`).
+- `/tolerance:<val>`: Classify as ground every point within this distance of the final surface, instead of every point with residual ≤ g + w.
 - `/output-raster:<path>`: Output GeoTIFF ground DEM file path. Renamed from `/output-dem`.
-- `/output-points:<path>`: Output filtered ground-only LAS/LAZ file path. Renamed from `/output-las`. Not yet implemented -- declared but currently a no-op regardless of the name used.
-- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools. Applied before computing each cell's minimum elevation, so noise/withheld returns don't pull the ground surface up or down.
+- `/output-points:<path>`: Output LAS/LAZ of the points classified as ground, written with classification 2. Renamed from `/output-las`.
+- `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see "Point Filtering" above for the shared syntax and defaults across all point-cloud tools. Applied before filtering, so noise (classes 7/18) and withheld returns never shape the ground surface.
 
 ---
 

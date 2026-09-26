@@ -8,6 +8,19 @@ README's "Distributing built tools" section.
 
 ## [Unreleased]
 
+- `groundfilter` now classifies ground with the Kraus & Pfeifer iterative
+  robust filter (legacy FUSION's `/gparam`, `/wparam`, `/aparam`,
+  `/bparam`, `/iterations`, `/tolerance`, plus `/filtercell`,
+  `/coarsecell`, `/coarsecut`) and fills DEM cells that hold no ground
+  point. It previously took the lowest return in each cell, which put
+  canopy into the DEM wherever a cell had no ground return and left empty
+  cells as nodata. `/output-points` now writes the points the filter
+  classified as ground (as class 2) rather than points already classed 2
+  in the input.
+- LAZ output in LAS 1.4 point formats 6-10 was corrupt (readers decoded
+  only the first few dozen points); uncompressed output and LAS 1.2
+  formats were unaffected.
+
 - Renamed the project from "FUSION Update" (`fusion_update`) to FUSION2,
   matching the GitHub repository name: CMake project name, `vcpkg.json`
   name, LAS header generating-software field, docs, and source headers.
