@@ -279,8 +279,10 @@ std::optional<double> GDALRaster::GetElevation(double x, double y, SampleMethod 
     double rowDouble = m_impl->invGeotransform[3] + (x * m_impl->invGeotransform[4]) + (y * m_impl->invGeotransform[5]);
 
     // Check if within bounds or within 1.0 cell of bounds for edge clamping
-    if (colDouble < -1.0 || colDouble > static_cast<double>(m_info.width) ||
-        rowDouble < -1.0 || rowDouble > static_cast<double>(m_info.height)) {
+    // (the raster spans 0..width columns and 0..height rows, so one cell
+    // beyond is -1 on the left/top and width+1 / height+1 on the right/bottom)
+    if (colDouble < -1.0 || colDouble > static_cast<double>(m_info.width) + 1.0 ||
+        rowDouble < -1.0 || rowDouble > static_cast<double>(m_info.height) + 1.0) {
         return std::nullopt;
     }
 
