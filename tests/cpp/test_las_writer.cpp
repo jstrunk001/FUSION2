@@ -187,6 +187,55 @@ int RunLASWriterTests() {
         std::filesystem::remove(path);
     }
 
+    // Format 6 (LAS 1.4), compressed .laz: LASzip's format 6-10 compressor
+    // corrupts the stream when the legacy classification/flag bits disagree
+    // with the extended ones, so every point must decode -- not just the
+    // first few dozen -- with varied classes, withheld flags, and returns.
+    {
+        auto path = ScratchPath("format6.laz");
+        auto header = MakeHeader(6, 4);
+
+        std::vector<fusion::lidar::PointRecord> points;
+        for (int i = 0; i < 3000; ++i) {
+            double t = static_cast<double>(i);
+            auto pt = MakePoint(500000.0 + t * 0.03, 4000000.0 + t * 0.02, 40.0 + (i % 37),
+                                200000.0 + t * 0.001, static_cast<uint8_t>((i % 3 == 0) ? 2 : (i % 3 == 1) ? 5 : 1), 0, 0, 0);
+            pt.returnNumber = static_cast<uint8_t>(1 + (i % 3));
+            pt.numberOfReturns = 3;
+            pt.withheld = (i % 50 == 0);
+            pt.scanAngle = static_cast<int16_t>((i % 21) - 10);
+            points.push_back(pt);
+        }
+
+        fusion::lidar::LASWriter writer;
+        CHECK(writer.Open(path, header), failures);
+        for (const auto& pt : points) CHECK(writer.WritePoint(pt), failures);
+        writer.Close();
+
+        fusion::lidar::LASReader reader;
+        CHECK(reader.Open(path), failures);
+        if (reader.IsOpen()) {
+            CHECK(reader.GetHeader().pointFormat == 6, failures);
+            CHECK(reader.GetPointCount() == points.size(), failures);
+            size_t nRead = 0;
+            size_t nMismatch = 0;
+            fusion::lidar::PointRecord pt;
+            while (reader.ReadNextPoint(pt)) {
+                const auto& expected = points[nRead];
+                if (std::abs(pt.x - expected.x) > 0.01 || std::abs(pt.z - expected.z) > 0.01 ||
+                    pt.classification != expected.classification || pt.withheld != expected.withheld ||
+                    pt.returnNumber != expected.returnNumber || pt.scanAngle != expected.scanAngle) {
+                    nMismatch++;
+                }
+                nRead++;
+            }
+            CHECK(nRead == points.size(), failures);
+            CHECK(nMismatch == 0, failures);
+            reader.Close();
+        }
+        std::filesystem::remove(path);
+    }
+
     // Coordinate reference system (WKT VLR 2112) propagation test:
     // writing a point cloud with a non-empty projectionWKT must write the
     // "LASF_Projection" VLR so the reader recovers the identical CRS.

@@ -464,6 +464,26 @@ bool LASWriter::WritePoint(const PointRecord& pt) {
                                            (pt.keypoint ? 0x02 : 0) |
                                            (pt.withheld ? 0x04 : 0) |
                                            (pt.overlap ? 0x08 : 0);
+
+        // LASzip's format 6-10 compressor also reads the legacy
+        // classification and flag bits, and produces a corrupt LAZ stream
+        // (readers hit end-of-file after a few dozen points) when they
+        // disagree with the extended fields. The memset above clears them
+        // and also clears extended_point_type, which is the flag that makes
+        // laszip_write_point verify the two agree -- so both are restored
+        // here: extended_point_type re-enables LASzip's own check, and the
+        // legacy fields mirror the extended ones the way LASlib fills them
+        // (legacy classification is 0 for classes above 31, which do not
+        // fit in its 5 bits; return counts are capped at 7; the scan angle
+        // is converted from 0.006-degree steps to whole degrees).
+        p.extended_point_type = 1;
+        p.classification = (pt.classification < 32) ? pt.classification : 0;
+        p.synthetic_flag = pt.synthetic ? 1 : 0;
+        p.keypoint_flag = pt.keypoint ? 1 : 0;
+        p.withheld_flag = pt.withheld ? 1 : 0;
+        p.return_number = (std::min)(pt.returnNumber & 0x0F, 7);
+        p.number_of_returns = (std::min)(pt.numberOfReturns & 0x0F, 7);
+        p.scan_angle_rank = static_cast<laszip_I8>(std::clamp<long>(std::lround(pt.scanAngle * 0.006), -90, 90));
     } else { // Legacy LAS Formats 0 to 5
         p.return_number = pt.returnNumber & 0x07;
         p.number_of_returns = pt.numberOfReturns & 0x07;
