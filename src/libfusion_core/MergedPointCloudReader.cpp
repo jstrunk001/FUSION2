@@ -54,6 +54,8 @@ bool MergedPointCloudReader::Open(const std::vector<std::filesystem::path>& file
             merged.systemID = h.systemID;
             merged.generatingSoftware = h.generatingSoftware;
             merged.projectionWKT = h.projectionWKT;
+            merged.globalEncoding = h.globalEncoding;
+            merged.geoKeyVLRs = h.geoKeyVLRs;
             first = false;
         }
 

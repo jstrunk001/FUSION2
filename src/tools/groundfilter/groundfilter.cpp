@@ -70,22 +70,9 @@ int main(int argc, char* argv[]) {
     bool wantOutputPoints = parser.WasExplicit("output-points");
     fusion::lidar::LASWriter pointWriter;
     if (wantOutputPoints) {
-        fusion::lidar::LASHeaderInfo writeHeader;
-        writeHeader.pointFormat = header.pointFormat;
-        writeHeader.versionMajor = header.versionMajor;
-        writeHeader.versionMinor = header.versionMinor;
-        writeHeader.xScaleFactor = header.xScaleFactor;
-        writeHeader.yScaleFactor = header.yScaleFactor;
-        writeHeader.zScaleFactor = header.zScaleFactor;
-        writeHeader.xOffset = header.xOffset;
-        writeHeader.yOffset = header.yOffset;
-        writeHeader.zOffset = header.zOffset;
-        writeHeader.minX = header.minX;
-        writeHeader.maxX = header.maxX;
-        writeHeader.minY = header.minY;
-        writeHeader.maxY = header.maxY;
-        writeHeader.minZ = header.minZ;
-        writeHeader.maxZ = header.maxZ;
+        // Copy the whole input header (not field by field) so the
+        // coordinate system VLRs and global encoding bits come along too.
+        fusion::lidar::LASHeaderInfo writeHeader = header;
         if (!pointWriter.Open(*parser.GetOption("output-points"), writeHeader)) {
             std::cerr << "Error: Failed to open ground point output file: " << *parser.GetOption("output-points") << "\n";
             return 1;

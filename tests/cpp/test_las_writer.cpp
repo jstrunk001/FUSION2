@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -56,6 +57,15 @@ fusion::lidar::LASHeaderInfo MakeHeader(uint8_t pointFormat, uint8_t versionMino
     header.minZ = 0.0;
     header.maxZ = 100.0;
     return header;
+}
+
+// Reads the 2-byte global encoding field straight from a LAS file's header
+// (byte offset 6, little-endian), independent of LASReader.
+uint16_t ReadGlobalEncoding(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    unsigned char bytes[8] = {0};
+    in.read(reinterpret_cast<char*>(bytes), 8);
+    return static_cast<uint16_t>(bytes[6] | (bytes[7] << 8));
 }
 
 } // namespace
@@ -233,6 +243,79 @@ int RunLASWriterTests() {
         std::filesystem::remove(rasterPath);
         std::filesystem::remove(vrtPath);
         std::filesystem::remove(mergedPath);
+    }
+
+    // Global encoding propagation: a WKT VLR is only honored by readers such
+    // as lidR/rlas when header bit 4 is set, and bit 0 says how to interpret
+    // GPS time. The input's bits must reach the output file -- checked on the
+    // raw header bytes, since LASReader itself does not need bit 4 to find
+    // the WKT VLR.
+    {
+        auto path = ScratchPath("global_encoding.las");
+        auto header = MakeHeader(1, 2);
+        header.projectionWKT = "PROJCS[\"test\"]";
+        header.globalEncoding = 0x0011; // adjusted standard GPS time + WKT
+
+        fusion::lidar::LASWriter writer;
+        CHECK(writer.Open(path, header), failures);
+        writer.WritePoint(MakePoint(500005.0, 4000005.0, 42.0, 999.0, 2, 0, 0, 0));
+        writer.Close();
+
+        CHECK(ReadGlobalEncoding(path) == 0x0011, failures);
+
+        fusion::lidar::LASReader reader;
+        CHECK(reader.Open(path), failures);
+        if (reader.IsOpen()) {
+            CHECK(reader.GetHeader().globalEncoding == 0x0011, failures);
+            reader.Close();
+        }
+        std::filesystem::remove(path);
+
+        // LAS 1.4 output with WKT must set bit 4 even when the input
+        // header did not (the spec requires it for WKT in LAS 1.4).
+        auto path14 = ScratchPath("global_encoding_14.las");
+        auto header14 = MakeHeader(6, 4);
+        header14.projectionWKT = "PROJCS[\"test\"]";
+        header14.globalEncoding = 0x0001;
+
+        fusion::lidar::LASWriter writer14;
+        CHECK(writer14.Open(path14, header14), failures);
+        writer14.WritePoint(MakePoint(500005.0, 4000005.0, 42.0, 999.0, 2, 0, 0, 0));
+        writer14.Close();
+
+        CHECK(ReadGlobalEncoding(path14) == 0x0011, failures);
+        std::filesystem::remove(path14);
+    }
+
+    // GeoTIFF-key coordinate system VLRs (the usual storage in LAS 1.0-1.3
+    // files) must round-trip byte for byte rather than being dropped.
+    {
+        auto path = ScratchPath("geokeys.laz");
+        auto header = MakeHeader(1, 2);
+        fusion::lidar::LASHeaderInfo::RawVLR keyDirectory;
+        keyDirectory.recordID = 34735;
+        keyDirectory.description = "GeoKeyDirectoryTag";
+        // key directory header (version 1.1.0, 1 key) + ProjectedCSTypeGeoKey = 32610
+        keyDirectory.data = {1, 0, 1, 0, 0, 0, 1, 0, 0x00, 0x0C, 0, 0, 1, 0, 0x62, 0x7F};
+        header.geoKeyVLRs.push_back(keyDirectory);
+
+        fusion::lidar::LASWriter writer;
+        CHECK(writer.Open(path, header), failures);
+        writer.WritePoint(MakePoint(500005.0, 4000005.0, 42.0, 999.0, 2, 0, 0, 0));
+        writer.Close();
+
+        fusion::lidar::LASReader reader;
+        CHECK(reader.Open(path), failures);
+        if (reader.IsOpen()) {
+            const auto& keys = reader.GetHeader().geoKeyVLRs;
+            CHECK(keys.size() == 1, failures);
+            if (keys.size() == 1) {
+                CHECK(keys[0].recordID == 34735, failures);
+                CHECK(keys[0].data == keyDirectory.data, failures);
+            }
+            reader.Close();
+        }
+        std::filesystem::remove(path);
     }
 
 

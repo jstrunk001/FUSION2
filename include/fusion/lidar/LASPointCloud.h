@@ -57,6 +57,22 @@ struct LASHeaderInfo {
     // VLR (record ID 2112) when present -- empty if the file carries no WKT
     // VLR (e.g. an older file using GeoTIFF keys instead).
     std::string projectionWKT;
+    // The header's global encoding bit field. Bit 0 says whether GPS time
+    // is adjusted standard GPS time (1) or GPS week time (0); bit 4 says the
+    // coordinate system is stored as WKT. Readers such as lidR/rlas ignore
+    // a WKT VLR unless bit 4 is set, so a writer that drops this field makes
+    // its output look unprojected even though the WKT VLR is present.
+    uint16_t globalEncoding{0};
+    // GeoTIFF-key coordinate system VLRs ("LASF_Projection" record IDs
+    // 34735/34736/34737), kept as raw bytes so a derived point cloud can
+    // carry them through unchanged. Most LAS 1.0-1.3 files store their
+    // coordinate system this way instead of as WKT.
+    struct RawVLR {
+        uint16_t recordID{0};
+        std::string description;
+        std::vector<uint8_t> data;
+    };
+    std::vector<RawVLR> geoKeyVLRs;
 };
 
 class LASReader {

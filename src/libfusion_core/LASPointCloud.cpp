@@ -107,13 +107,25 @@ bool LASReader::Open(const std::filesystem::path& filePath) {
     // record ID 2112) so callers that write derived rasters (groundfilter,
     // returndensity) can carry the input point cloud's CRS through instead
     // of writing an unprojected GeoTIFF.
+    // GeoTIFF-key VLRs (34735/34736/34737) are kept as raw bytes alongside
+    // it, and the global encoding bits are kept too, so LASWriter can
+    // reproduce the input's coordinate system and GPS time convention.
+    m_header.globalEncoding = h.global_encoding;
     m_header.projectionWKT.clear();
+    m_header.geoKeyVLRs.clear();
     for (laszip_U32 v = 0; v < h.number_of_variable_length_records; ++v) {
         const laszip_vlr_struct& vlr = h.vlrs[v];
-        if (vlr.record_id == 2112 && std::strncmp(vlr.user_id, "LASF_Projection", 16) == 0 && vlr.data) {
+        if (std::strncmp(vlr.user_id, "LASF_Projection", 16) != 0 || !vlr.data) continue;
+
+        if (vlr.record_id == 2112 && m_header.projectionWKT.empty()) {
             const char* wkt = reinterpret_cast<const char*>(vlr.data);
             m_header.projectionWKT.assign(wkt, strnlen(wkt, vlr.record_length_after_header));
-            break;
+        } else if (vlr.record_id == 34735 || vlr.record_id == 34736 || vlr.record_id == 34737) {
+            LASHeaderInfo::RawVLR raw;
+            raw.recordID = vlr.record_id;
+            raw.description.assign(vlr.description, strnlen(vlr.description, 32));
+            raw.data.assign(vlr.data, vlr.data + vlr.record_length_after_header);
+            m_header.geoKeyVLRs.push_back(std::move(raw));
         }
     }
 
@@ -352,6 +364,18 @@ bool LASWriter::Open(const std::filesystem::path& filePath, const LASHeaderInfo&
     }
     std::strncpy(hdr.generating_software, "FUSION Update", sizeof(hdr.generating_software) - 1);
 
+    // Global encoding: carry bit 0 (GPS time type) through from the input so
+    // point timestamps keep their meaning. Set bit 4 (WKT) whenever a WKT
+    // VLR is written and either the input set it or the output is LAS 1.4
+    // (where the spec requires it) -- without bit 4, readers such as
+    // lidR/rlas ignore the WKT VLR and treat the file as unprojected.
+    // Waveform bits (1-2) are never carried, since no waveform data is written.
+    const bool writeWKT = !headerInfo.projectionWKT.empty();
+    hdr.global_encoding = headerInfo.globalEncoding & 0x0001;
+    if (writeWKT && (m_impl->isFormat6Plus || (headerInfo.globalEncoding & 0x0010))) {
+        hdr.global_encoding |= 0x0010;
+    }
+
     if (laszip_set_header(m_impl->handle, &hdr) != 0) {
         m_impl->CloseHandle();
         return false;
@@ -360,13 +384,28 @@ bool LASWriter::Open(const std::filesystem::path& filePath, const LASHeaderInfo&
     // Write OGC WKT coordinate system VLR ("LASF_Projection", record ID 2112)
     // when present, so derived point clouds (e.g. tile clips in the batch
     // pipeline) retain the CRS instead of becoming unprojected.
-    if (!headerInfo.projectionWKT.empty()) {
+    if (writeWKT) {
         laszip_add_vlr(m_impl->handle,
                        "LASF_Projection",
                        2112,
                        static_cast<laszip_U16>(headerInfo.projectionWKT.size() + 1),
                        "OGC Coordinate System WKT",
                        reinterpret_cast<const laszip_U8*>(headerInfo.projectionWKT.c_str()));
+    }
+
+    // Write GeoTIFF-key coordinate system VLRs unchanged. A LAS 1.4 output
+    // with a WKT VLR skips them, since the spec disallows GeoTIFF keys
+    // alongside WKT there; otherwise they are the only coordinate system
+    // record the input had, and dropping them would leave it unprojected.
+    if (!(m_impl->isFormat6Plus && writeWKT)) {
+        for (const auto& raw : headerInfo.geoKeyVLRs) {
+            laszip_add_vlr(m_impl->handle,
+                           "LASF_Projection",
+                           raw.recordID,
+                           static_cast<laszip_U16>(raw.data.size()),
+                           raw.description.c_str(),
+                           raw.data.data());
+        }
     }
 
     m_impl->xScaleFactor = hdr.x_scale_factor;
