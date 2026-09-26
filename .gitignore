@@ -46,3 +46,8 @@ tile_*.tif
 *.log
 LASzip-*/
 
+
+# Extra ad hoc CMake build folders (build_phase3/, etc.) and gridmetrics
+# outputs written to the repo root by manual test runs
+build_*/
+/*_gridmetrics.tif
