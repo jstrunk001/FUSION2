@@ -7,6 +7,9 @@ int RunLASWriterTests();
 int RunChmSmoothingTests();
 int RunTableWriterTests();
 int RunGroundFilterTests();
+int RunRasterSamplingTests();
+int RunSurfaceStatsTests();
+int RunStageRegistryTests();
 
 int main() {
     int failures = 0;
@@ -17,6 +20,9 @@ int main() {
     failures += RunChmSmoothingTests();
     failures += RunTableWriterTests();
     failures += RunGroundFilterTests();
+    failures += RunRasterSamplingTests();
+    failures += RunSurfaceStatsTests();
+    failures += RunStageRegistryTests();
 
     if (failures == 0) {
         std::cout << "\nAll fusion_tests passed.\n";

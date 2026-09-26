@@ -198,6 +198,9 @@ add_executable(fusion_tests
     tests/cpp/test_chm_smoothing.cpp
     tests/cpp/test_table_writer.cpp
     tests/cpp/test_ground_filter.cpp
+    tests/cpp/test_raster_sampling.cpp
+    tests/cpp/test_surface_stats.cpp
+    tests/cpp/test_stage_registry.cpp
 )
 target_link_libraries(fusion_tests PRIVATE fusion_core)
 add_test(NAME fusion_tests COMMAND fusion_tests)
