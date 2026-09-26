@@ -51,3 +51,7 @@ LASzip-*/
 # outputs written to the repo root by manual test runs
 build_*/
 /*_gridmetrics.tif
+
+# RForInvt::file_version() locks <output>/_tracking.lock while it updates
+# _tracking.csv; the lock is released afterwards but the empty file stays
+_tracking.lock
