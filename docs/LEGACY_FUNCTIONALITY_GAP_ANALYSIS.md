@@ -8,21 +8,25 @@ Per guidance, format-conversion programs dedicated strictly to legacy PLANS `.dt
 
 ## 1. Summary of Current `fusion_update` Toolset
 
-The `fusion_update` suite focuses on replacing the legacy `.dtm` raster format with native GDAL GeoTIFF support, streaming direct `.las` and `.laz` point cloud input and output, and multithreading batch execution. It provides 13 command-line tools:
+The `fusion_update` suite focuses on replacing the legacy `.dtm` raster format with native GDAL GeoTIFF support, streaming direct `.las` and `.laz` point cloud input and output, and multithreading batch execution. It provides 15 command-line tools:
 
-1. `gridmetrics` (gridded canopy and elevation metric rasters, single-file and batch/tiled mode)
-2. `cloudmetrics` (point cloud summary metrics)
+1. `gridmetrics` (gridded canopy and elevation metric rasters, single-file and batch/tiled mode, with height and intensity strata)
+2. `cloudmetrics` (point cloud summary metrics, for the whole cloud or one row per `/shape` polygon)
 3. `canopymodel` (canopy height model / CHM interpolation)
 4. `canopymaxima` (variable-window local maxima tree top detection)
 5. `treeseg` (watershed crown segmentation)
-6. `groundfilter` (iterative bare-earth ground filtering and DEM generation)
-7. `clipdata` (bounding-box spatial subsetting and elevation slicing)
+6. `groundfilter` (iterative bare-earth ground filtering, DEM generation, and optional ground-point LAS/LAZ output)
+7. `clipdata` (bounding-box and shapefile-polygon subsetting, elevation slicing)
 8. `filterdata` (elevation, return number, and classification filtering)
 9. `thindata` (spatial point cloud decimation per grid cell)
 10. `returndensity` (pulse density and return ratio mapping)
-11. `topometrics` (topographic slope and aspect calculation from DEMs)
-12. `catalog` (acquisition coverage reports and point density summary)
-13. `pipeline` (multi-stage tile and buffer batch orchestrator)
+11. `densitymetrics` (return counts in height slices above ground, per grid cell)
+12. `gridsurfacestats` (surface area ratio, roughness, and cut/fill volume from a surface GeoTIFF)
+13. `topometrics` (topographic slope and aspect calculation from DEMs)
+14. `catalog` (acquisition coverage reports and point density summary)
+15. `pipeline` (multi-stage tile and buffer batch orchestrator)
+
+Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `groundfilter /output-points`, and `pipeline`'s tile clips) copies the input's coordinate system records into the output, whether they are stored as WKT or as GeoTIFF keys. It also copies the header's global encoding bits: the GPS time type, and the WKT flag that readers such as lidR/rlas require before they will use a WKT record. Raster and table-writing tools take an opt-in `/output-table:<path.csv|.sqlite>` for a per-cell table. The raster-writing tools also take `/noraster`, which skips the GeoTIFF when only the table is wanted.
 
 ---
 
@@ -53,7 +57,7 @@ The `fusion_update` suite focuses on replacing the legacy `.dtm` raster format w
    - Clips point clouds using polygon geometries from ESRI shapefiles.
    - **Multi-file Clipping (`/multifile`)**: Automatically iterates over features in a shapefile (such as forest inventory plots, harvest units, or stand boundaries) and writes a distinct, properly attributed LAS/LAZ file for each polygon, named using a designated attribute column (via `/shape:field`).
    - Supports inverted clipping (`/outside`) to extract points outside polygon boundaries.
-   - *Status in `fusion_update`*: `clipdata` only supports rectangular bounding boxes (`/extent:minx,miny,maxx,maxy`). Shapefile polygon clipping is entirely absent.
+   - *Status in `fusion_update`*: ported into `clipdata`. `/shape:<file.shp>` clips to polygon features (in addition to any `/extent`), `/multifile` writes one LAS/LAZ per feature named by `/field:<attribute>` (falling back to a zero-padded feature index), and `/outside` keeps points outside every polygon (single-clip mode only). `cloudmetrics /shape` similarly computes one metrics row per polygon.
 
 ---
 
@@ -78,6 +82,7 @@ The `fusion_update` suite focuses on replacing the legacy `.dtm` raster format w
    - **3D Surface Area vs. Planimetric Area**: Calculates the true 3D surface area of complex terrain (accounting for slope and micro-topography) compared to nominal 2D planimetric area.
    - **Volume & Cut/Fill**: Calculates volume between a surface and a reference datum or bare-earth ground model.
    - **Roughness & Topographic Complexity**: Computes surface roughness and terrain texture metrics across user-specified sample factors.
+   - *Status in `fusion_update`*: largely ported. `gridsurfacestats` writes per-cell surface area ratio and roughness bands from a surface GeoTIFF, plus a `volume_diff` cut/fill band when given a second surface with `/reference`. `cloudmetrics /surfstats` reports surface area ratio, roughness, planimetric area, and 3D surface area for a point cloud's top-of-cloud grid. Legacy's user-specified sample factors have no direct equivalent.
 2. **`GridSample` & `SurfaceSample`**:
    - Extracts surface model elevations at specific point coordinates provided in a CSV or text table (such as field inventory plot centers), with optional window neighborhood sampling.
 3. **`ModelMath` & `SRSGridMath`**:
@@ -103,6 +108,7 @@ The `fusion_update` suite focuses on replacing the legacy `.dtm` raster format w
    - Includes the `/lastnotfirst` switch, which isolates true penetrated returns (last returns from pulses that had multiple returns) from single-return pulses.
 4. **`DensityMetrics`**:
    - Computes return density across vertical height slices (elevation bands above ground) on a spatial grid, evaluating vertical distribution and foliage layer density.
+   - *Status in `fusion_update`*: ported as `densitymetrics`. Height-slice breaks are set with `/strata`, heights are taken above a `/ground` DEM, and output is a multi-band GeoTIFF plus an optional per-cell CSV or SQLite table (`/output-table`) of stratum counts and total returns.
 5. **`Cover`**:
    - Dedicated canopy closure tool calculating cover and penetration ratios across multiple height thresholds.
 6. **`VegMask`**:
@@ -152,9 +158,9 @@ Beyond entirely omitted tools, several tools that were ported to `fusion_update`
 
 | Ported Tool | Missing Legacy Feature or Parameter | Practical Impact |
 | :--- | :--- | :--- |
-| **`clipdata`** | Missing `/shape:`, `/anglemin`/`/anglemax`, `/timemin`/`/timemax`, `/biaselev`. | Cannot clip by shapefile polygons; cannot filter by scan angle or GPS timestamp. |
-| **`cloudmetrics`** | Missing direct plot-coordinate list processing (`/id`, radius). | Cannot compute metrics directly for arbitrary plot locations from a master point cloud without prior clipping. |
-| **`groundfilter`** | `/output-points` (saving classified ground returns to LAS/LAZ) is declared but currently a no-op; Kraus & Pfeifer weight tuning (`/gparam`, `/wparam`, `/aparam`, `/bparam`) is omitted. | Cannot output classified LAS point clouds from ground filtering; tuning algorithm weights is restricted. |
+| **`clipdata`** | Missing `/anglemin`/`/anglemax`, `/timemin`/`/timemax`, `/biaselev`. | Cannot filter by scan angle or GPS timestamp while clipping, or shift output elevations. |
+| **`cloudmetrics`** | Missing direct plot-coordinate list processing (`/id`, radius). | Plot metrics need plot polygons (`/shape`) rather than a list of plot centers and a radius. |
+| **`groundfilter`** | Kraus & Pfeifer weight tuning (`/gparam`, `/wparam`, `/aparam`, `/bparam`) is omitted. `/output-points` writes the returns classified as ground (class 2), not the whole cloud with new classifications. | Tuning algorithm weights is restricted; a fully reclassified point cloud cannot be written. |
 | **`canopymodel`** | Omission of Delaunay TIN interpolation (`/tin`), peak preservation (`/peaks`), and texture metrics (`/texture`). | CHM creation relies solely on grid binning and raster smoothing rather than facet interpolation. |
 | **`thindata`** | Omission of targeted point selection algorithms (lowest, highest, closest to center) and density-based thinning (`/density`). | Thins strictly to one point per grid cell rather than decimating to a uniform pulse density. |
 | **`treeseg`** | Individual tree point cloud clipping is not yet implemented. | Crown segments are output as rasters and summary tables, but individual tree LAS point clips are not written. |
@@ -168,4 +174,4 @@ The modernized `fusion_update` toolset provides substantial performance gains (4
 
 $$\text{Point Cloud} \longrightarrow \text{Ground Filter} \longrightarrow \text{CHM} \longrightarrow \text{Tree Detection / GridMetrics}$$
 
-The broader capabilities of original FUSION—specifically the **interactive 2D/3D visualization workstation** (`FUSION.exe` and `LDV.exe`), **vector polygon clipping** (`PolyClipData`), **Delaunay TIN surface generation** (`TINSurfaceCreate`), **surface geometry analysis** (`SurfaceStats`), **ortho-intensity raster imaging** (`IntensityImage`), and **first/last return pulse splitting** (`FirstLastReturn`)—remain exclusive to the legacy codebase.
+Polygon clipping (`PolyClipData`), surface geometry statistics (`GridSurfaceStats`/`SurfaceStats`), and height-slice density (`DensityMetrics`) are now covered by `clipdata /shape`, `gridsurfacestats` with `cloudmetrics /surfstats`, and `densitymetrics`. The broader capabilities of original FUSION—specifically the **interactive 2D/3D visualization workstation** (`FUSION.exe` and `LDV.exe`), **Delaunay TIN surface generation** (`TINSurfaceCreate`), **ortho-intensity raster imaging** (`IntensityImage`), and **first/last return pulse splitting** (`FirstLastReturn`)—remain exclusive to the legacy codebase.

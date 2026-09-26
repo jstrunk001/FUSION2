@@ -8,6 +8,22 @@ README's "Distributing built tools" section.
 
 ## [Unreleased]
 
+- Point cloud outputs (`filterdata`, `thindata`, `clipdata`,
+  `groundfilter /output-points`, `pipeline` tile clips) now keep the
+  input's header global encoding bits (GPS time type; WKT flag) and its
+  GeoTIFF-key coordinate system VLRs. Without the WKT flag, lidR/rlas
+  treated outputs as having no coordinate system; files that stored
+  their coordinate system as GeoTIFF keys lost it entirely.
+- `groundfilter /output-points` now carries the input's coordinate system
+  (its header was previously built field by field and omitted it).
+- Build links under Rtools 4.5: nghttp2, psl, brotli, and deflate are added
+  to the static link group when the toolchain provides them.
+- `build_gdal_minimal.ps1` replaces a vendored `proj.db` that no longer
+  matches the newest Rtools' PROJ, instead of keeping a stale copy.
+- Added a `gridmetrics /intstrata` output (CSV columns and raster bands),
+  opt-in `/output-table` (CSV or SQLite) and `/noraster` switches across
+  the raster tools, and `clipdata /shape`, `/multifile`, `/outside`.
+
 ## [0.0.1] - 2026-09-09
 
 First draft release of the tool bundle as a GitHub Release asset
