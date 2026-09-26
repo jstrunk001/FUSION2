@@ -8,6 +8,14 @@ README's "Distributing built tools" section.
 
 ## [Unreleased]
 
+- `catalog /density` now writes its point-count GeoTIFF on the input's
+  real coordinates, with the input's coordinate system attached. It
+  previously read both from the point reader after closing it, which
+  reset them, so the raster landed at (0, 0) with no coordinate system.
+  Points lying exactly on the input's maximum-X or minimum-Y edge are now
+  counted in the last column or row instead of being dropped. The raster
+  code moved to `fusion::lidar::WritePointCountRaster`, with tests.
+
 ## [0.0.2] - 2026-09-26
 
 - Ground-height lookups (`GDALRaster::GetElevation`, used by every tool that

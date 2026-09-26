@@ -77,6 +77,7 @@ add_library(fusion_core STATIC
     src/libfusion_core/TableWriter.cpp
     src/libfusion_core/ChmSmoothing.cpp
     src/libfusion_core/GroundFilter.cpp
+    src/libfusion_core/PointDensity.cpp
     deps/sqlite3_amalgamation/sqlite3.c
 )
 
@@ -201,6 +202,7 @@ add_executable(fusion_tests
     tests/cpp/test_raster_sampling.cpp
     tests/cpp/test_surface_stats.cpp
     tests/cpp/test_stage_registry.cpp
+    tests/cpp/test_point_density.cpp
 )
 target_link_libraries(fusion_tests PRIVATE fusion_core)
 add_test(NAME fusion_tests COMMAND fusion_tests)

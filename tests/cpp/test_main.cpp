@@ -10,6 +10,7 @@ int RunGroundFilterTests();
 int RunRasterSamplingTests();
 int RunSurfaceStatsTests();
 int RunStageRegistryTests();
+int RunPointDensityTests();
 
 int main() {
     int failures = 0;
@@ -23,6 +24,7 @@ int main() {
     failures += RunRasterSamplingTests();
     failures += RunSurfaceStatsTests();
     failures += RunStageRegistryTests();
+    failures += RunPointDensityTests();
 
     if (failures == 0) {
         std::cout << "\nAll fusion_tests passed.\n";
