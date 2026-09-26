@@ -6,6 +6,7 @@ int RunGetModeTests();
 int RunLASWriterTests();
 int RunChmSmoothingTests();
 int RunTableWriterTests();
+int RunGroundFilterTests();
 
 int main() {
     int failures = 0;
@@ -15,6 +16,7 @@ int main() {
     failures += RunLASWriterTests();
     failures += RunChmSmoothingTests();
     failures += RunTableWriterTests();
+    failures += RunGroundFilterTests();
 
     if (failures == 0) {
         std::cout << "\nAll fusion_tests passed.\n";
