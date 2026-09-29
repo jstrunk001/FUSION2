@@ -1,0 +1,66 @@
+# `gridsurfacestats`: surface roughness and volume {#sec-gridsurfacestats}
+
+## What it does
+
+`gridsurfacestats` measures how rough a surface is. It works on any
+raster surface: a canopy height model, where roughness reflects the
+canopy's vertical complexity, or a ground surface, where it reflects
+terrain ruggedness. Given a second, reference surface, it also measures
+the volume between the two in each cell, which serves for cut-and-fill
+estimates or for comparing canopy surfaces from two dates.
+
+For each cell, it computes:
+
+- **Surface area ratio**: the 3D area of the surface over the cell,
+  divided by the cell's flat area. A flat surface gives 1; rougher
+  surfaces give more.
+- **Roughness**: the standard deviation of the surface's values in the
+  cell's 3 x 3 neighbourhood.
+- **Volume difference** (with `/reference`): the surface minus the
+  reference, multiplied by the cell's area, so each cell holds a true
+  volume and the cells can simply be added up.
+
+`gridmetrics /surfstats` and `cloudmetrics /surfstats` compute the first
+two from points directly, without a separate raster.
+
+## Example commands
+
+The example runs on the canopy height model from @sec-canopymodel, with
+the smoothed canopy model as the reference surface.
+
+{{< include ../examples/fragments/gridsurfacestats_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (input) | `out/chm.tif` | The surface to measure. |
+| `/output` | `out/gridsurfacestats.tif` | The output raster. |
+| `/reference` | `out/chm_smooth3.tif` | A second surface on the same grid; adds the volume-difference band. |
+
+: Options used in the `gridsurfacestats` example. {#tbl-options-gridsurfacestats}
+
+## Outputs
+
+One GeoTIFF on the input's grid with the bands `surface_area_ratio`,
+`roughness`, and (with `/reference`) `volume_diff`, in cubic units of the
+input (cubic feet here). Cells that are empty in the input stay empty.
+
+## Results
+
+In @fig-gridsurfacestats-maps, the surface area ratio is 1 or more
+everywhere and highest at crown edges, where the canopy drops steeply
+into gaps. Roughness is highest in the same places. The volume difference
+is near zero on even canopy and has opposite signs on crown peaks, which
+smoothing lowers, and in narrow gaps, which smoothing fills.
+
+{{< include ../examples/fragments/gridsurfacestats_figures.md >}}
+
+## Checks
+
+@tbl-checks-gridsurfacestats confirms that the surface area ratio is at
+least 1 and roughness at least 0 everywhere, and that the volume
+difference follows the surface-minus-reference difference and includes
+the cell area.
+
+{{< include ../examples/fragments/gridsurfacestats_checks.md >}}

@@ -1,0 +1,40 @@
+# Unit tests {#sec-unit-tests}
+
+FUSION2's library code is covered by a set of unit tests in the
+repository's `tests/cpp/` folder: small programs that feed a function
+made-up data with a known correct answer and check that the function
+returns it. `build.ps1` builds and runs them on every build and stops the
+build if any test fails, so a released build has passed every test below.
+
+Most tests were written alongside a specific fix and reproduce the
+problem that fix solved, so the same problem cannot return unnoticed.
+They complement the whole-tool checks in @sec-example-checks, which run
+the finished tools on real data.
+
+## What each test group covers
+
+| Test group | What it protects |
+|:--------|:----------------------------------|
+| PointFilter | The shared `/class` and `/return` filter (@sec-point-filtering): the default noise exclusion, whitelists, blacklists, return-number lists and mnemonics, and that withheld points are always dropped. |
+| StrataStatBundle | The per-height-layer statistics behind `/strata`: each layer's count, proportion, mean, standard deviation, minimum, and maximum match hand-computed values, an empty layer reports zero without error, and column names stay in step with values. |
+| GetMode | The height mode statistic (`elev_mode`) finds the most common height bin and breaks ties consistently. |
+| LASWriter/LASReader | Point clouds written and read back unchanged: point formats 1, 3, 6, and 7 in LAS and compressed LAZ (including every point of a LAS 1.4 format 6 LAZ file), colour values, coordinate-system records (WKT and GeoTIFF keys), and the header's GPS-time and WKT flags. |
+| ChmSmoothing | `canopymodel /smooth` gives the same result as a plain moving average, including at grid edges and around empty cells, which stay empty. |
+| TableWriter | CSV and SQLite table output (`/output-table`) writes every row and value, including when per-tile tables are joined into one. |
+| GroundFilter | The Kraus and Pfeifer ground filter (@sec-groundfilter) on a made-up sloped scene with dense canopy: all ground under the canopy is kept, no canopy is classified as ground, and wide canopy over a ground-return gap is removed by the coarse pass. |
+| GDALRaster::GetElevation | Ground heights read from a raster: exact values between cell centers, edge cells used for points up to one cell outside the raster on every side, nothing returned further out, and a valid neighbour used next to an empty cell. |
+| SurfaceStats | `gridsurfacestats`' volume is height difference times cell area and is not multiplied twice when summed; grids with gaps still give values in every cell with data; a known slope gives the exact surface area ratio. |
+| StageRegistry | `pipeline` knows all 10 of its stages, and the `densitymetrics` stage receives the ground surface and forwarded options and names its output correctly. |
+| ArgumentParser | All three option spellings (`/name:value`, `-name value`, `--name=value`) set the same options (@sec-conventions). |
+| Point-count raster | `catalog /density` places its raster on the data's real coordinates with a coordinate system, and counts points lying exactly on the data's edges. |
+
+: Unit test groups and what each protects. {#tbl-unit-test-groups}
+
+## Results for this release
+
+The output of the test run from the build that produced this manual:
+
+{{< include ../generated/unit_test_results.md >}}
+
+To run the tests yourself after building, run `fusion_tests.exe` from the
+build folder, or `ctest` in that folder.

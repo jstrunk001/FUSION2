@@ -1,0 +1,60 @@
+# `densitymetrics`: returns by height layer {#sec-densitymetrics}
+
+## What it does
+
+`densitymetrics` counts returns in a set of height layers above ground,
+in every grid cell. The share of returns in each layer describes the
+vertical structure of the vegetation: a stand with a dense understory has
+many returns in the low layers, while a stand with a high, closed canopy
+has most returns in the top layer. These layer counts are common
+predictors in models of forest structure and wildlife habitat.
+
+It computes the same per-layer density bands as `gridmetrics` with
+`/strata` and `/strataraster` (@sec-gridmetrics), as a smaller, faster
+tool. It also keeps the name of legacy FUSION's DensityMetrics program.
+
+## Example commands
+
+{{< include ../examples/fragments/densitymetrics_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (second input) | `out/ground_dem.tif` | Ground surface, given as the second positional argument. `/ground:` works too. |
+| `/outdir` | `out/densitymetrics` | Folder for the outputs. |
+| `/output` | `dm` | Base name of the outputs (`dm_densitymetrics.tif`). Without it, the name comes from the input file. |
+| `/cellsize` | `10` | Cell size, 10 ft. |
+| `/output-table` | `out/densitymetrics/dm_densitymetrics.csv` | Also write the per-cell counts as a CSV table. |
+
+: Options used in the `densitymetrics` example. {#tbl-options-densitymetrics}
+
+The layers come from `/strata`, which was left at its default of
+`0.5,2,5,10,20`. Those five break heights give six layers: below 0.5 ft,
+0.5-2, 2-5, 5-10, 10-20, and above 20 ft.
+
+## Outputs
+
+- **`dm_densitymetrics.tif`**: one band per layer, `density_stratum_00`
+  (lowest) to `density_stratum_05` (highest), each holding that layer's
+  returns per square unit.
+- **`dm_densitymetrics.csv`**: one row per cell with its column, row,
+  center coordinates, total returns (`TotalReturns`), and the count in
+  each layer (`StrataCnt_0` to `StrataCnt_5`).
+
+## Results
+
+@fig-densitymetrics shows the returns per layer for the whole tile (top)
+and each cell's share of returns by layer (bottom). On this closed-canopy
+tile, most returns fall in the top layer, above 20 ft. Cells with a lower
+share there line up with the canopy gaps visible in @fig-canopymodel-maps.
+
+{{< include ../examples/fragments/densitymetrics_figures.md >}}
+
+## Checks
+
+@tbl-checks-densitymetrics confirms that each cell's layer counts add up
+to its total returns, that the totals across cells add up to the tile's
+point count, and that the top layer's count matches R.
+
+{{< include ../examples/fragments/densitymetrics_checks.md >}}

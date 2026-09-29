@@ -1,0 +1,65 @@
+# `topometrics`: slope and aspect {#sec-topometrics}
+
+## What it does
+
+`topometrics` computes terrain slope and aspect from a ground elevation
+raster. Slope and aspect affect site productivity, solar exposure, and
+snow and moisture, so they are standard covariates alongside lidar
+metrics in forest models. `topometrics` works on any ground raster, not
+only one made by `groundfilter`.
+
+Slope is in degrees from horizontal. Aspect is the compass direction the
+slope faces, in degrees clockwise from north (0 = north, 90 = east).
+Both are computed from each cell's eight neighbours with Horn's method,
+the same method GIS software commonly uses. Cells on the outer edge have
+no full set of neighbours and are left empty.
+
+## Example commands
+
+The example runs `topometrics` twice: on the ground surface from
+@sec-groundfilter, and on a USGS 3DEP bare-earth DTM of the same ground
+that FUSION2 did not produce.
+
+{{< include ../examples/fragments/topometrics_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (input) | `out/ground_dem.tif` or the USGS DTM | The ground raster. Its cell size and coordinate system carry through to the output. |
+| `/output` | `out/topometrics_ground.tif` | The slope and aspect raster. |
+
+: Options used in the `topometrics` examples. {#tbl-options-topometrics}
+
+## Outputs
+
+One GeoTIFF on the input raster's grid, with two bands:
+`slope_degrees` and `aspect_degrees`.
+
+## Results
+
+@fig-topometrics-maps shows slope as color, with arrows pointing in the
+direction each slope faces (downhill) and contour lines of elevation.
+Both maps share one slope scale.
+
+- Arrows cross the contour lines at right angles and point from high
+  ground to low ground, and slopes are steepest where contours bunch
+  together.
+- Inside the dashed square (the tile), the two maps show the same broad
+  pattern. The USGS DTM is an independent model with 3 ft cells, so the
+  goal is broad agreement, not an exact match.
+- On nearly flat ground, small bumps in a ground surface can show up as
+  rings of higher slope one or two cells across. These follow the ground
+  surface's own cells rather than real terrain.
+
+{{< include ../examples/fragments/topometrics_figures.md >}}
+
+## Checks
+
+For both inputs, @tbl-checks-topometrics confirms that the output sits on
+the input's grid and keeps its coordinate system, that interior cells
+have values, that slope matches the `terra` R package's slope within a
+median of 0.5 degrees, and that aspect matches `terra` and is reported as
+a compass bearing.
+
+{{< include ../examples/fragments/topometrics_checks.md >}}

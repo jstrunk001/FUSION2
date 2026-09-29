@@ -1,0 +1,161 @@
+# Conventions every tool shares {#sec-conventions}
+
+The FUSION2 tools share one option parser, one point filter, and one set
+of rules for units, missing values, coordinate systems, and table output.
+This chapter covers those shared rules once, so the tool chapters can
+focus on what each tool does.
+
+## Command-line syntax
+
+Every tool takes its main input as a **positional** argument, placed on
+the command line with no option name in front of it. Everything else is an
+option (`/name:value`) or a flag (`/name`):
+
+```bat
+clipdata my_tile.laz /output:out/box.las /extent:1023780,598900,1023880,599000
+```
+
+Three spellings are accepted for every option and flag, and they can be
+mixed on one command line:
+
+| Style | Option | Flag |
+|:--------------|:----------|:----------|
+| Windows (used in this manual) | `/cellsize:2` | `/first` |
+| Single dash | `-cellsize 2` | `-first` |
+| Double dash | `--cellsize=2` | `--first` |
+
+: The three accepted option spellings. {#tbl-option-styles}
+
+Option names are not case-sensitive. A tool run with `/?`, `-h`, or
+`--help` prints its options and exits; @sec-tool-help lists that help for
+every tool. A misspelled option name is not reported as an error; the
+tool ignores it and uses the option's default, so check a new command's
+console output for the settings it actually used.
+
+In the Windows Command Prompt, a long command can continue onto the next
+line with `^` at the end of a line. The worked examples use this layout,
+one option per line. In PowerShell, use a backtick (`` ` ``) instead, or
+put the whole command on one line.
+
+## Inputs: one file or a whole folder
+
+Every tool that reads points accepts either a single `.las`/`.laz` file or
+a folder. Given a folder, the tool reads every LAS/LAZ file in it as one
+combined point cloud. LAS versions 1.0 through 1.4 are read, compressed
+(LAZ) or not. A COPC file (a LAZ file with a built-in spatial index) is
+read like any other LAZ file; `gridmetrics`' batch mode also uses its
+index to read only the parts each tile needs (@sec-many-tiles).
+
+Tools that need a ground surface (`/ground:`) accept a single raster
+(GeoTIFF, ERDAS Imagine, or ENVI) or a folder of raster tiles. A folder is
+joined on the fly into one virtual raster, so a tiled DEM delivery can be
+used as is.
+
+## Outputs
+
+Create output folders before running a tool. `gridmetrics` creates a
+missing `/outdir` folder, but other tools do not, and some of them exit
+without an error message and without writing their output when the
+folder is missing.
+
+Rasters are written as GeoTIFF, with each band named (for example
+`elev_p95` or `canopy_cover`) so GIS software and R show the band names.
+Point clouds are written as LAS or LAZ, chosen by the output file's
+extension. They keep the input's point format, scale, offsets, GPS-time
+type, and coordinate system.
+
+Every raster-producing tool (`gridmetrics`, `densitymetrics`,
+`canopymodel`, `groundfilter`, `returndensity`, `topometrics`,
+`gridsurfacestats`) can also write its cell values as a table:
+
+- `/output-table:<path>` writes one row per cell. The file extension
+  picks the format: `.csv` for a comma-separated file, `.sqlite` for a
+  SQLite database table.
+- `/noraster` skips the GeoTIFF and writes only the table. It is only
+  valid together with `/output-table`, since a run must produce at least
+  one output.
+
+## Point filtering: `/class` and `/return` {#sec-point-filtering}
+
+Every tool that reads points (`gridmetrics`, `cloudmetrics`,
+`canopymodel`, `groundfilter`, `clipdata`, `filterdata`, `thindata`,
+`returndensity`, `densitymetrics`, and point-reading stages run by
+`pipeline`) filters them the same way before doing anything else.
+
+`/class:<spec>` chooses which ASPRS point classes to keep:
+
+| Setting | Points kept |
+|:-----------------|:------------------------|
+| omitted (default) | every class except the noise classes 7 (low point) and 18 (high noise) |
+| `/class:all` or `/class:*` | every class, including 7 and 18 |
+| `/class:2,3,4,5` or `/class:1-5` | only the listed classes (lists, ranges, or both) |
+| `/class:~7,9,18` | every class except the listed ones (replaces the default 7 and 18) |
+
+: `/class` settings. {#tbl-class-filter}
+
+`/return:<spec>` chooses which returns of each laser pulse to keep:
+
+| Setting | Returns kept |
+|:-----------------|:------------------------|
+| omitted (default) | every return |
+| `/return:1` or `/return:1,2` or `/return:1-2` | the listed return numbers |
+| `/return:first` | the first return of each pulse |
+| `/return:last` | the last return of each pulse |
+| `/return:only` | returns of pulses that produced a single return |
+| `/return:intermediate` | returns that are neither first nor last |
+
+: `/return` settings. {#tbl-return-filter}
+
+Points flagged as withheld in the LAS file are always dropped, whatever
+`/class` says.
+
+## Units
+
+The tools do no unit conversion. Every distance, height, and cell size is
+in the input's own units: feet for a point cloud in a feet-based
+projection, meters for one in a meter-based projection. The example tile
+in this manual is in US survey feet, so `/cellsize:10` means 10 ft cells
+and `/minht:2` means 2 ft above ground. On a meter-based tile the same
+commands would mean 10 m cells and 2 m.
+
+Density outputs are points per square unit of the input: points per
+square foot for the example tile.
+
+## Heights above ground
+
+Tools that report heights (`gridmetrics`, `cloudmetrics`, `canopymodel`,
+`densitymetrics`, `clipdata` with `/minz`/`/maxz`) subtract the ground
+elevation beneath each point, read from the `/ground` raster by bilinear
+interpolation between the four nearest cell centers. A point up to one
+cell outside the ground raster uses the raster's edge value. A point
+further outside gets no height and is left out.
+
+`/minht` sets the height below which points are left out of the height
+statistics (default 2). `/heightcut` sets the height that separates
+canopy from non-canopy returns for canopy cover (it defaults to `/minht`).
+
+## Missing values: `/nodata` and `/noheight`
+
+`gridmetrics` and `cloudmetrics` distinguish two kinds of empty:
+
+- **No points at all** (`/nodata`, default `NA`): nothing landed in the
+  cell or plot. Every value is written as `NA`, including point counts.
+- **Points, but none above `/minht`** (`/noheight`, default `0`): the
+  height and intensity statistics are written as `0`, which is a real
+  answer ("no canopy here"). Canopy cover and point counts are computed
+  normally.
+
+Both options take `NA` or a number such as `0` or `-9999`. In GeoTIFF
+output, `NA` is stored as NaN and registered as the file's NoData value,
+so R (`terra`), Python (`rasterio`), and GIS software read those cells as
+missing without extra settings. @sec-metrics gives the full rule.
+
+## Coordinate systems
+
+Outputs carry the input's coordinate system. Rasters get it as GeoTIFF
+georeferencing. Point clouds keep it in the same form the input used,
+either a WKT record or GeoTIFF keys. Rasters derived from other rasters
+(`topometrics`, `gridsurfacestats`, `treeseg`) inherit their input
+raster's coordinate system. Tables of tree tops and crowns
+(`canopymaxima`, `treeseg`) give coordinates in that same system. The
+worked examples check that every raster and point cloud output has one.

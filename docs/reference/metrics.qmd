@@ -1,14 +1,14 @@
-# Lidar & Terrain Metrics Reference
+# Metric definitions {#sec-metrics}
 
 This reference manual documents the statistical elevation, canopy structure, return intensity, pulse density, surface, and experimental spatial metrics computed by `gridmetrics`, `cloudmetrics`, `gridsurfacestats`, `densitymetrics`, and `ExperimentalMetrics`.
 
-Every metric below is computed only from points admitted by each tool's shared `/class`/`/return` point filtering (excluding ASPRS noise classes 7/18 and withheld points by default) -- see "Point Filtering" in [`CLI_TOOLS_REFERENCE.md`](CLI_TOOLS_REFERENCE.md) for the full syntax.
+Every metric below is computed only from points admitted by each tool's shared `/class`/`/return` point filtering (excluding ASPRS noise classes 7/18 and withheld points by default) -- see @sec-point-filtering.
 
 ---
 
-## 0. `NA` vs. `0` -- the `/nodata` and `/noheight` sentinel convention
+## `NA` vs. `0` -- the `/nodata` and `/noheight` sentinel convention
 
-`gridmetrics` and `cloudmetrics` distinguish two different "empty" conditions, each with its own independently-overridable placeholder value, rather than collapsing both into one number as earlier releases did:
+`gridmetrics` and `cloudmetrics` distinguish two different "empty" conditions, each with its own independently-overridable placeholder value:
 
 - **`/nodata` (default `NA`)** -- a cell or cloud with **zero total points**: nothing landed there at all. Every band/column for that cell/cloud gets this value, including counts (`TotalReturns`, `TotalPoints`) and density (`point_density`) -- there is no real computed answer here, only an absence of data.
 - **`/noheight` (default `0`)** -- a cell or cloud with **points present but none passing the height cutoff** (`/minht`): a real, meaningful "no canopy here" answer. This applies specifically to the elevation- and intensity-derived bands whose only data source is the height-filtered point set (`elev_*`, `int_*`, and per-stratum stats). Metrics that are well-defined directly from the *unfiltered* return count -- `canopy_cover`, `point_density`, per-return-number counts -- are **never** overridden by `/noheight`; a computed `0%` cover when points exist but none clear the cutoff is a real answer, not a placeholder.
@@ -19,7 +19,7 @@ Both options accept `NA` (case-insensitive) or a literal number (`0`, `-9999`, `
 
 ---
 
-## 1. Elevation Statistics & Percentiles
+## Elevation Statistics & Percentiles
 
 Calculated across normalized height values ($Z_i = Z_{point} - Z_{ground}$) for all points or canopy points ($Z_i \ge h_{min}$).
 
@@ -45,11 +45,11 @@ Calculated across normalized height values ($Z_i = Z_{point} - Z_{ground}$) for 
 | `elev_cubic_mean` | Cubic Mean | $\sqrt[3]{\frac{1}{N}\sum Z_i^3}$ |
 | `elev_profile_area` | Profile Area | Trapezoidal-rule area under the percentile-vs-percentile-rank curve (`elev_p01`...`elev_p99`, each height offset from `elev_min`) -- the one legacy elevation column that needs the full percentile curve rather than a single-vector reduction. |
 
-The same full bundle (all rows above) is computed for return intensity under the `int_` prefix (`int_min`, `int_mean`, ... `int_cubic_mean`; no `int_profile_area`), and, when `/rgb:` selects one or more spectral channels, once more per selected channel under `red_`/`green_`/`blue_`/`nir_` prefixes -- same columns as `int_*`, one full set per selected, available spectral channel (RGB populated in LAS point formats 2, 3, 5, 7, 8, 10; NIR only in formats 8 and 10 -- see `gridmetrics`'/`cloudmetrics`' `/rgb:` option in [`CLI_TOOLS_REFERENCE.md`](CLI_TOOLS_REFERENCE.md)).
+The same full bundle (all rows above) is computed for return intensity under the `int_` prefix (`int_min`, `int_mean`, ... `int_cubic_mean`; no `int_profile_area`), and, when `/rgb:` selects one or more spectral channels, once more per selected channel under `red_`/`green_`/`blue_`/`nir_` prefixes -- same columns as `int_*`, one full set per selected, available spectral channel (RGB populated in LAS point formats 2, 3, 5, 7, 8, 10; NIR only in formats 8 and 10 -- see `gridmetrics`'/`cloudmetrics`' `/rgb:` option in @sec-cli-options).
 
 ---
 
-## 2. Canopy Cover & Structure Metrics
+## Canopy Cover & Structure Metrics
 
 | Metric | Name | Formula / Description |
 | :--- | :--- | :--- |
@@ -64,7 +64,7 @@ The same full bundle (all rows above) is computed for return intensity under the
 
 ---
 
-## 3. Pulse Density & Return Type Ratios
+## Pulse Density & Return Type Ratios
 
 Calculated by `returndensity.exe` and `gridmetrics.exe`:
 
@@ -79,7 +79,7 @@ Calculated by `returndensity.exe` and `gridmetrics.exe`:
 
 ---
 
-## 3a. Surface Area Ratio, Roughness & Cut/Fill Volume
+## Surface Area Ratio, Roughness & Cut/Fill Volume
 
 Computed by `fusion::metrics::ComputeSurfaceStatsGrid`/`SummarizeSurfaceStats` (`SurfaceStats.h`), and exposed from three places: the standalone `gridsurfacestats.exe`, `gridmetrics.exe`'s `/surfstats` flag (per-cell raster bands, fed from the same `elev_max`/`elev_mean` grid gridmetrics already holds), and `cloudmetrics.exe`'s `/surfstats` flag (scalar summary over a scratch `/cellsize` grid). No TIN/Delaunay triangulation is used -- surface area ratio is a direct closed-form derivation from Horn's-method slope (the same 3x3-neighbor calculation `topometrics.exe` uses for slope/aspect).
 
@@ -93,7 +93,7 @@ Computed by `fusion::metrics::ComputeSurfaceStatsGrid`/`SummarizeSurfaceStats` (
 
 ---
 
-## 3b. Vertical Density Stratum Bands & Per-Stratum Statistic Bundles
+## Vertical Density Stratum Bands & Per-Stratum Statistic Bundles
 
 `densitymetrics.exe` (standalone), `gridmetrics.exe`'s `/strataraster` add-on, and `gridmetrics`'/`cloudmetrics`' `/strata`, `/intstrata`, and `/rgbstrata` all share the same bucket-assignment rule (`fusion::metrics::AssignStratumIndex`): a point's stratum bucket is the first `/strata` threshold its (ground-normalized) elevation is still `>=`, or the bucket past the last threshold if it clears all of them.
 
@@ -108,11 +108,11 @@ Per-stratum output uses a simplified 6-field summary (`fusion::metrics::StrataSt
 
 ---
 
-## 4. Novel 2D & 3D Experimental Spatial Metrics
+## Novel 2D & 3D Experimental Spatial Metrics
 
 Computed by `fusion::metrics::ComputeExperimentalMetrics` in `ExperimentalMetrics.h` using 2D grid resolution (`cellSize`) and 3D voxel resolution (`voxelSize`).
 
-### 4.1 Relative Height Ratio Metrics
+### Relative Height Ratio Metrics
 Ratio of canopy height parameters ($Z \ge h_{min}$) relative to overall plot height statistics:
 
 - `zMinRat`: Relative minimum canopy height ratio ($|\frac{Z_{min,canopy} - Z_{min,all}}{Z_{min,all}}| \times 100$).
@@ -123,7 +123,7 @@ Ratio of canopy height parameters ($Z \ge h_{min}$) relative to overall plot hei
 
 ---
 
-### 4.2 2D & 3D Spatial Radial Distances & Correlations
+### 2D & 3D Spatial Radial Distances & Correlations
 
 - **2D Radial Distance**: $R_{xy} = \sqrt{X^2 + Y^2}$
   - `xyMinRt`, `xyMaxRt`, `xySdRt`, `xyMnRt`, `xyCvRt`: Min, Max, StdDev, Mean, and CV of 2D radial distances.
@@ -136,7 +136,7 @@ Ratio of canopy height parameters ($Z \ge h_{min}$) relative to overall plot hei
 
 ---
 
-### 4.3 2D Area & Columnar Grid Volume
+### 2D Area & Columnar Grid Volume
 
 Grid cells of size `cellSize` $\times$ `cellSize` ($A_{cell} = \text{cellSize}^2$).
 
@@ -149,7 +149,7 @@ Grid cells of size `cellSize` $\times$ `cellSize` ($A_{cell} = \text{cellSize}^2
 
 ---
 
-### 4.4 3D Voxel Volume
+### 3D Voxel Volume
 
 Voxels of size `voxelSize` $\times$ `voxelSize` $\times$ `voxelSize` ($V_{voxel} = \text{voxelSize}^3$).
 

@@ -1,23 +1,51 @@
 project:
-  type: website
-  output-dir: output/html
+  type: book
+  output-dir: output
 
-website:
-  title: "FUSION Documentation Suite"
-  sidebar:
-    style: "docked"
-    search: true
-    contents:
-      - text: "Overview & Architecture"
-        file: index.md
-      - text: "C++ Library API Reference"
-        file: API_REFERENCE.md
-      - text: "Lidar & Terrain Metrics Reference"
-        file: METRICS_REFERENCE.md
-      - text: "Executable Suite & CLI Reference"
-        file: CLI_TOOLS_REFERENCE.md
-      - text: "Batch Pipelines (pipeline.exe)"
-        file: PIPELINE_GUIDE.md
+book:
+  title: "FUSION2 User Manual"
+  subtitle: "Command-line lidar processing tools for forest monitoring"
+  author: "Jacob Strunk"
+  date: today
+  output-file: "FUSION2_Manual"
+  repo-url: https://github.com/jstrunk001/FUSION2
+  chapters:
+    - index.qmd
+    - part: "Getting started"
+      chapters:
+        - getting_started/installing.qmd
+        - getting_started/quick_start.qmd
+        - getting_started/conventions.qmd
+    - part: "Worked examples, tool by tool"
+      chapters:
+        - tools/00_example_tile.qmd
+        - tools/01_catalog.qmd
+        - tools/02_filterdata.qmd
+        - tools/03_thindata.qmd
+        - tools/04_groundfilter.qmd
+        - tools/05_clipdata.qmd
+        - tools/06_canopymodel.qmd
+        - tools/07_returndensity.qmd
+        - tools/08_densitymetrics.qmd
+        - tools/09_gridmetrics.qmd
+        - tools/10_cloudmetrics.qmd
+        - tools/11_topometrics.qmd
+        - tools/12_gridsurfacestats.qmd
+        - tools/13_canopymaxima.qmd
+        - tools/14_treeseg.qmd
+        - tools/15_pipeline.qmd
+        - tools/16_many_tiles.qmd
+    - part: "Reference"
+      chapters:
+        - reference/cli_options.qmd
+        - reference/tool_help.qmd
+        - reference/metrics.qmd
+        - reference/api.qmd
+  appendices:
+    - appendices/unit_tests.qmd
+    - appendices/example_checks.qmd
+    - appendices/legacy_gaps.qmd
+    - appendices/changelog.qmd
 
 format:
   html:
@@ -27,11 +55,16 @@ format:
     number-sections: true
     code-copy: true
     html-math-method: katex
-  pdf:
-    documentclass: article
-    geometry:
-      - margin=1in
+  typst:
     toc: true
-    toc-depth: 3
+    toc-depth: 2
     number-sections: true
-    colorlinks: true
+    papersize: us-letter
+    # The book template's own lists look for plain Typst image/table
+    # figures and come out empty, because Quarto labels its figures and
+    # tables with its own kinds. lists.typ builds both lists after the
+    # table of contents instead.
+    lof: false
+    lot: false
+    include-before-body:
+      - lists.typ

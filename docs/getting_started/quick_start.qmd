@@ -1,0 +1,70 @@
+# Quick start {#sec-quick-start}
+
+This chapter takes one lidar tile, `my_tile.laz`, from raw points to a
+ground surface, a canopy height model, a grid of forest metrics, and a
+list of tree tops, in four commands. The commands are written for the
+Windows Command Prompt and assume the tools are on your `PATH`
+(@sec-installing). Cell sizes are in the point cloud's own horizontal
+units, feet for the tile used in this manual.
+
+Create the output folder first. Not every tool creates a missing output
+folder, and some report success without writing anything when the folder
+does not exist.
+
+```bat
+mkdir out
+```
+
+## Build the ground surface
+
+```bat
+groundfilter my_tile.laz /output-raster:out/ground.tif /cellsize:5
+```
+
+`groundfilter` finds the points that hit the ground and turns them into a
+ground elevation raster (a digital elevation model, or DEM) with 5 ft
+cells. The tools that follow use it to turn each point's elevation into a
+height above ground (@sec-groundfilter).
+
+## Build the canopy height model
+
+```bat
+canopymodel my_tile.laz /ground:out/ground.tif /cellsize:3 /output:out/chm.tif
+```
+
+`canopymodel` keeps the highest point in each 3 ft cell and subtracts the
+ground elevation beneath it, giving a canopy height model (CHM): a raster
+of vegetation height (@sec-canopymodel).
+
+## Compute gridded forest metrics
+
+```bat
+gridmetrics my_tile.laz out/ground.tif /cellsize:10 /outdir:out
+```
+
+`gridmetrics` computes height percentiles, canopy cover, height
+variability, intensity statistics, and more for every 10 ft cell, and
+writes them as bands of one GeoTIFF, `out/my_tile_gridmetrics.tif`
+(@sec-gridmetrics). The ground surface can be given as the second
+positional argument, as here, or with `/ground:`.
+
+## Find tree tops
+
+```bat
+canopymaxima out/chm.tif /output:out/tree_tops.csv /minht:2
+```
+
+`canopymaxima` finds local height peaks on the canopy height model and
+writes one row per tree top, with its location, height, and an estimated
+crown diameter (@sec-canopymaxima). `/minht:2` ignores peaks lower than
+2 ft.
+
+## Next steps
+
+- @sec-conventions explains the option syntax and the behavior every tool
+  shares, such as which points are filtered out by default and how
+  missing values are written.
+- The worked-example chapters, starting with @sec-example-tile, cover each
+  tool in depth with figures of its output.
+- @sec-many-tiles shows how to run the same steps over hundreds of tiles
+  with `pipeline` or `gridmetrics`' batch mode.

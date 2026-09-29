@@ -1,12 +1,12 @@
-# Functional Comparison: Legacy FUSION (v4.40) vs. Modernized FUSION2
+# Legacy FUSION programs not in FUSION2 {#sec-legacy-gaps}
 
-This document inventories the functionality present in the original USDA Forest Service FUSION suite (Version 4.40 and LiDAR Toolkit / LTK) that is not currently implemented in the modernized FUSION2 codebase.
+This document inventories the functionality present in legacy FUSION, the USDA Forest Service suite (version 4.40, including the LiDAR Toolkit, LTK), that FUSION2 does not include.
 
 Per guidance, format-conversion programs dedicated strictly to legacy PLANS `.dtm`, binary `.lda`, and ASCII raster formats (such as `ASCII2DTM`, `DTM2ASCII`, `DTM2ENVI`, `DTM2TIF`, `DTM2XYZ`, `XYZ2DTM`, `ClipDTM`, `MergeDTM`, `SplitDTM`, `RepairGridDTM`, `DTMDescribe`, `LDA2LAS`, `LDAtoASCII`, `LDAConvert`, `ASC2ASC`, `ASCII3D`, and `ASCImport`) are excluded from this comparison.
 
 ---
 
-## 1. Summary of Current FUSION2 Toolset
+## Summary of Current FUSION2 Toolset
 
 The FUSION2 suite focuses on replacing the legacy `.dtm` raster format with native GDAL GeoTIFF support, streaming direct `.las` and `.laz` point cloud input and output, and multithreading batch execution. It provides 15 command-line tools:
 
@@ -30,9 +30,9 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-## 2. Functionality in Original FUSION Missing from FUSION2
+## Legacy FUSION functionality missing from FUSION2
 
-### A. Interactive Graphical Environments
+### Interactive Graphical Environments
 
 1. **`FUSION.exe` (Interactive 2D Desktop GIS & Workstation)**:
    - **Multi-layer GIS Display**: Visual overlay of LiDAR point coverage, georeferenced aerial imagery (DOQs, ortho-imagery, TIFF/JPEG/MrSID/ECW), bare-earth DEMs, canopy height models, and vector GIS layers (ESRI shapefiles of stands, roads, plot centers, and streams).
@@ -51,7 +51,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-### B. Vector & GIS Spatial Subsetting
+### Vector & GIS Spatial Subsetting
 
 1. **`PolyClipData` (Shapefile Polygon Subsetting)**:
    - Clips point clouds using polygon geometries from ESRI shapefiles.
@@ -61,7 +61,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-### C. Surface Interpolation, Triangulation (TIN), and Quality Control
+### Surface Interpolation, Triangulation (TIN), and Quality Control
 
 1. **`SurfaceCreate` / `TINSurfaceCreate`**:
    - Creates bare-earth or canopy surface models using Delaunay Triangulation (TIN) directly from point data, followed by interpolation onto a grid.
@@ -76,7 +76,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-### D. Surface Analysis & Raster Map Algebra
+### Surface Analysis & Raster Map Algebra
 
 1. **`GridSurfaceStats` & `SurfaceStats`**:
    - **3D Surface Area vs. Planimetric Area**: Calculates the true 3D surface area of complex terrain (accounting for slope and micro-topography) compared to nominal 2D planimetric area.
@@ -95,7 +95,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-### E. Point Cloud Processing & Derivative Products
+### Point Cloud Processing & Derivative Products
 
 1. **`IntensityImage` (Ortho-intensity Image Generation)**:
    - Generates georeferenced grayscale or color raster images based on point return intensities.
@@ -120,7 +120,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-### F. Forestry-Specific Stem Modeling & Tree Inventory Utilities
+### Forestry-Specific Stem Modeling & Tree Inventory Utilities
 
 1. **`TreePoints` & `treebase`**:
    - Converts tabular tree lists (with coordinates, heights, crown ratios, and species) into synthetic 3D point clouds representing stems and crown envelopes.
@@ -132,7 +132,7 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-### G. Trajectory & Full-Waveform Processing
+### Trajectory & Full-Waveform Processing
 
 1. **`FWFProcess`**:
    - Decomposes digitized full-waveform LiDAR data into discrete return points and Gaussian waveform components.
@@ -141,18 +141,18 @@ Every tool that writes a point cloud (`filterdata`, `thindata`, `clipdata`, `gro
 
 ---
 
-### H. Data Management & Workflow Utilities
+### Data Management & Workflow Utilities
 
 1. **`JoinDB`**:
    - Relational table joining utility to combine columns from two data tables (e.g., merging LiDAR metric CSVs with field-measured plot inventory tables).
 2. **`SRSPlotSummary`, `SRSAggregate`, `SRSClassify`, `SRSSummarize`, `SRSAdjustIntensity`**:
    - Tools developed for regional forest inventory analysis, automating plot metric aggregation, swath intensity normalization, and metric-based forest type classification.
 3. **`Identify`**:
-   - Queries metadata stored in output files to recover the specific FUSION program version, execution timestamp, and command-line parameters used to generate them.
+   - Queries metadata stored in output files to recover the specific legacy FUSION program version, execution timestamp, and command-line parameters used to generate them.
 
 ---
 
-## 3. Option and Feature Gaps Within Ported Tools
+## Option and Feature Gaps Within Ported Tools
 
 Beyond entirely omitted tools, several tools that were ported to FUSION2 omit specific options or capabilities found in their legacy equivalents:
 
@@ -168,10 +168,10 @@ Beyond entirely omitted tools, several tools that were ported to FUSION2 omit sp
 
 ---
 
-## 4. Architectural Summary
+## Architectural Summary
 
-The modernized FUSION2 toolset provides substantial performance gains (4.5x to 6.6x throughput improvement, streaming point cloud I/O, multi-threading, and native GeoTIFF raster support). However, the modernization focused on the core automated forest modeling pipeline:
+FUSION2 adds 4.5 to 6.6 times the throughput of legacy FUSION, along with streaming point cloud I/O, multi-threading, and native GeoTIFF raster support. Its scope is the core automated forest modeling pipeline:
 
 $$\text{Point Cloud} \longrightarrow \text{Ground Filter} \longrightarrow \text{CHM} \longrightarrow \text{Tree Detection / GridMetrics}$$
 
-Polygon clipping (`PolyClipData`), surface geometry statistics (`GridSurfaceStats`/`SurfaceStats`), and height-slice density (`DensityMetrics`) are now covered by `clipdata /shape`, `gridsurfacestats` with `cloudmetrics /surfstats`, and `densitymetrics`. The broader capabilities of original FUSION—specifically the **interactive 2D/3D visualization workstation** (`FUSION.exe` and `LDV.exe`), **Delaunay TIN surface generation** (`TINSurfaceCreate`), **ortho-intensity raster imaging** (`IntensityImage`), and **first/last return pulse splitting** (`FirstLastReturn`)—remain exclusive to the legacy codebase.
+Polygon clipping (`PolyClipData`), surface geometry statistics (`GridSurfaceStats`/`SurfaceStats`), and height-slice density (`DensityMetrics`) are now covered by `clipdata /shape`, `gridsurfacestats` with `cloudmetrics /surfstats`, and `densitymetrics`. The broader capabilities of legacy FUSION—specifically the **interactive 2D/3D visualization workstation** (`FUSION.exe` and `LDV.exe`), **Delaunay TIN surface generation** (`TINSurfaceCreate`), **ortho-intensity raster imaging** (`IntensityImage`), and **first/last return pulse splitting** (`FirstLastReturn`)—remain exclusive to the legacy codebase.

@@ -1,0 +1,6 @@
+# Changelog {#sec-changelog}
+
+The changes in each FUSION2 release, most recent first. This is the
+repository's `CHANGELOG.md`, which is also bundled with each release.
+
+{{< include ../generated/changelog.md >}}

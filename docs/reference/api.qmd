@@ -1,10 +1,10 @@
-# C++ Library API Reference (`libfusion_core`)
+# C++ library interface (`libfusion_core`) {#sec-api}
 
 This reference documents the C++ classes, structs, namespaces, and functions provided by `libfusion_core`. The library is compiled with C++17 and relies on GDAL and LASlib/LASzip for robust geospatial point cloud and raster I/O.
 
 ---
 
-## 1. Point Cloud I/O (`fusion::lidar`)
+## Point Cloud I/O (`fusion::lidar`)
 
 Header: `#include "fusion/lidar/LASPointCloud.h"`
 
@@ -109,7 +109,7 @@ Writer class for exporting modified or generated point clouds to `.las` or `.laz
 
 ---
 
-## 2. Raster I/O & GDAL Engine (`fusion::raster`)
+## Raster I/O & GDAL Engine (`fusion::raster`)
 
 Header: `#include "fusion/raster/GDALRaster.h"`
 
@@ -166,7 +166,7 @@ Wrapper around GDAL datasets supporting single-band ground DEMs and multi-band c
 
 ---
 
-## 3. Parallel Batch Engine (`fusion::batch`)
+## Parallel Batch Engine (`fusion::batch`)
 
 Header: `#include "fusion/batch/BatchPipeline.h"`
 
@@ -209,7 +209,7 @@ Engine for distributing tiled processing across multi-core CPUs.
 
 ---
 
-## 4. Status Logging (`fusion::batch`)
+## Status Logging (`fusion::batch`)
 
 Header: `#include "fusion/batch/StatusMessenger.h"`
 
@@ -224,7 +224,7 @@ Thread-safe singleton logger for writing status updates to console stdout and op
 
 ---
 
-## 5. Experimental Lidar Metrics (`fusion::metrics`)
+## Experimental Lidar Metrics (`fusion::metrics`)
 
 Header: `#include "fusion/metrics/ExperimentalMetrics.h"`
 
@@ -239,8 +239,8 @@ struct Point3D {
 
 struct ExperimentalMetricsOptions {
     double minHt{2.0};        // Minimum canopy height cutoff
-    double cellSize{10.0};     // 2D grid cell resolution (m)
-    double voxelSize{20.0};    // 3D voxel resolution (m)
+    double cellSize{10.0};     // 2D grid cell resolution (input units)
+    double voxelSize{20.0};    // 3D voxel resolution (input units)
 };
 ```
 
@@ -254,7 +254,7 @@ struct ExperimentalMetricsOptions {
 
 ---
 
-## 6. CLI Argument Parsing (`fusion::cli`)
+## CLI Argument Parsing (`fusion::cli`)
 
 Header: `#include "fusion/cli/ArgumentParser.h"`
 

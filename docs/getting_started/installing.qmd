@@ -1,0 +1,59 @@
+# Installing FUSION2 {#sec-installing}
+
+FUSION2 runs on 64-bit Windows. Each tool is a single self-contained
+executable with no separate libraries to install.
+
+## Download a release
+
+1. Open the [FUSION2 Releases page](https://github.com/jstrunk001/FUSION2/releases)
+   and download the zip file from the latest release
+   (`FUSION2_tools_v<version>-<date>.zip`).
+2. Unzip it into a folder of your choice, for example `C:\FUSION2`.
+
+The folder then holds:
+
+| Item | What it is |
+|:--------|:------------------------------|
+| 15 `.exe` files | The tools: `catalog`, `filterdata`, `thindata`, `groundfilter`, `clipdata`, `canopymodel`, `returndensity`, `densitymetrics`, `gridmetrics`, `cloudmetrics`, `topometrics`, `gridsurfacestats`, `canopymaxima`, `treeseg`, and `pipeline` |
+| `proj_data\proj.db` | The coordinate-system database the tools use to read and write map projections |
+| `FUSION2_Manual.pdf` | This manual |
+| `CHANGELOG.md` | What changed in each release |
+
+: Contents of a FUSION2 release zip. {#tbl-release-contents}
+
+Keep `proj_data` in the same folder as the executables. The tools look for
+it next to themselves. Without it, they still run, but they may not
+recognize some coordinate systems and will print a warning about
+`proj.db`.
+
+## Put the tools on your PATH
+
+Adding the folder to your `PATH` lets you run a tool by name from any
+folder. In PowerShell, for the current user:
+
+```powershell
+$dir = "C:\FUSION2"
+$old = [Environment]::GetEnvironmentVariable("Path", "User")
+[Environment]::SetEnvironmentVariable("Path", "$old;$dir", "User")
+```
+
+Open a new terminal afterwards so the change takes effect. Without this
+step, run each tool by its full path (`C:\FUSION2\gridmetrics.exe`).
+
+## Check the installation
+
+Every tool prints its options when run with `/?`:
+
+```bat
+gridmetrics /?
+```
+
+If the options list appears, the tools are ready. @sec-tool-help collects
+this help text for every tool.
+
+## Build from source
+
+The FUSION2 repository's `README.md` explains how to build the tools with
+CMake and the `build.ps1` script, including the minimal (GeoTIFF-only) and
+full-format GDAL build profiles. `build.ps1` also runs the unit tests
+described in @sec-unit-tests and renders this manual.

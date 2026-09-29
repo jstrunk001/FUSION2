@@ -1,0 +1,59 @@
+# `canopymodel`: canopy height surface {#sec-canopymodel}
+
+## What it does
+
+`canopymodel` builds a canopy height model (CHM): a raster in which each
+cell holds the height of the highest point in that cell above the ground
+surface. A CHM is the starting point for tree detection (`canopymaxima`,
+`treeseg`, `pipeline`), for canopy gap mapping, and for any analysis of
+canopy surface shape (`gridsurfacestats`).
+
+A cell that no point falls in is left empty (NoData) rather than filled,
+so empty cells show exactly where the data has no returns.
+
+## Example commands
+
+The example builds three CHMs from the same points and ground surface:
+plain, smoothed, and slope-adjusted.
+
+{{< include ../examples/fragments/canopymodel_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/ground` | `out/ground_dem.tif` | Ground surface subtracted from each point's elevation. Without it, the raster holds raw elevations (a surface model rather than a height model). |
+| `/cellsize` | `3` | CHM cell size, 3 ft. |
+| `/output` | `out/chm.tif` | The CHM (GeoTIFF). Required. |
+| `/smooth` | `3` | Smooth with a 3 x 3 cell moving average. Empty cells stay empty; they are not filled from their neighbours. |
+| `/slope` | | Measure each point's height perpendicular to the local slope of the ground surface rather than straight up. The two differ only where the ground is sloped. |
+
+: Options used in the `canopymodel` examples. {#tbl-options-canopymodel}
+
+## Outputs
+
+One GeoTIFF per run with one band, `canopy_height`, in feet above ground.
+
+## Results
+
+@fig-canopymodel-maps shows the three CHMs on one height scale. All three
+show distinct crowns separated by gaps. The smoothed version is softer.
+On this gently sloping tile, the slope-adjusted version is nearly
+identical to the plain one. Single empty cells (dark grey) inside the
+canopy are cells no point fell in; they stay in the same place after
+smoothing.
+
+{{< include ../examples/fragments/canopymodel_figures.md >}}
+
+In the side view in @fig-canopymodel-profile, the plain CHM line (blue)
+rides along the top of the point cloud, and the smoothed line (orange)
+follows it with softened peaks.
+
+## Checks
+
+@tbl-checks-canopymodel confirms that no cell is taller than the tallest
+point above ground or more than 1 ft below ground, that the CHM agrees
+with a CHM built in R from the same points, that `/smooth:3` reduces
+cell-to-cell variation, and that `/slope` changes the surface.
+
+{{< include ../examples/fragments/canopymodel_checks.md >}}

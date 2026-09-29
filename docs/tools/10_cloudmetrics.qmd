@@ -1,0 +1,59 @@
+# `cloudmetrics`: one summary for a file or for each plot {#sec-cloudmetrics}
+
+## What it does
+
+`cloudmetrics` computes the same statistics as `gridmetrics`, but for a
+whole point cloud (one row per file) or for each polygon in a shapefile
+(one row per polygon) instead of for each grid cell. Its main use is
+computing lidar metrics for field plots, the other half of the
+plot-to-grid modelling workflow described in @sec-gridmetrics.
+
+With `/shape`, `cloudmetrics` reads the full point cloud once and routes
+each point to the polygon that contains it. There is no need to clip each
+plot to its own file first, as legacy FUSION's workflow required.
+
+## Example commands
+
+The example summarizes the whole tile, then each of the two plots.
+
+{{< include ../examples/fragments/cloudmetrics_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/ground` | `out/ground_dem.tif` | Ground surface for heights above ground. |
+| `/output` | `out/cloudmetrics_tile.csv` | The metrics table. |
+| `/minht` | `2` | Leave returns below 2 ft out of the height statistics (the default, stated here explicitly). |
+| `/strata` | `0.5,2,5,10,20` | Also summarize the returns in each of six height layers. |
+| `/shape` | `out/clipdata/example_plots.shp` | Compute one row per polygon rather than one for the whole file. |
+| `/field` | `plot_id` | Label each polygon's row from this attribute. |
+
+: Options used in the `cloudmetrics` examples. {#tbl-options-cloudmetrics}
+
+## Outputs
+
+One CSV table per run. Each row starts with an identifier (`Filename`,
+or with `/shape` the polygon's `FeatureIndex` and `Label`), then
+`TotalPoints`,
+`CanopyPoints`, `CanopyCoverPct`, and the full set of height and
+intensity statistics (`elev_*`, `int_*`). The per-plot table on this run
+has 84 columns.
+
+## Results
+
+@fig-cloudmetrics-percentiles plots the height percentiles for the tile
+and for each plot. Each curve rises steadily from low to high
+percentiles. The plot curves resemble the tile curve without matching it
+exactly, since each plot samples a different patch of forest.
+
+{{< include ../examples/fragments/cloudmetrics_figures.md >}}
+
+## Checks
+
+@tbl-checks-cloudmetrics confirms that the tile's point count and canopy
+point count match R, that its maximum height is within the tallest point,
+and that the per-plot table has one row per plot, labelled from
+`plot_id`, with point counts within 0.5% of R.
+
+{{< include ../examples/fragments/cloudmetrics_checks.md >}}

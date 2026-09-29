@@ -1,0 +1,55 @@
+# `catalog`: summarize point cloud files {#sec-catalog}
+
+## What it does
+
+`catalog` is the first tool to run on a new delivery of lidar data. It
+reads every LAS/LAZ file given to it and reports each file's point count,
+bounding box, elevation range, LAS point format, and whether it is
+compressed. With `/density`, it also writes a raster counting the points
+in each cell, which shows at a glance whether coverage is even or has gaps
+and stripes.
+
+`catalog` needs no ground surface and changes no data.
+
+## Example commands
+
+{{< include ../examples/fragments/catalog_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (input) | `TC_1372_forest200ft.laz` | The file to summarize. A folder summarizes every LAS/LAZ file in it, one row per file. |
+| `/output` | `out/catalog/catalog.csv` | The CSV report. |
+| `/density` | `10` | Also write a point-count raster with 10 ft cells, named after the report (`catalog.tif`). |
+
+: Options used in the `catalog` example. {#tbl-options-catalog}
+
+## Outputs
+
+- **`catalog.csv`**: one row per input file, with the columns
+  `FileName`, `PointCount`, `MinX`, `MaxX`, `MinY`, `MaxY`, `MinZ`,
+  `MaxZ`, `Format` (LAS point data format), and `IsCompressed`.
+- **`catalog.tif`**: one band, `point_density`, holding the number of
+  points in each cell. The grid starts at the data's lower-left corner
+  and carries the input's coordinate system.
+
+## Results
+
+@fig-catalog-density maps the density raster. The black outline is the
+bounding box from the CSV report; it sits on the edge of the grid, which
+confirms the raster is placed on the tile's real coordinates. Counts are
+fairly even across the tile. Stripes along one direction would mark
+overlapping flight lines, and empty cells inside the tile would point to
+missing data.
+
+{{< include ../examples/fragments/catalog_figures.md >}}
+
+## Checks
+
+@tbl-checks-catalog lists the checks on this run. They confirm that the
+reported point count and bounding box match the file, and that the
+density raster sits on the tile, carries a coordinate system, and counts
+every point exactly once.
+
+{{< include ../examples/fragments/catalog_checks.md >}}

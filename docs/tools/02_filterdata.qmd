@@ -1,0 +1,63 @@
+# `filterdata`: keep points by return, class, or elevation {#sec-filterdata}
+
+## What it does
+
+`filterdata` writes a new point cloud holding only the points that pass a
+filter: chosen return numbers, chosen classes, an elevation range, or any
+combination. Typical uses are pulling out first returns for canopy
+analysis, ground-classed points for checking a vendor's ground
+classification, or points in an elevation band to inspect a suspected
+artifact.
+
+The return and class filters use the syntax shared by every tool
+(@sec-point-filtering). The elevation limits `/minz` and `/maxz` apply to
+raw elevation, not height above ground; to clip by height above ground,
+use `clipdata` with `/ground` (@sec-clipdata).
+
+## Example commands
+
+The example runs three separate filters, each writing its own file. The
+elevation band is a 20 ft window centered on the tile's median point
+elevation.
+
+{{< include ../examples/fragments/filterdata_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/output` | `out/filterdata/<name>.las` | The filtered point cloud. A `.laz` extension writes compressed output. |
+| `/return` | `1` | Keep first returns only. `/return:first` does the same. |
+| `/class` | `2` | Keep only points classified as ground (ASPRS class 2). |
+| `/minz`, `/maxz` | `253`, `273` | Keep points with elevations from 253 to 273 ft. |
+
+: Options used in the `filterdata` examples. {#tbl-options-filterdata}
+
+## Outputs
+
+One LAS or LAZ file per run, with the same point format, scale, offsets,
+and coordinate system as the input. Withheld points and, unless `/class`
+says otherwise, noise classes 7 and 18 are always left out.
+
+## Results
+
+@fig-filterdata-strip shows a west-east side view through the tile. Grey
+points are the whole tile; blue points are what each filter kept.
+
+- **First returns** mostly trace the top of the canopy, with some reaching
+  the ground through gaps.
+- **Ground class** points trace one thin line along the bottom of the
+  point cloud, with nothing in the canopy.
+- **Elevation band** points fill the space between the two dashed lines
+  and nothing outside them.
+
+{{< include ../examples/fragments/filterdata_figures.md >}}
+
+## Checks
+
+For each filter, the checks in @tbl-checks-filterdata confirm that the
+number of points kept matches the same filter applied in R, that every
+kept point satisfies the filter, that the coordinate system is kept, and
+that withheld points are dropped.
+
+{{< include ../examples/fragments/filterdata_checks.md >}}

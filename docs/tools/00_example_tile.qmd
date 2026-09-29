@@ -1,0 +1,86 @@
+# The example tile {#sec-example-tile}
+
+Every worked example in this part of the manual runs on one lidar tile,
+so the chapters can be read in order and the outputs of early tools (the
+ground surface, the canopy height model) feed the tools that follow, just
+as they would in a real project.
+
+## The tile
+
+| Property | Value |
+|:--------|:------------------------------|
+| File | `data/raw/lidar/TC_1372_forest200ft.laz` in FUSION2-examples |
+| Source | A 200 x 200 ft window of lidar tile TC_1372 (NV5 Geospatial, 2022), western Washington |
+| Forest | Closed-canopy conifer forest: about 92% canopy cover, 95th-percentile height about 142 ft |
+| Format | LAS 1.4, point data format 6, LAZ-compressed |
+| Points | 70,532 (246 flagged as withheld, which every tool drops) |
+| Classes | 66,614 unclassified (1), 3,672 ground (2), 235 low noise (7), 11 high noise (18) |
+| Coordinate system | NAD83(HARN) / Washington South, US survey feet (EPSG:2927), NAVD88 heights in feet |
+| Elevations | Ground about 175-181 ft; highest return 356 ft |
+
+: The example tile. {#tbl-example-tile}
+
+Because the tile is in feet, every cell size, height, and distance in the
+example commands is in feet (@sec-conventions).
+
+A closed-canopy tile is a demanding test. Only about 5% of the returns are
+classified as ground, the canopy is tall, and gaps are narrow, so ground
+filtering, canopy height, and tree detection all have to work under the
+conditions where they most often fail.
+
+## Other inputs the examples use
+
+- **Two circular plots.** `clipdata` and `cloudmetrics` use a shapefile of
+  two 30 ft radius plots, `plotA` and `plotB`, placed inside the tile
+  (`out/clipdata/example_plots.shp`). The example script writes this
+  shapefile before running those tools.
+- **A clip box.** A 100 x 100 ft box starting 25 ft in from the tile's
+  lower-left corner, given to `clipdata` with `/extent`.
+- **An independent ground model.** A USGS 3DEP bare-earth DTM covering the
+  same ground, plus 50 ft on every side
+  (`data/raw/lidar_dtm_examples/site_tc_1372_forest/usgs_3dep_dtm.tif`),
+  used to test `topometrics` on a raster the tools did not produce.
+
+## How the examples were produced
+
+The commands in each tool chapter are the exact commands run by the
+script `R/analysis/005_example_all_tools.qmd` in FUSION2-examples. That
+script runs all 15 tools in the order the chapters follow, then checks
+every output against an independent calculation in R. The figures are
+drawn from the output files by `005_example_all_tools_REPORT.qmd`, and
+`007_export_fusion2_docs_assets.qmd` copies the commands, figures, and
+check results into this manual. @tbl-run-info identifies the run shown.
+
+{{< include ../examples/fragments/run_info.md >}}
+
+In the commands, paths are relative to the FUSION2-examples project
+folder, and `out/` stands for the run's output folder. To repeat a
+command, run it from the FUSION2-examples folder after creating `out/`
+and the subfolders the command writes into (@sec-conventions).
+
+To reproduce the whole run:
+
+1. Clone [FUSION2-examples](https://github.com/jstrunk001/FUSION2-examples).
+2. Put the FUSION2 tools on your `PATH`, or set the environment variable
+   `FUSION2_BIN_DIR` to their folder.
+3. Run `R/analysis/005_example_all_tools.qmd` chunk by chunk in RStudio or
+   Positron. It needs the R packages `data.table`, `terra`, `sf`, `lidR`,
+   `ggplot2`, and `RForInvt`.
+
+## How to read a tool chapter
+
+Each tool chapter has the same sections:
+
+1. **What it does**: the tool's purpose and when to use it.
+2. **Example commands**: the commands run on the example tile.
+3. **Options used**: what each option in those commands does. The full
+   list of options is in @sec-cli-options.
+4. **Outputs**: the files the tool writes.
+5. **Results**: figures drawn from those files, with what to look for.
+6. **Checks**: the automated checks run on the outputs. A result of
+   `pass` means the check held. `fail` means the output is wrong or
+   missing. `warn` means the output works but something about it deserves
+   a look, such as missing coordinate-system metadata. Long values are
+   shortened with `...`; @sec-example-checks lists every check, and the
+   full log is `docs/examples/tables/all_tools_check_log.csv` in the
+   FUSION2 repository.

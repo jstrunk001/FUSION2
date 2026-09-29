@@ -1,0 +1,63 @@
+# `canopymaxima`: find tree tops {#sec-canopymaxima}
+
+## What it does
+
+`canopymaxima` finds individual tree tops as local height peaks on a
+canopy height model, and reports each one's location and height. Tree
+tops are the basis of individual-tree inventories: counting stems,
+building tree lists, and matching lidar trees to field-measured trees.
+
+A cell counts as a tree top when it is the highest cell within a search
+window around it. The window grows with height, since taller trees have
+wider crowns: at height *H*, its radius is `/window-a` + `/window-b` x *H*,
+in the canopy model's units, rounded to whole cells and never less than
+one cell.
+A small window finds more tops (and splits large crowns); a large window
+finds fewer (and merges small neighbouring trees).
+
+## Example commands
+
+{{< include ../examples/fragments/canopymaxima_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (input) | `out/chm.tif` | The canopy height model from @sec-canopymodel. |
+| `/output` | `out/tree_tops.csv` | The tree-top table. |
+| `/minht` | `2` | Ignore peaks lower than 2 ft. |
+
+: Options used in the `canopymaxima` example. {#tbl-options-canopymaxima}
+
+The window coefficients were left at their defaults (`/window-a:0.5`,
+`/window-b:0.05`). Tune them to the forest type and the canopy model's
+cell size; a smoothed canopy model (`canopymodel /smooth`) also reduces
+false tops on bumpy crowns.
+
+## Outputs
+
+A CSV table with one row per tree top: `TreeID`, `X`, `Y` (in the input's
+coordinate system), `Height`, and `CrownDiameter` (twice the search
+window radius used at that height, a rough guide to crown size rather
+than a measured crown).
+
+## Results
+
+In @fig-canopymaxima-tops, each tree top (aqua) sits on a bright local
+peak of the canopy model, with roughly one top per visible crown and no
+tops in gaps below 2 ft. Several tops clustered on one crown would suggest
+the window is too small; a large crown with no top would suggest it is
+too large. Tops along the tile's outer edge are likely edge effects,
+since an edge cell has no neighbours on one side.
+
+{{< include ../examples/fragments/canopymaxima_figures.md >}}
+
+## Checks
+
+@tbl-checks-canopymaxima confirms that at least one top was found, that
+every top lies inside the tile and is at least 2 ft tall but no taller
+than the tallest point, that coordinates are written in full rather than
+rounded, and that each top's height equals the canopy model's value at
+its location.
+
+{{< include ../examples/fragments/canopymaxima_checks.md >}}

@@ -1,0 +1,57 @@
+# `treeseg`: outline tree crowns {#sec-treeseg}
+
+## What it does
+
+`treeseg` divides a canopy height model into individual tree crowns. It
+starts from each height peak and grows a region outward and downward
+(a watershed segmentation) until neighbouring regions meet along the low
+ground between crowns. Each crown gets an ID, an area, and a maximum
+height, which support crown-size distributions, tree lists with crown
+dimensions, and crown-level metrics.
+
+`treeseg` finds its own peaks, so its crown count can differ from
+`canopymaxima`'s tree-top count on the same canopy model.
+
+## Example commands
+
+{{< include ../examples/fragments/treeseg_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (input) | `out/chm.tif` | The canopy height model from @sec-canopymodel. |
+| `/output-raster` | `out/crown_segments.tif` | Raster of crown IDs. |
+| `/output-table` | `out/crown_summary.csv` | One row per crown. |
+| `/minht` | `2` | Cells lower than 2 ft belong to no crown. |
+
+: Options used in the `treeseg` example. {#tbl-options-treeseg}
+
+## Outputs
+
+- **`crown_segments.tif`**: one band, `tree_segment_id`, holding each
+  cell's crown ID (empty for cells in no crown).
+- **`crown_summary.csv`**: one row per crown with `TreeID`, `MaxHeight`,
+  `CrownArea` (in square units of the input, square feet here), and
+  `PixelCount`.
+
+## Results
+
+@fig-treeseg-map draws the crown outlines (orange) over the canopy height
+model, with the `canopymaxima` tree tops from @sec-canopymaxima (aqua)
+for comparison. Outlines follow the visible crown edges and meet along
+the low ground between crowns. Crowns with no aqua top inside show where
+the two tools disagree. @fig-treeseg-sizes plots crown area against
+crown height. Very small crowns at low heights are the most likely to be
+fragments rather than trees.
+
+{{< include ../examples/fragments/treeseg_figures.md >}}
+
+## Checks
+
+@tbl-checks-treeseg confirms that the table and the raster list the same
+crowns, that each crown's pixel count and maximum height match the
+raster and the canopy model, that crown area equals pixel count times
+cell area, and that the area's unit label names the tile's own units.
+
+{{< include ../examples/fragments/treeseg_checks.md >}}

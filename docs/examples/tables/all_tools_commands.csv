@@ -1,0 +1,25 @@
+step,tool,run_label,command,exit_status,run_folder
+2,catalog,catalog,catalog data/raw/lidar/TC_1372_forest200ft.laz /output:out/catalog/catalog.csv /density:10,0,run_VS013_20260928200605
+3,filterdata,filterdata first_returns,filterdata data/raw/lidar/TC_1372_forest200ft.laz /output:out/filterdata/first_returns.las /return:1,0,run_VS013_20260928200605
+3,filterdata,filterdata ground_class,filterdata data/raw/lidar/TC_1372_forest200ft.laz /output:out/filterdata/ground_class.las /class:2,0,run_VS013_20260928200605
+3,filterdata,filterdata z_band,filterdata data/raw/lidar/TC_1372_forest200ft.laz /output:out/filterdata/z_band.las /minz:253 /maxz:273,0,run_VS013_20260928200605
+4,thindata,thindata,thindata data/raw/lidar/TC_1372_forest200ft.laz /output:out/thindata.las /cellsize:2,0,run_VS013_20260928200605
+5,groundfilter,groundfilter,groundfilter data/raw/lidar/TC_1372_forest200ft.laz /output-raster:out/ground_dem.tif /output-points:out/ground_points.las /cellsize:5,0,run_VS013_20260928200605
+6,clipdata,clipdata box,"clipdata data/raw/lidar/TC_1372_forest200ft.laz /output:out/clipdata/box.las /extent:1023780,598900,1023880,599000",0,run_VS013_20260928200605
+6,clipdata,clipdata box + height,"clipdata data/raw/lidar/TC_1372_forest200ft.laz /output:out/clipdata/box_height_2_200.las /extent:1023780,598900,1023880,599000 /ground:out/ground_dem.tif /minz:2 /maxz:200",0,run_VS013_20260928200605
+6,clipdata,clipdata /multifile,clipdata data/raw/lidar/TC_1372_forest200ft.laz /output:out/clipdata/per_plot /shape:out/clipdata/example_plots.shp /multifile /field:plot_id,0,run_VS013_20260928200605
+6,clipdata,clipdata /outside,clipdata data/raw/lidar/TC_1372_forest200ft.laz /output:out/clipdata/outside_plots.las /shape:out/clipdata/example_plots.shp /outside,0,run_VS013_20260928200605
+7,canopymodel,canopymodel,canopymodel data/raw/lidar/TC_1372_forest200ft.laz /ground:out/ground_dem.tif /cellsize:3 /output:out/chm.tif,0,run_VS013_20260928200605
+7,canopymodel,canopymodel /smooth:3,canopymodel data/raw/lidar/TC_1372_forest200ft.laz /ground:out/ground_dem.tif /cellsize:3 /output:out/chm_smooth3.tif /smooth:3,0,run_VS013_20260928200605
+7,canopymodel,canopymodel /slope,canopymodel data/raw/lidar/TC_1372_forest200ft.laz /ground:out/ground_dem.tif /cellsize:3 /output:out/chm_slope.tif /slope,0,run_VS013_20260928200605
+8,returndensity,returndensity,returndensity data/raw/lidar/TC_1372_forest200ft.laz /output:out/returndensity.tif /cellsize:10,0,run_VS013_20260928200605
+9,densitymetrics,densitymetrics,densitymetrics data/raw/lidar/TC_1372_forest200ft.laz out/ground_dem.tif /outdir:out/densitymetrics /output:dm /cellsize:10 /output-table:out/densitymetrics/dm_densitymetrics.csv,0,run_VS013_20260928200605
+10,gridmetrics,gridmetrics,"gridmetrics data/raw/lidar/TC_1372_forest200ft.laz out/ground_dem.tif /cellsize:10 /outdir:out/gridmetrics /strata:0.5,2,5,10,20 /strataraster /surfstats /output-table:out/gridmetrics/gridmetrics_table.csv",0,run_VS013_20260928200605
+11,cloudmetrics,cloudmetrics tile,"cloudmetrics data/raw/lidar/TC_1372_forest200ft.laz /ground:out/ground_dem.tif /output:out/cloudmetrics_tile.csv /minht:2 /strata:0.5,2,5,10,20",0,run_VS013_20260928200605
+11,cloudmetrics,cloudmetrics /shape,cloudmetrics data/raw/lidar/TC_1372_forest200ft.laz /ground:out/ground_dem.tif /output:out/cloudmetrics_plots.csv /shape:out/clipdata/example_plots.shp /field:plot_id,0,run_VS013_20260928200605
+12,topometrics,topometrics ground DEM,topometrics out/ground_dem.tif /output:out/topometrics_ground.tif,0,run_VS013_20260928200605
+12,topometrics,topometrics external DTM,topometrics data/raw/lidar_dtm_examples/site_tc_1372_forest/usgs_3dep_dtm.tif /output:out/topometrics_external_dtm.tif,0,run_VS013_20260928200605
+13,gridsurfacestats,gridsurfacestats,gridsurfacestats out/chm.tif /output:out/gridsurfacestats.tif /reference:out/chm_smooth3.tif,0,run_VS013_20260928200605
+14,canopymaxima,canopymaxima,canopymaxima out/chm.tif /output:out/tree_tops.csv /minht:2,0,run_VS013_20260928200605
+15,treeseg,treeseg,treeseg out/chm.tif /output-raster:out/crown_segments.tif /output-table:out/crown_summary.csv /minht:2,0,run_VS013_20260928200605
+16,pipeline,pipeline,"pipeline /pipeline:groundfilter,canopymodel,canopymaxima /input:data/raw/lidar/TC_1372_forest200ft.laz /output:out/pipeline /extent:1023755,598875,1023954.98,599074.99 /tilesize:100,100 /buffer:20 /cellsize:3 /minht:2 /merge",0,run_VS013_20260928200605

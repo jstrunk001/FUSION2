@@ -1,0 +1,77 @@
+# `gridmetrics`: the full metric grid {#sec-gridmetrics}
+
+## What it does
+
+`gridmetrics` is the workhorse of area-based forest inventory. For every
+grid cell, it computes a large set of statistics from the heights and
+intensities of the returns in that cell: height percentiles, mean and
+variability, canopy cover, return counts, per-layer summaries, and
+surface roughness. Models fit between these cell metrics and field plot
+measurements (volume, biomass, basal area) are then applied to every cell
+to map those attributes across a whole project area.
+
+`gridmetrics` runs on one file, as here, or on a whole folder of tiles in
+a batch mode that tiles, buffers, and processes them in parallel
+(@sec-many-tiles). @sec-metrics defines every metric.
+
+## Example commands
+
+{{< include ../examples/fragments/gridmetrics_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (second input) | `out/ground_dem.tif` | Ground surface, given as the second positional argument. `/ground:` works too. |
+| `/cellsize` | `10` | Cell size, 10 ft. Match it to the size of your field plots when the grid will be used for plot-based models. |
+| `/outdir` | `out/gridmetrics` | Folder for the raster, named `<input name>_gridmetrics.tif`. |
+| `/strata` | `0.5,2,5,10,20` | Also summarize the returns in each of six height layers (@sec-densitymetrics). |
+| `/strataraster` | | Write the per-layer summaries as raster bands, not only as table columns. |
+| `/surfstats` | | Add `surface_area_ratio` and `roughness` bands computed from the highest return in each cell (@sec-gridsurfacestats). |
+| `/output-table` | `out/gridmetrics/gridmetrics_table.csv` | Also write every metric as a CSV table, one row per cell. |
+
+: Options used in the `gridmetrics` example. {#tbl-options-gridmetrics}
+
+Options left at their defaults include `/minht:2` (returns below 2 ft
+are left out of the height statistics), `/nodata:NA`, and `/noheight:0`
+(@sec-conventions).
+
+## Outputs
+
+- **`TC_1372_forest200ft_gridmetrics.tif`**: one multiband GeoTIFF with
+  176 named bands on this run. They include height statistics
+  (`elev_min` to `elev_p99`, L-moments, and others), canopy cover and
+  its variants (`canopy_cover`, `allcover`, `afcover`, and others),
+  `point_density`, counts by return number (`r1count` to `r9count`),
+  intensity statistics (`int_*`), `surface_area_ratio`, `roughness`, and
+  seven bands per height layer (density, count, proportion, mean,
+  standard deviation, minimum, maximum), plus six intensity bands per
+  layer.
+- **`gridmetrics_table.csv`**: one row per cell. It starts with the
+  cell's column, row, and center coordinates (`Col`, `Row`, `X`, `Y`),
+  its `TotalReturns` and `FirstReturns`, and `CanopyCover` and
+  `PointDensity`, followed by the raster's metrics with the same names.
+  The surface-roughness bands and the per-layer density bands are in the
+  raster only.
+
+`/output-mode:singleband` writes each metric as its own GeoTIFF instead.
+
+## Results
+
+@fig-gridmetrics-maps shows six representative bands, each on its own
+scale. Maximum and 95th-percentile height follow the same crown pattern
+as the canopy height model (@fig-canopymodel-maps) at a coarser cell
+size. Canopy cover is high across this closed-canopy tile. Height
+variability is highest where tall crowns sit next to gaps.
+
+{{< include ../examples/fragments/gridmetrics_figures.md >}}
+
+## Checks
+
+@tbl-checks-gridmetrics confirms that the grid has the expected rows and
+columns and sits on the tile, that no band is empty everywhere, that the
+per-cell return counts match R, that no maximum height exceeds the
+tallest point, and that the table has one row per cell and agrees with
+the raster.
+
+{{< include ../examples/fragments/gridmetrics_checks.md >}}

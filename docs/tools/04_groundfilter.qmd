@@ -1,0 +1,80 @@
+# `groundfilter`: build the ground surface {#sec-groundfilter}
+
+## What it does
+
+`groundfilter` finds the points that hit the ground and interpolates them
+into a ground elevation raster (a digital elevation model, or DEM). Every
+tool that reports height above ground reads this surface, so its quality
+limits the quality of canopy heights, gridded metrics, and tree
+detection.
+
+`groundfilter` ignores any classification already in the file and
+classifies ground itself, so it works on unclassified data. It uses the
+iterative robust filter of Kraus and Pfeifer, the method behind legacy
+FUSION's GroundFilter program:
+
+1. **Coarse pass.** A rough ground surface is fitted on large cells
+   (`/coarsecell`). Any point more than `/coarsecut` above it cannot be
+   ground. This removes canopy over gaps in the ground returns that are
+   too wide for the fine pass to see across.
+2. **Fine passes.** On smaller cells (`/filtercell`), the filter fits a
+   weighted plane through each cell and its eight neighbours, then weights
+   each point by how far it sits above that plane. Points well above the
+   surface lose weight, so over `/iterations` passes the surface sinks
+   through the canopy to the ground.
+3. **Classify and grid.** Points close enough to the final surface are
+   ground. The DEM is each `/cellsize` cell's mean ground elevation, and
+   cells with no ground point are filled from their neighbours, so the
+   DEM has no empty cells.
+
+@sec-cli-options gives the weight function and every tuning option. The
+defaults follow legacy FUSION and were used unchanged here.
+
+## Example commands
+
+{{< include ../examples/fragments/groundfilter_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/output-raster` | `out/ground_dem.tif` | The ground DEM (GeoTIFF). |
+| `/output-points` | `out/ground_points.las` | Also write the points classified as ground, as class 2. |
+| `/cellsize` | `5` | DEM cell size, 5 ft. |
+
+: Options used in the `groundfilter` example. {#tbl-options-groundfilter}
+
+A 5 ft DEM is a common choice for forest work: fine enough to follow
+terrain, coarse enough that most cells hold a ground return even under
+closed canopy.
+
+## Outputs
+
+- **`ground_dem.tif`**: one band, `ground_elevation`, with no empty cells.
+- **`ground_points.las`**: the points classified as ground, each written
+  with class 2.
+
+## Results
+
+@fig-groundfilter-map shows the ground surface as a map with contour
+lines. The contours are continuous, with no single-cell pits or spikes.
+
+{{< include ../examples/fragments/groundfilter_figures.md >}}
+
+@fig-groundfilter-profile shows a west-east side view. The FUSION2 ground
+line (blue) runs along the bottom of the point cloud and through the
+points it classified as ground (aqua), and it stays close to a reference
+surface built independently in R with the `lidR` package (orange,
+dashed). @fig-groundfilter-compare compares the two surfaces cell by
+cell: points fall along the 1:1 line, and the difference map is mostly
+near zero.
+
+## Checks
+
+@tbl-checks-groundfilter confirms that the DEM covers the tile with no
+empty cells, stays within the elevation range of the ground points, and
+agrees with the `lidR` reference surface: the median difference must be
+under 1 ft and the 95th-percentile difference under 3 ft. The ground
+points file must hold only class 2 points.
+
+{{< include ../examples/fragments/groundfilter_checks.md >}}

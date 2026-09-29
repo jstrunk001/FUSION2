@@ -1,0 +1,48 @@
+# `returndensity`: point density and first-return share {#sec-returndensity}
+
+## What it does
+
+`returndensity` maps how many returns fell in each cell per unit area,
+and what percent of them were first returns. Density maps are the
+standard check that an acquisition meets its specified point density.
+Low-density patches, stripes from overlapping flight lines, and water
+drop-outs all show up here. The first-return percent is lower under dense
+canopy, where each pulse produces several returns.
+
+## Example commands
+
+{{< include ../examples/fragments/returndensity_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/output` | `out/returndensity.tif` | The two-band density raster. |
+| `/cellsize` | `10` | Cell size, 10 ft. Larger cells give smoother density estimates. |
+
+: Options used in the `returndensity` example. {#tbl-options-returndensity}
+
+## Outputs
+
+One GeoTIFF with two bands:
+
+- `point_density`: returns per square unit of the input's coordinate
+  system (per square foot for the example tile).
+- `first_return_ratio_pct`: first returns as a percent of all returns.
+
+## Results
+
+@fig-returndensity-maps shows both bands. Density is fairly even. The
+first-return percent stays between 0 and 100 and is lowest where the
+canopy is densest.
+
+{{< include ../examples/fragments/returndensity_figures.md >}}
+
+## Checks
+
+@tbl-checks-returndensity confirms that each cell's count matches R
+exactly, that density times cell area adds back up to the tile's point
+count, that the first-return percent stays between 0 and 100, and that
+the band's unit label names the tile's own units (feet).
+
+{{< include ../examples/fragments/returndensity_checks.md >}}

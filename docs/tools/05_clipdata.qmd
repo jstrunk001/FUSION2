@@ -1,0 +1,64 @@
+# `clipdata`: cut out boxes, plots, and height ranges {#sec-clipdata}
+
+## What it does
+
+`clipdata` writes the points that fall inside a rectangle, inside (or
+outside) a set of polygons, or within a range of heights above ground.
+Its most common use is cutting field plots out of a lidar acquisition so
+their points can be summarized and matched to field measurements.
+
+With a polygon shapefile and `/multifile`, one run writes a separate file
+for every polygon, named from one of the shapefile's fields. With
+`/ground`, `/minz` and `/maxz` are heights above the ground surface
+rather than raw elevations.
+
+## Example commands
+
+The example runs four clips: a 100 x 100 ft box; the same box keeping
+only points 2 to 200 ft above ground; one file per 30 ft radius plot; and
+everything outside both plots.
+
+{{< include ../examples/fragments/clipdata_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/output` | `out/clipdata/box.las` | The clipped point cloud. With `/multifile`, a folder that receives one file per polygon. |
+| `/extent` | `1023780,598900,1023880,599000` | Keep points inside this rectangle, given as lower-left X, lower-left Y, upper-right X, upper-right Y. |
+| `/ground` | `out/ground_dem.tif` | Ground surface; makes `/minz` and `/maxz` heights above ground. |
+| `/minz`, `/maxz` | `2`, `200` | Keep points 2 to 200 ft above ground. |
+| `/shape` | `out/clipdata/example_plots.shp` | Keep points inside the shapefile's polygons. Combined with `/extent`, both apply. |
+| `/multifile` | | With `/shape`, write one file per polygon. A polygon with no points gets no file. |
+| `/field` | `plot_id` | With `/multifile`, name each file from this attribute (`plotA.laz`, `plotB.laz`). |
+| `/outside` | | Keep points outside every polygon instead of inside. |
+
+: Options used in the `clipdata` examples. {#tbl-options-clipdata}
+
+## Outputs
+
+One LAS or LAZ file per run, or with `/multifile` one file per polygon
+(`<field value>.laz`), each with the input's point format and coordinate
+system.
+
+## Results
+
+@fig-clipdata-maps shows the clips from above. On the left, the box and
+plot points fill their black outlines exactly. On the right, the
+outside-plots clip covers the tile except for two empty circles that
+match the plot outlines. @fig-clipdata-height shows the height-limited
+clip from the side, in height above ground: every kept point (blue) sits
+above the dashed 2 ft line, and the grey points below it were in the box
+but too low.
+
+{{< include ../examples/fragments/clipdata_figures.md >}}
+
+## Checks
+
+@tbl-checks-clipdata compares each clip with the same clip made in R. The
+box clip must match exactly. The per-plot and outside-plot clips must be
+within 0.5%, because a point lying exactly on a plot boundary can
+legitimately fall on either side. The height-limited clip is checked
+point by point against the 2-200 ft limits.
+
+{{< include ../examples/fragments/clipdata_checks.md >}}

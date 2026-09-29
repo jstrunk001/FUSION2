@@ -1,0 +1,52 @@
+# `thindata`: keep at most one point per cell {#sec-thindata}
+
+## What it does
+
+`thindata` reduces point density by keeping at most one point in each
+grid cell. It is used to make data from different acquisitions comparable
+(for example, thinning a dense recent flight to match an older, sparser
+one), to test how sensitive a model is to point density, or to shrink a
+point cloud for quick viewing.
+
+The grid lines fall on whole multiples of the cell size in the data's own
+coordinates, so thinning two adjacent tiles gives one consistent grid
+across both.
+
+## Example commands
+
+{{< include ../examples/fragments/thindata_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/output` | `out/thindata.las` | The thinned point cloud. |
+| `/cellsize` | `2` | Keep at most one point per 2 x 2 ft cell. |
+
+: Options used in the `thindata` example. {#tbl-options-thindata}
+
+The `/class` and `/return` filters (@sec-point-filtering) are applied
+before thinning, so `/return:first /cellsize:2` keeps at most one first
+return per cell.
+
+## Outputs
+
+One LAS or LAZ file with the same point format and coordinate system as
+the input, holding one point for every occupied cell.
+
+## Results
+
+@fig-thindata-window zooms in on a 20 x 20 ft patch in the middle of the
+tile. Grey points are the original tile, orange points are the ones kept,
+and the grid lines are the 2 ft thinning grid. Every square that holds
+grey points holds exactly one orange point.
+
+{{< include ../examples/fragments/thindata_figures.md >}}
+
+## Checks
+
+@tbl-checks-thindata confirms that no cell keeps more than one point,
+that the number kept equals the number of occupied cells, and that every
+kept point is an original point rather than a new, averaged one.
+
+{{< include ../examples/fragments/thindata_checks.md >}}

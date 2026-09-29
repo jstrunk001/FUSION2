@@ -1,12 +1,18 @@
 # FUSION2 - Forest Monitoring Point Cloud Processing Tools (GDAL & Native LAS/LAZ Point Cloud Engine)
 
-Command line tools for processing Lidar point clouds for forest analyses. GDAL-based raster handling & native LAS/LAZ/COPC point cloud suite of forest monitoring focused point cloud processing tools. These tools are derived from the stand-alone tools provided in the original FUSION package, prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)). This fork replaces the legacy binary `.dtm` raster format with native GDAL dataset (tiff only) reading and writing and native LAS/LAZ point cloud I/O, with accelerated COPC read support in `gridmetrics`'s batch mode.
+Command line tools for processing Lidar point clouds for forest analyses. GDAL-based raster handling & native LAS/LAZ/COPC point cloud suite of forest monitoring focused point cloud processing tools. These tools are derived from the stand-alone command-line programs in legacy FUSION (version 4.40), prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)). This fork replaces the legacy binary `.dtm` raster format with native GDAL dataset (tiff only) reading and writing and native LAS/LAZ point cloud I/O, with accelerated COPC read support in `gridmetrics`'s batch mode.
 
 See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-examples) repository for example workflows and small sample datasets that exercise these tools end to end.
 
+### Documentation
+
+The **FUSION2 User Manual** ([`docs/pdf/FUSION2_Manual.pdf`](docs/pdf/FUSION2_Manual.pdf), also included in every release zip) covers installing the tools, a quick start, the conventions every tool shares, a worked example for each of the 15 tools (the exact commands, what each option does, and figures of the output from one example lidar tile), the full option reference, metric definitions, and the unit tests and automated output checks run on every build.
+
+The manual is a Quarto book in [`docs/`](docs/). `build.ps1` renders it to an HTML site (`docs/output/`, not tracked) and the PDF, after running the unit tests and saving each tool's `/?` help text into `docs/generated/`. The worked examples' commands, figures, and check tables in `docs/examples/` are exported from FUSION2-examples: run its `005_example_all_tools.qmd`, then `007_export_fusion2_docs_assets.qmd`, then rebuild.
+
 ### Access FUSION2 built tools (download pre-built binaries)
 
-The most convenient way to get started is to download a pre-built toolset from the [FUSION2 GitHub Releases page](https://github.com/jstrunk001/FUSION2/releases). With minimal static profile and symbol stripping, each tool executable is compact (~8–15 MB each, ~120–150 MB total for all 13 tools combined), with zero external DLL dependencies.
+The most convenient way to get started is to download a pre-built toolset from the [FUSION2 GitHub Releases page](https://github.com/jstrunk001/FUSION2/releases). With minimal static profile and symbol stripping, each tool executable is compact (~8–15 MB each, ~120–150 MB total for all 15 tools combined), with zero external DLL dependencies.
 
 Built bundles are published as **GitHub Release assets**:
 - `build.ps1 -Publish` zips the current `bin/` contents, uploads the zip to a new GitHub Release tagged `tools-v<version>-<timestamp>`, and cleans up the previous release tag.
@@ -29,7 +35,7 @@ Built bundles are published as **GitHub Release assets**:
    - **`canopymaxima`**: Variable Window Local Maxima (VLM) individual tree top detector on CHM rasters.
    - **`treeseg`**: Watershed region-growing individual tree crown segmentation and per-tree point clipping.
 4. **Comprehensive Lidar & Terrain Analytics Suite**:
-   - `gridmetrics.exe` generates rasters of point clouds statistics like 90th percentile height and proportion of returns above 2 meters -- either for a single file, or tiled/buffered/mosaicked across a whole directory (see its batch/tiled mode below). Single-file and batch/tiled mode compute the identical full metric set (elevation stats, `/rgb`, `/strata`/`/intstrata`, `/rgbstrata`, `/surfstats`, `/exp`) and can both export it as a per-cell `/output-table` CSV or SQLite table alongside (or, with `/noraster`, instead of) the raster.
+   - `gridmetrics.exe` generates rasters of point clouds statistics like 90th percentile height and proportion of returns above a height threshold -- either for a single file, or tiled/buffered/mosaicked across a whole directory (see its batch/tiled mode below). Single-file and batch/tiled mode compute the identical full metric set (elevation stats, `/rgb`, `/strata`/`/intstrata`, `/rgbstrata`, `/surfstats`, `/exp`) and can both export it as a per-cell `/output-table` CSV or SQLite table alongside (or, with `/noraster`, instead of) the raster.
    - `cloudmetrics.exe` computes statistical elevation, percentile, canopy cover, canopy relief ratio, and intensity metrics for point cloud files or plot boundaries.
    - `canopymodel.exe` interpolates point clouds to create Canopy Height Models (CHM) saved as GeoTIFF rasters with optional DEM height normalization.
    - `canopymaxima.exe` detects individual tree tops on CHM rasters using Variable Window Local Maxima (VLM) filtering with height-dependent window sizes.
@@ -38,15 +44,15 @@ Built bundles are published as **GitHub Release assets**:
    - `clipdata.exe` clips point cloud data by spatial bounding box extents, height thresholds above ground, or elevation ranges.
    - `filterdata.exe` filters point clouds by elevation ranges, return numbers (e.g. first returns), classification, scan angles, or specific point attributes.
    - `thindata.exe` thins and decimates point cloud data by spatially sub-sampling points within a user-defined grid cell size.
-   - `returndensity.exe` calculates pulse density (pts/m²) and return type ratio rasters (e.g., proportion of ground or first returns) saved as GeoTIFFs.
+   - `returndensity.exe` calculates point density (points per unit area) and return type ratio rasters (e.g., proportion of ground or first returns) saved as GeoTIFFs.
    - `topometrics.exe` calculates topographic terrain derivatives (slope and aspect rasters) directly from input DEM GeoTIFFs.
    - `catalog.exe` scans point cloud directories to produce summary reports of point counts, acquisition extents, and spatial density rasters.
-   - `pipeline.exe` chains any combination of the tools above per tile (e.g. ground filter -> canopy model -> tree tops) across a tiled, buffered, multithreaded batch run -- see below and [`docs/PIPELINE_GUIDE.md`](docs/PIPELINE_GUIDE.md).
+   - `pipeline.exe` chains any combination of the tools above per tile (e.g. ground filter -> canopy model -> tree tops) across a tiled, buffered, multithreaded batch run -- see below and the manual's "Processing many tiles" chapter.
 5. **Multi-Tool Batch Pipeline (`pipeline.exe`)**:
    - Configurable tiling engine with spatial buffer management, shared with `gridmetrics.exe`'s own batch/tiled mode.
    - Chains multiple tools per tile as child processes (e.g. `groundfilter,canopymodel,canopymaxima`), auto-wiring a `groundfilter` stage's DEM into any later stage's `/ground` option.
    - Interim per-tile products (and the run's resumable state) live in an `_processing/` subfolder under the output directory.
-   - A CSV state manifest tracks tile x stage status, so re-runs skip finished work and `/retryfailed`/`/tiles:` can target a subset of tiles.
+   - A CSV state tracking file (`pipeline_state.csv`) records each tile and stage's status, so re-runs skip finished work and `/retryfailed`/`/tiles:` can target a subset of tiles.
    - Per-stage finalization: raster stages are mosaicked into a `.vrt` (optionally merged into one GeoTIFF), table stages are concatenated across tiles. `gridmetrics.exe`'s own internal batch/tiled mode does the same concatenation independently for its own per-tile `/output-table` output, without going through `pipeline.exe` at all.
 
 ## Project Structure & Executable Suite
@@ -67,7 +73,7 @@ FUSION2/
 │           └── StatusMessenger.h
 ├── src/
 │   ├── libfusion_core/         # Core engine implementation
-│   └── tools/                  # Complete CLI executable suite (13 tools)
+│   └── tools/                  # Complete CLI executable suite (15 tools)
 │       ├── gridmetrics/        # Gridded canopy metrics calculator (single-file + batch/tiled modes)
 │       ├── clipdata/           # Point cloud subsetting & spatial clipper
 │       ├── groundfilter/       # Ground point filter & DEM creator
@@ -80,6 +86,8 @@ FUSION2/
 │       ├── filterdata/         # Point cloud elevation & attribute filter
 │       ├── thindata/           # Spatial point cloud decimation & thinning
 │       ├── returndensity/      # Point pulse density & return ratio mapper
+│       ├── densitymetrics/     # Return density by height layer
+│       ├── gridsurfacestats/   # Surface area ratio, roughness & cut/fill volume
 │       └── pipeline/           # Multi-tool batch pipeline orchestrator
 └── tests/                      # Evaluation suite, Quarto reports & comparative benchmarks
     ├── R/                      # Quarto benchmark report (.qmd)
@@ -123,7 +131,7 @@ From inside the `FUSION2` directory, in PowerShell:
 .\build.ps1
 ```
 
-This ensures the minimal static GDAL is ready (compiling it if not already present), configures CMake in Release mode, compiles all 13 tools, strips debug symbols, collects the resulting `.exe` files into `bin/`, and zips them into a versioned bundle at `dist/FUSION2_tools_v<version>-<timestamp>.zip`. If `dist/` already holds a bundle from a previous run, that older zip is moved into `archive/` first.
+This ensures the minimal static GDAL is ready (compiling it if not already present), configures CMake in Release mode, compiles all 15 tools and the unit tests, runs the unit tests (stopping if any fail), renders the user manual, strips debug symbols, collects the resulting `.exe` files into `bin/`, and zips them into a versioned bundle at `dist/FUSION2_tools_v<version>-<timestamp>.zip`. If `dist/` already holds a bundle from a previous run, that older zip is moved into `archive/` first.
 
 Useful options:
 - `.\build.ps1` -- build minimal, lightweight standalone tools (~8–15 MB each).
@@ -152,7 +160,7 @@ If building manually with CMake:
    cmake --build build --config Release --parallel
    ```
 
-Once compilation finishes, all 13 tool binaries will be available in `build/` (or `bin/` if using `build.ps1`).
+Once compilation finishes, all 15 tool binaries will be available in `build/` (or `bin/` if using `build.ps1`).
 
 ---
 

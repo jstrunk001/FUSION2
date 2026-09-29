@@ -1,12 +1,12 @@
-# Batch Pipelines: Running Multiple Tools Across Tiles
+# Processing many tiles {#sec-many-tiles}
 
 This guide covers two related things: `gridmetrics.exe`'s own batch/tiled mode (for when you only need one tool run across a large area), and `pipeline.exe`, the general orchestrator for chaining several tools per tile. Both tile and buffer the input the same way; they differ in what they can run and how.
 
-See [`CLI_TOOLS_REFERENCE.md`](CLI_TOOLS_REFERENCE.md) for the full option reference for every tool named here.
+See @sec-cli-options for the full option reference for every tool named here.
 
 ---
 
-## 1. When you only need gridmetrics: its own batch/tiled mode
+## When you only need gridmetrics: its own batch/tiled mode
 
 If your workflow is "run gridmetrics across a large area," you don't need `pipeline.exe` at all -- point `gridmetrics.exe` at a directory instead of a file:
 
@@ -14,9 +14,9 @@ If your workflow is "run gridmetrics across a large area," you don't need `pipel
 gridmetrics D:\project\las_tiles /outdir:D:\project\output\gridmetrics /tilesize:1000,1000 /buffer:50 /threads:8 /cellsize:10 /minht:2
 ```
 
-This tiles and buffers every LAS/LAZ file in `las_tiles`, computes grid metrics per tile in-process (no child processes, no `_processing` subfolder), and mosaics the results into `D:\project\output\gridmetrics\project_gridmetrics.vrt`. It's the same behavior the old `ltktools.exe` had -- just reached by pointing `gridmetrics` at a directory.
+This tiles and buffers every LAS/LAZ file in `las_tiles`, computes grid metrics per tile in-process (no child processes, no `_processing` subfolder), and mosaics the results into `D:\project\output\gridmetrics\project_gridmetrics.vrt`.
 
-## 2. Single-stage runs of any other tool: `pipeline.exe /tool:<name>`
+## Single-stage runs of any other tool: `pipeline.exe /tool:<name>`
 
 Every other tool (`canopymodel`, `groundfilter`, `returndensity`, `filterdata`, `thindata`, `canopymaxima`, `topometrics`, `treeseg`) can also be run tiled across a whole project this way, one stage at a time:
 
@@ -26,7 +26,7 @@ pipeline /tool:groundfilter /input:D:\project\las_tiles /output:D:\project\outpu
 
 This produces `D:\project\output\groundfilter.vrt` (the mosaicked ground DEM) plus the interim per-tile files under `D:\project\output\_processing\`.
 
-## 3. The canonical pipeline: ground, then canopy height, then tree tops
+## The canonical pipeline: ground, then canopy height, then tree tops
 
 ```bash
 pipeline /pipeline:groundfilter,canopymodel,canopymaxima ^
@@ -39,7 +39,7 @@ Per tile, this: buffer-clips the input points once; runs `groundfilter` on that 
 
 Output: `groundfilter.vrt`, `canopymodel.vrt`, and `canopymaxima_all.csv` (every tile's tree-top table concatenated, `TreeID` prefixed with the tile name so IDs stay unique) in `D:\project\output\`.
 
-## 4. Crown segmentation instead of tree tops
+## Crown segmentation instead of tree tops
 
 ```bash
 pipeline /pipeline:groundfilter,canopymodel,treeseg /input:D:\project\las_tiles /output:D:\project\output /minht:2
@@ -47,7 +47,7 @@ pipeline /pipeline:groundfilter,canopymodel,treeseg /input:D:\project\las_tiles 
 
 Output: `groundfilter.vrt`, `canopymodel.vrt`, `treeseg.vrt` (mosaicked crown-segment rasters), and `treeseg_table_all.csv`. Unlike `canopymaxima`'s table, `treeseg`'s crown-summary table has no per-crown X/Y coordinates, so its rows can't be filtered to each tile's core extent the way `canopymaxima`'s can -- a crown centered in a tile's buffer zone may show up in more than one tile's rows. The `treeseg.vrt` raster itself has no such overlap (it's cropped to core extent before mosaicking); only the table carries this limitation.
 
-## 5. Terrain metrics only
+## Terrain metrics only
 
 ```bash
 pipeline /pipeline:groundfilter,topometrics /input:D:\project\las_tiles /output:D:\project\output
@@ -55,7 +55,7 @@ pipeline /pipeline:groundfilter,topometrics /input:D:\project\las_tiles /output:
 
 Output: `groundfilter.vrt` (DEM) and `topometrics.vrt` (slope + aspect bands).
 
-## 6. Point-cloud-only chain (no raster stage at all)
+## Point-cloud-only chain (no raster stage at all)
 
 ```bash
 pipeline /pipeline:thindata,filterdata,gridmetrics /input:D:\project\las_tiles /output:D:\project\output /cellsize:2 /return:1
@@ -63,7 +63,7 @@ pipeline /pipeline:thindata,filterdata,gridmetrics /input:D:\project\las_tiles /
 
 `thindata` and `filterdata` both consume and produce point clouds, so they can chain directly into each other before `gridmetrics` (or any other point-cloud-input stage) runs on the result. The intermediate thinned/filtered `.laz` files stay in `_processing/<tile>/`; only `gridmetrics.vrt` gets mosaicked into `/output`, since per-tile point cloud outputs aren't merged across tiles (each tile's `.laz` is still a separate file, listed at the end of the run).
 
-## 7. The `_processing/` subfolder and the state manifest
+## The `_processing/` subfolder and the state tracking file
 
 Every stage's per-tile output lives under `<output>/_processing/<tile_name>/`:
 
@@ -93,7 +93,7 @@ tile_0001,canopymodel,failed,_processing/tile_0001/canopymodel.tif,1,2026-09-02T
 
 This file is both the resume cache and the answer to "what actually happened."
 
-## 8. Resuming and retrying
+## Resuming and retrying
 
 Re-running the exact same command is safe and cheap -- every tile/stage already marked `done` in `pipeline_state.csv`, with its output file still present, is skipped:
 
@@ -109,12 +109,12 @@ pipeline /pipeline:groundfilter,canopymodel,canopymaxima /input:D:\project\las_t
 
 Or name specific tiles directly with `/tiles:tile_0004,tile_0017`. `/cleanup` (delete `_processing/` once everything succeeds) refuses to run if any tile/stage is still recorded as failed, precisely so `/retryfailed` still has something to work from.
 
-## 9. Valid chaining
+## Valid chaining
 
 Every stage reads either a point cloud or a raster, and produces a point cloud, a raster, or a table:
 
 | Stage | Input | Output |
-|---|---|---|
+|:--------|:--------------------|:-------------------------|
 | `gridmetrics` | point cloud | raster |
 | `canopymodel` | point cloud | raster |
 | `groundfilter` | point cloud | raster |

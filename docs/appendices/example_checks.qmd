@@ -1,0 +1,39 @@
+# Checks on the example tile {#sec-example-checks}
+
+The worked examples in this manual come from a scripted run of all 15
+tools on the example tile (@sec-example-tile). After running each tool,
+the script checks the tool's output against an independent calculation
+made in R from the same points, using the `lidR`, `terra`, and `sf`
+packages. Each check asks one of three questions:
+
+1. Was the output written, and does it sit on the tile's real
+   coordinates with a coordinate system attached?
+2. Do the counts match exactly what the options asked for? For example, a
+   first-returns filter must keep exactly the tile's first returns.
+3. Are the values physically plausible? For example, no canopy height
+   may exceed the tallest point in the tile.
+
+Where FUSION2 and R legitimately differ slightly (a point lying exactly
+on a plot boundary, or two ground surfaces built by different methods),
+the check allows a stated tolerance, which appears in the check's name.
+
+A check has one of two severities. A `hard` check that fails means the
+output is wrong or missing. A `soft` check flags something that works
+but deserves a look, and its failure is reported as `warn`.
+
+## Summary
+
+{{< include ../examples/fragments/checks_by_tool.md >}}
+
+The `reference` row is the script's own first check: that the heights it
+computes in R for comparison fall within a plausible range.
+
+## Every check
+
+@tbl-all-checks lists every check in the order it ran. Long values are
+shortened with `...`. The complete log, with full values, is
+`docs/examples/tables/all_tools_check_log.csv` in the FUSION2 repository,
+and every command the run executed is in
+`docs/examples/tables/all_tools_commands.csv`.
+
+{{< include ../examples/fragments/all_checks.md >}}

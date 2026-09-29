@@ -1,0 +1,69 @@
+# Built-in help for every tool {#sec-tool-help}
+
+Each FUSION2 tool prints its own list of options when run with `/?`,
+`-h`, or `--help`. This chapter reproduces that output for all 15 tools.
+`build.ps1` captures it from the freshly built tools on every build, so it
+always matches the release this manual ships with. @sec-cli-options
+explains the options in more detail. The `/class` and `/return` options
+that appear under many tools are described once in
+@sec-point-filtering.
+
+## `catalog`
+
+{{< include ../generated/help/catalog.md >}}
+
+## `filterdata`
+
+{{< include ../generated/help/filterdata.md >}}
+
+## `thindata`
+
+{{< include ../generated/help/thindata.md >}}
+
+## `groundfilter`
+
+{{< include ../generated/help/groundfilter.md >}}
+
+## `clipdata`
+
+{{< include ../generated/help/clipdata.md >}}
+
+## `canopymodel`
+
+{{< include ../generated/help/canopymodel.md >}}
+
+## `returndensity`
+
+{{< include ../generated/help/returndensity.md >}}
+
+## `densitymetrics`
+
+{{< include ../generated/help/densitymetrics.md >}}
+
+## `gridmetrics`
+
+{{< include ../generated/help/gridmetrics.md >}}
+
+## `cloudmetrics`
+
+{{< include ../generated/help/cloudmetrics.md >}}
+
+## `topometrics`
+
+{{< include ../generated/help/topometrics.md >}}
+
+## `gridsurfacestats`
+
+{{< include ../generated/help/gridsurfacestats.md >}}
+
+## `canopymaxima`
+
+{{< include ../generated/help/canopymaxima.md >}}
+
+## `treeseg`
+
+{{< include ../generated/help/treeseg.md >}}
+
+## `pipeline`
+
+{{< include ../generated/help/pipeline.md >}}

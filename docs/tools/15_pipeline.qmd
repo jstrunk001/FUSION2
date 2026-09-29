@@ -1,0 +1,82 @@
+# `pipeline`: run tools tile by tile {#sec-pipeline}
+
+## What it does
+
+`pipeline` runs a chain of FUSION2 tools across an area too large to
+process as one piece. It splits the area into tiles, adds a buffer of
+extra points around each tile so that edge cells and edge trees see
+their full neighbourhood, runs the chain of tools on each tile in
+parallel, trims each result back to its tile, and stitches the tiles
+together.
+
+A `groundfilter` stage's ground surface is passed automatically to every
+later stage that needs one, so a chain such as
+`groundfilter,canopymodel,canopymaxima` goes from raw points to tree tops
+in one command. `pipeline` records each tile's progress, so an
+interrupted run resumes where it stopped. @sec-many-tiles covers
+large-area runs in more depth.
+
+## Example commands
+
+The example splits the example tile into four 100 x 100 ft tiles and
+runs ground filtering, canopy height modelling, and tree-top detection
+on each.
+
+{{< include ../examples/fragments/pipeline_commands.md >}}
+
+## Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| `/pipeline` | `groundfilter,canopymodel,canopymaxima` | The tools to run on each tile, in order. `/tool:<name>` runs a single tool. |
+| `/input` | `TC_1372_forest200ft.laz` | A LAS/LAZ file or a folder of them. |
+| `/output` | `out/pipeline` | Folder for the stitched results. |
+| `/extent` | the tile's bounds | The area to tile, as lower-left X, lower-left Y, upper-right X, upper-right Y. |
+| `/tilesize` | `100,100` | Tile width and height, 100 ft. |
+| `/buffer` | `20` | Extra points read around each tile, 20 ft. |
+| `/cellsize` | `3` | Passed on to every stage that accepts it. |
+| `/minht` | `2` | Passed on to every stage that accepts it. |
+| `/merge` | | Also merge each raster stage's tiles into one GeoTIFF, besides the virtual raster (`.vrt`). |
+
+: Options used in the `pipeline` example. {#tbl-options-pipeline}
+
+Options that belong to individual tools (`/cellsize`, `/minht`, `/class`,
+`/strata`, and others) are forwarded to whichever stages accept them.
+@sec-cli-options lists every forwarded option.
+
+## Outputs
+
+- **Per raster stage**: `<stage>.vrt`, a virtual raster joining the
+  tiles, and with `/merge` a single `<stage>_merged.tif`
+  (`groundfilter_merged.tif`, `canopymodel_merged.tif`).
+- **Per table stage**: one combined table (`canopymaxima_all.csv`).
+- **`_processing/`**: each tile's intermediate files and log, plus
+  `pipeline_state.csv`, which records the status, exit code, and times of
+  every tile and stage. This is what lets a run resume.
+
+## Results
+
+@fig-pipeline-maps shows the stitched canopy model with tree tops (left),
+and the difference between the stitched and single-run canopy model
+(middle) and ground surface (right). Dashed lines mark the tile
+boundaries. The stitched map shows no seam along them, the difference
+maps are mostly near zero, and trees near a boundary appear once, not
+twice.
+
+When the tile size is not a whole multiple of the cell size, as with
+100 ft tiles and 3 ft cells, a tile's grid can sit a fraction of a cell
+away from the single-run grid. Cells then sample slightly different
+spots, and the canopy difference map shows scattered differences at
+crown edges in the shifted tiles. Choosing a tile size that is a multiple
+of the cell size avoids this.
+
+{{< include ../examples/fragments/pipeline_figures.md >}}
+
+## Checks
+
+@tbl-checks-pipeline confirms that all four tiles ran with no failed
+stage, that the stitched canopy model sits on the tile and matches the
+single-run canopy model within a median of 0.5 ft, and that no tree top
+is duplicated across tile seams.
+
+{{< include ../examples/fragments/pipeline_checks.md >}}

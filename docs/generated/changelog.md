@@ -1,4 +1,3 @@
-# Changelog
 
 Notable changes to the FUSION2 tool suite, one section per published
 version. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
