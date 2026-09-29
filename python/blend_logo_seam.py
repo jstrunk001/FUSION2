@@ -17,6 +17,7 @@ behaves like adding light and never darkens anything already present.
 
 Usage:
   python blend_logo_seam.py <input.png> <output.png> [--seam 600]
+                            [--trim-margin 30]
 """
 
 import argparse
@@ -94,6 +95,9 @@ def main():
     parser.add_argument("--glyph-margin", type=int, default=14,
                         help="width of the glyph column just left of the "
                              "seam, kept out of the ghost and spill, pixels")
+    parser.add_argument("--trim-margin", type=int, default=None,
+                        help="if given, crop the black border down to the "
+                             "lit content plus this many pixels")
     parser.add_argument("--seed", type=int, default=2)
     args = parser.parse_args()
 
@@ -176,6 +180,20 @@ def main():
     #9. put the background back
     out = img.copy()
     out[:args.art_bottom] = np.clip(blended + background, 0, 1)
+
+    #10. optionally trim the mostly-black border
+    #  - finds the box around every pixel noticeably brighter than the
+    #    background (the art and the text line), then adds a margin
+    if args.trim_margin is not None:
+        lit = (out - background).max(-1) > 0.06
+        rows = np.where(lit.any(1))[0]
+        cols = np.where(lit.any(0))[0]
+        top = max(rows[0] - args.trim_margin, 0)
+        bottom = min(rows[-1] + args.trim_margin + 1, height)
+        left = max(cols[0] - args.trim_margin, 0)
+        right = min(cols[-1] + args.trim_margin + 1, width)
+        out = out[top:bottom, left:right]
+        height, width = out.shape[:2]
 
     Image.fromarray((out * 255).round().astype(np.uint8)).save(args.output)
     print(f"wrote {args.output} ({width}x{height}), seam at x={seam}")

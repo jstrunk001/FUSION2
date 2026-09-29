@@ -1,3 +1,5 @@
+<img src="docs/assets/fusion2_logo.png" alt="FUSION2 Logo" width="130" align="right"/>
+
 # FUSION2 - Forest Monitoring Point Cloud Processing Tools (GDAL & Native LAS/LAZ Point Cloud Engine)
 
 Command line tools for processing Lidar point clouds for forest analyses. GDAL-based raster handling & native LAS/LAZ/COPC point cloud suite of forest monitoring focused point cloud processing tools. These tools are derived from the stand-alone command-line programs in legacy FUSION (version 4.40), prepared by Bob McGaughey ([USDA Forest Service / PNW Research Station](https://research.fs.usda.gov/pnw/products/dataandtools/fusion/ldv-lidar-processing-and-visualization-software-version-440)). This fork replaces the legacy binary `.dtm` raster format with native GDAL dataset (tiff only) reading and writing and native LAS/LAZ point cloud I/O, with accelerated COPC read support in `gridmetrics`'s batch mode.
