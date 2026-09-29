@@ -4,6 +4,15 @@ Command line tools for processing Lidar point clouds for forest analyses. GDAL-b
 
 See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-examples) repository for example workflows and small sample datasets that exercise these tools end to end.
 
+### Access FUSION2 built tools
+
+The most convenient way to get started is to download a pre-built toolset from the [FUSION2 GitHub Releases page](https://github.com/jstrunk001/FUSION2/releases). With minimal static profile and symbol stripping, each tool executable is compact (~8–15 MB each, ~120–150 MB total for all 13 tools combined), with zero external DLL dependencies.
+
+Built bundles are published as **GitHub Release assets**:
+- `build.ps1 -Publish` zips the current `bin/` contents, uploads the zip to a new GitHub Release tagged `tools-v<version>-<timestamp>`, and cleans up the previous release tag.
+- To download pre-built binaries, visit the repository's [Releases page](https://github.com/jstrunk001/FUSION2/releases).
+
+
 ## Key Features
 
 1. **Native GDAL Raster Infrastructure & Dynamic DTM Mosaics**:
@@ -147,13 +156,6 @@ Once compilation finishes, all 13 tool binaries will be available in `build/` (o
 
 ---
 
-### Distributing built tools
-
-With the minimal static profile and symbol stripping, each tool executable is compact (~8–15 MB each, ~120–150 MB total for all 13 tools combined), with zero external DLL dependencies.
-
-Built bundles are published as **GitHub Release assets**:
-- `build.ps1 -Publish` zips the current `bin/` contents, uploads the zip to a new GitHub Release tagged `tools-v<version>-<timestamp>`, and cleans up the previous release tag.
-- To download pre-built binaries, visit the repository's [Releases page](https://github.com/jstrunk001/FUSION2/releases).
 
 ### Version bumps
 
