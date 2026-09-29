@@ -103,6 +103,35 @@ function Invoke-WithRetry {
     }
 }
 
+function Get-VersionChangelogNotes {
+    param(
+        [string]$ChangelogPath
+      , [string]$Version
+      )
+    if (-not (Test-Path $ChangelogPath)) { return $null }
+    $lines = Get-Content $ChangelogPath
+    $in_version = $false
+    $notes = [System.Collections.Generic.List[string]]::new()
+    
+    foreach ($line in $lines) {
+        if ($line -match "^##\s+\[$([regex]::Escape($Version))\]") {
+            $in_version = $true
+            continue
+        } elseif ($in_version -and $line -match "^##\s+\[") {
+            break
+        }
+        if ($in_version) {
+            $notes.Add($line)
+        }
+    }
+    
+    $result = ($notes -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($result)) {
+        return $null
+    }
+    return $result
+}
+
 $tool_names = @(
     "gridmetrics", "clipdata", "groundfilter", "canopymodel"
   , "catalog", "canopymaxima", "treeseg", "cloudmetrics", "topometrics"
@@ -332,10 +361,14 @@ foreach ($previous_bundle in $previous_bundles) {
     Write-Host "Archived previous bundle: $(Join-Path $archive_dir $previous_bundle.Name)"
 }
 
-#7. zip the freshly built exes (and PDF manual if present) into the new versioned bundle
+#7. zip the freshly built exes, CHANGELOG.md (and PDF manual if present) into the new versioned bundle
 $bundle_name = "FUSION2_tools_v$bundle_version.zip"
 $bundle_path = Join-Path $dist_dir $bundle_name
 $zip_paths = $tool_names | ForEach-Object { Join-Path $bin_dir "$_.exe" }
+$changelog_src = Join-Path $repo_root "CHANGELOG.md"
+if (Test-Path $changelog_src) {
+    $zip_paths += $changelog_src
+}
 if (Test-Path $pdf_doc_path) {
     $zip_paths += $pdf_doc_path
 }
@@ -375,9 +408,16 @@ if ($Publish) {
     if (Test-Path $pdf_doc_path) {
         $release_assets += $pdf_doc_path
     }
+    $version_notes = Get-VersionChangelogNotes -ChangelogPath $changelog_src -Version $project_version
+    $release_notes = if ($version_notes) {
+        "FUSION2 v$bundle_version release.`n`n### Changes in v$project_version`n`n$version_notes"
+    } else {
+        "Automated build bundle of all $($tool_names.Count) CLI executables ($($tool_names -join ', ')) and documentation manual."
+    }
+
     & gh release create $release_tag @release_assets `
         --title "FUSION2 v$bundle_version" `
-        --notes "Automated build bundle of all $($tool_names.Count) CLI executables ($($tool_names -join ', ')) and documentation manual."
+        --notes $release_notes
     Write-Host "Published release: $release_tag"
 }
 
