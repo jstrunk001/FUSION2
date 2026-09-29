@@ -39,7 +39,9 @@ public:
             }
 
             if (arg.rfind("/", 0) == 0 || arg.rfind("-", 0) == 0) {
-                std::string key = arg.substr(1);
+                // "--name" drops both dashes, "/name" and "-name" drop one
+                size_t prefixLength = (arg.rfind("--", 0) == 0) ? 2 : 1;
+                std::string key = arg.substr(prefixLength);
                 std::string value = "";
                 size_t pos = key.find_first_of(":=");
                 if (pos != std::string::npos) {

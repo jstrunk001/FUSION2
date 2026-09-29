@@ -10,6 +10,7 @@ int RunGroundFilterTests();
 int RunRasterSamplingTests();
 int RunSurfaceStatsTests();
 int RunStageRegistryTests();
+int RunArgumentParserTests();
 int RunPointDensityTests();
 
 int main() {
@@ -24,6 +25,7 @@ int main() {
     failures += RunRasterSamplingTests();
     failures += RunSurfaceStatsTests();
     failures += RunStageRegistryTests();
+    failures += RunArgumentParserTests();
     failures += RunPointDensityTests();
 
     if (failures == 0) {

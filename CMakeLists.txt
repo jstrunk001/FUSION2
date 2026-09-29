@@ -203,6 +203,7 @@ add_executable(fusion_tests
     tests/cpp/test_surface_stats.cpp
     tests/cpp/test_stage_registry.cpp
     tests/cpp/test_point_density.cpp
+    tests/cpp/test_argument_parser.cpp
 )
 target_link_libraries(fusion_tests PRIVATE fusion_core)
 add_test(NAME fusion_tests COMMAND fusion_tests)
