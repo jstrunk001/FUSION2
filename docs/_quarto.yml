@@ -68,3 +68,8 @@ format:
     lot: false
     include-before-body:
       - lists.typ
+    # Load the book template from typst/orange-book/ (see its README):
+    # no blank pages before chapters, and no headings stranded at the
+    # bottom of a page.
+    template-partials:
+      - typst-show.typ

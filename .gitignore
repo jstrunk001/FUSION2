@@ -55,3 +55,6 @@ build_*/
 # RForInvt::file_version() locks <output>/_tracking.lock while it updates
 # _tracking.csv; the lock is released afterwards but the empty file stays
 _tracking.lock
+
+# Typst source Quarto keeps when rendering the manual with keep-typ
+docs/index.typ
