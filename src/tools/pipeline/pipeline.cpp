@@ -282,7 +282,7 @@ static void ConcatenateCsvFiles(const std::vector<std::filesystem::path>& paths,
 }
 
 int main(int argc, char* argv[]) {
-    fusion::cli::ArgumentParser parser("pipeline", "Multi-tool batch pipeline: tiles/buffers the input once and chains any of the FUSION tools per tile");
+    fusion::cli::ArgumentParser parser("pipeline", "Multi-tool batch pipeline: tiles/buffers the input once and chains any of the FUSION2 tools per tile");
     parser.AddOption("pipeline", "Comma-separated ordered list of stages to chain per tile, e.g. groundfilter,canopymodel,canopymaxima");
     parser.AddOption("tool", "Shorthand for a single-stage /pipeline:<name>");
     parser.AddOption("input", "Input directory of LAS/LAZ files, or a single LAS/LAZ file");

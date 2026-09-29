@@ -15,7 +15,7 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("thindata", "Spatial Point Cloud Thinning / Decimation Tool");
     parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("output", "Output thinned LAS/LAZ file path", "thinned_output.laz");
-    parser.AddOption("cellsize", "Grid cell size for 2D spatial thinning (m)", "1.0");
+    parser.AddOption("cellsize", "Grid cell size for 2D spatial thinning (same units as the input)", "1.0");
     fusion::lidar::PointFilter::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "[ThinData] Thinning " << inputFiles.size() << " point cloud file(s) (cell size: " << cellSize << "m)...\n";
+    std::cout << "[ThinData] Thinning " << inputFiles.size() << " point cloud file(s) (cell size: " << cellSize << ")...\n";
 
     fusion::lidar::PointRecord pt;
     uint64_t inCount = 0;

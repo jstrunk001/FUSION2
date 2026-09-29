@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("canopymaxima", "Individual Tree Top Detection via Variable Window Local Maxima (VLM) on CHM GeoTIFF");
     parser.SetPositionalArgsUsage("<input_chm.tif>");
     parser.AddOption("output", "Output CSV file path for tree tops", "tree_tops.csv");
-    parser.AddOption("minht", "Minimum tree height threshold (m)", "2.0");
+    parser.AddOption("minht", "Minimum tree height threshold (same units as the input)", "2.0");
     parser.AddOption("window-a", "Window polynomial coefficient A (constant)", "0.5");
     parser.AddOption("window-b", "Window polynomial coefficient B (linear)", "0.05");
 
@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "[CanopyMaxima] Scanning CHM (" << cols << "x" << rows << ")... Minimum height: " << minHt << "m\n";
+    std::cout << "[CanopyMaxima] Scanning CHM (" << cols << "x" << rows << ")... Minimum height: " << minHt << "\n";
 
     std::vector<TreeTop> trees;
     int treeId = 1;

@@ -79,7 +79,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "[GridSurfaceStats] Computing surface area ratio and roughness (" << cols << "x" << rows
-              << ")... Cell size: " << cellSize << "m\n";
+              << ")... Cell size: " << cellSize << "\n";
 
     fusion::metrics::SurfaceStatsGrid grid = fusion::metrics::ComputeSurfaceStatsGrid(
         elevation, cols, rows, cellSize, noData, hasReference ? &reference : nullptr);

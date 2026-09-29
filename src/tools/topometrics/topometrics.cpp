@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "[TopoMetrics] Computing slope and aspect surfaces (" << cols << "x" << rows << ")... Cell size: " << cellSize << "m\n";
+    std::cout << "[TopoMetrics] Computing slope and aspect surfaces (" << cols << "x" << rows << ")... Cell size: " << cellSize << "\n";
 
     std::vector<float> slopeData(cols * rows, -9999.0f);
     std::vector<float> aspectData(cols * rows, -9999.0f);

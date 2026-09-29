@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input_chm.tif>");
     parser.AddOption("output-raster", "Output GeoTIFF raster path for tree segments", "crown_segments.tif");
     parser.AddOption("output-table", "Output CSV summary table path", "crown_summary.csv");
-    parser.AddOption("minht", "Minimum height cutoff for segmentation (m)", "2.0");
+    parser.AddOption("minht", "Minimum height cutoff for segmentation (same units as the input)", "2.0");
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -63,7 +63,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "[TreeSeg] Performing watershed segmentation on CHM (" << cols << "x" << rows << ")... Height cutoff: " << minHt << "m\n";
+    std::cout << "[TreeSeg] Performing watershed segmentation on CHM (" << cols << "x" << rows << ")... Height cutoff: " << minHt << "\n";
 
     std::vector<int32_t> segmentGrid(cols * rows, 0);
     std::priority_queue<PixelNode> pq;

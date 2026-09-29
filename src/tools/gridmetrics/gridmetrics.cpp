@@ -770,7 +770,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("nodata", "Value for cells with zero returns at all: NA, or a number such as 0, -9999, or inf", "NA");
     parser.AddOption("noheight", "Value for height-dependent bands (elev_*, int_*) when a cell has returns but none clear the height cutoff: NA, or a number such as 0, -9999, or inf", "0");
     parser.AddOption("rgb", "Comma-separated spectral channels to compute a statistic bundle for: R, G, B, N, or all (every channel the input file's LAS point format actually carries)");
-    parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (m)", "20.0");
+    parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (same units as the input)", "20.0");
     parser.AddFlag("exp", "Compute additional experimental metrics from RSForTools");
     parser.AddFlag("surfstats", "Compute surface_area_ratio and roughness bands from the per-cell elevation grid (see /surfstats-source)");
     parser.AddOption("surfstats-source", "Elevation source for /surfstats: max (typical CHM top-surface use) or mean (ground-DTM-style runs)", "max");
