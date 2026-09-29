@@ -248,9 +248,35 @@ if (-not (Test-Path $cache_path)) {
     & cmake @configure_args
 }
 
-#4. compile all 13 tool executables in Release mode
+#4. compile all 15 tool executables and the unit tests in Release mode
 Write-Host "Compiling (Release)..."
 & cmake --build $BuildDir --config Release --parallel
+if ($LASTEXITCODE -ne 0) {
+    throw "Compilation failed -- see the compiler output above."
+}
+
+#4b. run the unit tests, stop the build if any fail, and save their output
+#    for the user manual's unit-test appendix (docs/appendices/unit_tests.qmd)
+#  - the saved file has no timestamp, so it only changes when the tests or
+#    their results change
+$tests_exe = Get-ChildItem -Path $BuildDir -Recurse -Filter "fusion_tests.exe" -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if (-not $tests_exe) {
+    throw "Build did not produce fusion_tests.exe -- check the compile output above."
+}
+Write-Host "Running unit tests..."
+$test_output = & $tests_exe.FullName 2>&1 | ForEach-Object { "$_" }
+$test_exit = $LASTEXITCODE
+$test_output | ForEach-Object { Write-Host "  $_" }
+if ($test_exit -ne 0) {
+    throw "Unit tests failed (exit code $test_exit) -- see the FAIL lines above."
+}
+$generated_dir = Join-Path $repo_root "docs\generated"
+if (-not (Test-Path $generated_dir)) {
+    New-Item -ItemType Directory -Path $generated_dir | Out-Null
+}
+$test_md = @("``````text") + $test_output + @("``````")
+[System.IO.File]::WriteAllLines((Join-Path $generated_dir "unit_test_results.md"), [string[]]$test_md)
 
 #5. collect the built exes into a flat bin/ folder, regardless of whether
 #   the generator is single-config (exe lands in build/) or multi-config
@@ -322,30 +348,57 @@ if (Test-Path (Join-Path $bin_dir "proj_data")) {
 }
 Write-Host "Mirrored $($tool_names.Count) executables and proj.db into $repo_bin_dir."
 
+#5ab. save each tool's built-in help (/?) for the user manual's help
+#     chapter (docs/reference/tool_help.qmd), so it always matches the tools
+$help_dir = Join-Path $repo_root "docs\generated\help"
+if (-not (Test-Path $help_dir)) {
+    New-Item -ItemType Directory -Path $help_dir | Out-Null
+}
+foreach ($tool_name in $tool_names) {
+    $help_text = & (Join-Path $bin_dir "$tool_name.exe") "/?" 2>&1 | ForEach-Object { "$_" }
+    $help_md = @("``````text") + $help_text + @("``````")
+    [System.IO.File]::WriteAllLines((Join-Path $help_dir "$tool_name.md"), [string[]]$help_md)
+}
+Write-Host "Saved help text for $($tool_names.Count) tools into $help_dir."
 
-#5b. render documentation (HTML website & PDF manual) via Quarto if available
-$pdf_doc_path = Join-Path "docs" "pdf\FUSION_Documentation.pdf"
+
+#5ac. copy CHANGELOG.md into the manual's changelog appendix, minus its
+#     own "# Changelog" title, which would otherwise start a second chapter
+$changelog_lines = Get-Content (Join-Path $repo_root "CHANGELOG.md") -Encoding utf8
+$lines_to_skip = 0
+for ($i = 0; $i -lt $changelog_lines.Count; $i++) {
+    if ($changelog_lines[$i] -match '^# ') {
+        $lines_to_skip = $i + 1
+        break
+    }
+}
+$changelog_body = $changelog_lines | Select-Object -Skip $lines_to_skip
+[System.IO.File]::WriteAllLines((Join-Path $repo_root "docs\generated\changelog.md"), [string[]]$changelog_body)
+
+#5b. render the user manual (a Quarto book in docs/) to an HTML site and a
+#    PDF, then copy the PDF to docs/pdf/ for the release bundle
+#  - one "quarto render" builds both formats listed in docs/_quarto.yml;
+#    the HTML site lands in docs/output/ (not tracked in git)
+$pdf_doc_path = Join-Path "docs" "pdf\FUSION2_Manual.pdf"
 if (Get-Command quarto -ErrorAction SilentlyContinue) {
-    Write-Host "Rendering documentation (HTML & PDF) via Quarto..."
+    Write-Host "Rendering the user manual (HTML and PDF) via Quarto..."
     $docs_dir = Join-Path $repo_root "docs"
-    & quarto render $docs_dir --to html
-    
-    # Ensure docs/pdf directory exists
+    & quarto render $docs_dir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Rendering the user manual failed -- see the Quarto output above."
+    }
     $pdf_dir = Join-Path $docs_dir "pdf"
     if (-not (Test-Path $pdf_dir)) {
         New-Item -ItemType Directory -Path $pdf_dir | Out-Null
     }
-    
-    # Render PDF manual using Quarto's built-in Typst engine
-    & quarto render (Join-Path $docs_dir "index.md") --to typst --output "FUSION_Documentation.pdf"
-    $rendered_pdf = Join-Path $docs_dir "output\FUSION_Documentation.pdf"
-    if (Test-Path $rendered_pdf) {
-        Copy-Item $rendered_pdf $pdf_doc_path -Force
-        Remove-Item $rendered_pdf -Force -ErrorAction SilentlyContinue
-        Write-Host "Generated PDF manual at docs/pdf/FUSION_Documentation.pdf"
+    $rendered_pdf = Join-Path $docs_dir "output\FUSION2_Manual.pdf"
+    if (-not (Test-Path $rendered_pdf)) {
+        throw "Quarto finished but $rendered_pdf was not written."
     }
+    Copy-Item $rendered_pdf $pdf_doc_path -Force
+    Write-Host "Generated PDF manual at $pdf_doc_path"
 } else {
-    Write-Host "Quarto not found -- skipping HTML/PDF documentation build."
+    Write-Host "Quarto not found -- skipping the user manual."
 }
 
 #6. archive the previous bundle (if any) before making a new one
