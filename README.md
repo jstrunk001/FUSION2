@@ -4,7 +4,7 @@ Command line tools for processing Lidar point clouds for forest analyses. GDAL-b
 
 See the companion [`FUSION2-examples`](https://github.com/jstrunk001/FUSION2-examples) repository for example workflows and small sample datasets that exercise these tools end to end.
 
-### Access FUSION2 built tools
+### Access FUSION2 built tools (download pre-built binaries)
 
 The most convenient way to get started is to download a pre-built toolset from the [FUSION2 GitHub Releases page](https://github.com/jstrunk001/FUSION2/releases). With minimal static profile and symbol stripping, each tool executable is compact (~8–15 MB each, ~120–150 MB total for all 13 tools combined), with zero external DLL dependencies.
 
