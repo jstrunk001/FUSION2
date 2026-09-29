@@ -2,6 +2,11 @@
 
 <img src="assets/fusion2_logo.png" alt="FUSION2 Logo" width="150" style="float: right; margin: 0.25em 0 1em 1.5em;"/>
 
+```{=typst}
+#align(center, image("assets/fusion2_logo.png", width: 1.2in, alt: "FUSION2 Logo"))
+#v(0.5em)
+```
+
 FUSION2 is a set of 15 command-line tools for turning airborne lidar point
 clouds into the products forest inventory and monitoring work depends on:
 ground surfaces, canopy height models, gridded height and density metrics,
