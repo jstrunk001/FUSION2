@@ -65,6 +65,17 @@ const std::vector<StageSpec>& GetStageRegistry();
 // exactly); returns nullptr if name isn't one of the 10 registered stages.
 const StageSpec* FindStage(const std::string& name);
 
+// Validates a requested pipeline stage list: every name must be a
+// registered stage, the first stage must consume a point cloud (the tile's
+// buffered clip is the only thing available before any stage has run), and
+// any stage that consumes a raster must have some earlier stage that
+// produces one -- not necessarily the stage directly before it. pipeline
+// feeds a raster-input stage the most recent raster in the chain, so
+// canopymodel,canopymaxima,treeseg is valid: canopymaxima writes a table,
+// and treeseg reads canopymodel's raster. Returns false with errorOut set
+// when the list is invalid.
+bool ValidateStageChain(const std::vector<std::string>& stageNames, std::string& errorOut);
+
 } // namespace fusion::batch
 
 #endif // FUSION_BATCH_STAGEREGISTRY_H

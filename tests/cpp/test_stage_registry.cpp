@@ -89,6 +89,20 @@ int RunStageRegistryTests() {
     auto resolved = dm->resolveOutputPath(input, outputPath);
     CHECK(resolved == outputPath.parent_path() / "tile_0001_densitymetrics.tif", failures);
 
+    //6. stage-chain checks
+    //  - canopymaxima writes a table, so treeseg after it must still be
+    //    allowed: pipeline hands treeseg the canopy model, the most recent
+    //    raster in the chain (this chain was once rejected)
+    //  - chains with no raster before a raster-input stage are still rejected
+    std::string chainError;
+    CHECK(fusion::batch::ValidateStageChain({"canopymodel", "canopymaxima", "treeseg"}, chainError), failures);
+    CHECK(fusion::batch::ValidateStageChain({"canopymodel", "canopymaxima"}, chainError), failures);
+    CHECK(fusion::batch::ValidateStageChain({"groundfilter", "canopymodel", "treeseg"}, chainError), failures);
+    CHECK(!fusion::batch::ValidateStageChain({"canopymaxima"}, chainError), failures);
+    CHECK(!fusion::batch::ValidateStageChain({"filterdata", "treeseg"}, chainError), failures);
+    CHECK(!fusion::batch::ValidateStageChain({"canopymodel", "nosuchstage"}, chainError), failures);
+    CHECK(!fusion::batch::ValidateStageChain({}, chainError), failures);
+
     if (failures == 0) std::cout << "  all passed\n";
     return failures;
 }

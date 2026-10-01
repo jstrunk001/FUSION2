@@ -319,4 +319,41 @@ const StageSpec* FindStage(const std::string& name) {
     return nullptr;
 }
 
+bool ValidateStageChain(const std::vector<std::string>& stageNames, std::string& errorOut) {
+    if (stageNames.empty()) {
+        errorOut = "Pipeline stage list is empty.";
+        return false;
+    }
+
+    std::vector<const StageSpec*> stages;
+    for (const auto& name : stageNames) {
+        const StageSpec* spec = fusion::batch::FindStage(name);
+        if (!spec) {
+            errorOut = "Unknown stage \"" + name + "\". Valid stages: gridmetrics, densitymetrics, canopymodel, "
+                       "groundfilter, returndensity, filterdata, thindata, canopymaxima, topometrics, treeseg.";
+            return false;
+        }
+        stages.push_back(spec);
+    }
+
+    if (stages.front()->inputKind != ArtifactKind::PointCloud) {
+        errorOut = "The first pipeline stage must consume a point cloud (gridmetrics, densitymetrics, canopymodel, "
+                   "groundfilter, returndensity, filterdata, or thindata) -- \"" + stages.front()->name +
+                   "\" expects a raster as input, and no raster exists yet at the start of a tile.";
+        return false;
+    }
+
+    // a raster-input stage needs some earlier stage that produced a raster
+    bool rasterAvailable = stages.front()->outputKind == ArtifactKind::Raster;
+    for (size_t i = 1; i < stages.size(); ++i) {
+        if (stages[i]->inputKind == ArtifactKind::Raster && !rasterAvailable) {
+            errorOut = "\"" + stages[i]->name + "\" expects a raster input, but no earlier stage produces one.";
+            return false;
+        }
+        if (stages[i]->outputKind == ArtifactKind::Raster) rasterAvailable = true;
+    }
+
+    return true;
+}
+
 } // namespace fusion::batch

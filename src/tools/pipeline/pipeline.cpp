@@ -81,45 +81,6 @@ static std::unordered_map<std::string, std::string> BuildForwardedOptions(const 
     return forwarded;
 }
 
-// Validates a requested stage list: every name must be a registered stage,
-// the first stage must consume a point cloud (Stage 0's clip is the only
-// thing available before any stage has run), and any stage that consumes a
-// raster must directly follow a stage that produces one.
-static bool ValidatePipeline(const std::vector<std::string>& stageNames, std::string& errorOut) {
-    if (stageNames.empty()) {
-        errorOut = "Pipeline stage list is empty.";
-        return false;
-    }
-
-    std::vector<const StageSpec*> stages;
-    for (const auto& name : stageNames) {
-        const StageSpec* spec = fusion::batch::FindStage(name);
-        if (!spec) {
-            errorOut = "Unknown stage \"" + name + "\". Valid stages: gridmetrics, densitymetrics, canopymodel, "
-                       "groundfilter, returndensity, filterdata, thindata, canopymaxima, topometrics, treeseg.";
-            return false;
-        }
-        stages.push_back(spec);
-    }
-
-    if (stages.front()->inputKind != ArtifactKind::PointCloud) {
-        errorOut = "The first pipeline stage must consume a point cloud (gridmetrics, densitymetrics, canopymodel, "
-                   "groundfilter, returndensity, filterdata, or thindata) -- \"" + stages.front()->name +
-                   "\" expects a raster as input, and no raster exists yet at the start of a tile.";
-        return false;
-    }
-
-    for (size_t i = 1; i < stages.size(); ++i) {
-        if (stages[i]->inputKind == ArtifactKind::Raster && stages[i - 1]->outputKind != ArtifactKind::Raster) {
-            errorOut = "\"" + stages[i]->name + "\" expects a raster input, but the preceding stage \"" +
-                       stages[i - 1]->name + "\" does not produce one.";
-            return false;
-        }
-    }
-
-    return true;
-}
-
 // Resolves /input into the concrete list of LAS/LAZ files to scan: every
 // .las/.laz file in inputPath if it's a directory, or just inputPath itself
 // if it's a single point cloud file.
@@ -329,7 +290,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::string validationError;
-    if (!ValidatePipeline(stageNames, validationError)) {
+    if (!fusion::batch::ValidateStageChain(stageNames, validationError)) {
         std::cerr << "Error: " << validationError << "\n";
         return 1;
     }
