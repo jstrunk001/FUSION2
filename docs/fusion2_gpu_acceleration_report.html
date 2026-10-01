@@ -252,7 +252,7 @@
                 <li><a href="#section-7">7. Integration &amp; Engineering Specifications</a></li>
                 <li><a href="#section-8">8. Overall Verdict &amp; Feasibility</a></li>
                 <li><a href="#section-9">9. Study Limitations</a></li>
-                <li><a href="#section-10">10. Actionable Recommendations</a></li>
+                <li><a href="#section-10">10. Actionable Recommendations &amp; Implementation Roadmap</a></li>
             </ol>
         </div>
 
@@ -277,7 +277,7 @@
                 <strong>Percentile Agreement Characteristics</strong>: Across approximately 24,000 zones on validation tile <code>10011</code>, the average difference per percentile was small (0.02 to 0.10 ft). For percentiles below p95, only 1 to 16 zones per band differed by more than 1.0 ft. These differences were concentrated in sparsely vegetated zones (under 20 pixels clearing the height break). On p99, 156 zones differed by more than 1.0 ft due to a fixed 300 ft histogram upper bound clipping photogrammetric surface spikes (up to 348.9 ft) in the test dataset.
             </li>
             <li>
-                <strong>Point Cloud I/O Constraints</strong>: For raw LiDAR processing, single-threaded LAZ decompression (LASzip) limits per-tile ingestion rates. Furthermore, at small grid resolutions (e.g. 10 ft), storing 2,048-bin histograms in CPU memory requires up to 20&times; more RAM than storing raw point elevations.
+                <strong>Point Cloud I/O Constraints</strong>: For raw LiDAR processing, single-threaded LAZ decompression (LASzip) limits per-tile ingestion rates. In addition, at small grid resolutions (such as 10 ft), storing 2,048-bin histograms in CPU memory requires up to 20&times; more RAM than storing raw point elevations.
             </li>
         </ul>
 
@@ -901,27 +901,261 @@ set(CMAKE_CUDA_ARCHITECTURES "60;75;80;86;89;120;75-virtual")</code></pre>
             </li>
         </ol>
 
-        <h2 id="section-10">10. Actionable Recommendations</h2>
+        <h2 id="section-10">10. Actionable Recommendations &amp; Implementation Roadmap</h2>
+        <p>
+            Based on the empirical evidence, accuracy analyses, and memory constraints evaluated in this report, we outline a phased engineering roadmap for FUSION2. The architecture prioritizes native CPU raster ingestion to establish an empirical C++ baseline, followed by targeted GPU acceleration where computational returns are highest and implementation risk is lowest.
+        </p>
+
+        <h3>10.1 Detailed Architectural Specifications</h3>
+
+        <h4>A. Native High-Resolution DSM Raster Ingestion (<code>gridmetrics.exe</code>)</h4>
+        <p>
+            FUSION2 currently processes raw point clouds (<code>.las</code> and <code>.laz</code>). Adding raster input capability enables direct processing of photogrammetric surface models (such as NAIP3D) and gridded point products without converting rasters to intermediate point files.
+        </p>
+        <ul>
+            <li>
+                <strong>Format Detection and Dispatch</strong>: In <code>src/tools/gridmetrics/gridmetrics.cpp</code>, inspect the positional input argument using GDAL driver probing. If the input file extension or header indicates a supported raster format (such as GeoTIFF, VRT, or ENVI) rather than an ASPRS LAS file, route execution to a dedicated raster processing pipeline:
+                <pre><code>// Format dispatch in gridmetrics.cpp
+std::filesystem::path inputPath(argv[inputArgIndex]);
+bool isRasterInput = false;
+GDALDriverH hDriver = GDALIdentifyDriver(inputPath.string().c_str(), nullptr);
+if (hDriver != nullptr) {
+    // Verified GDAL-compatible raster dataset
+    isRasterInput = true;
+}</code></pre>
+            </li>
+            <li>
+                <strong>Windowed Scanline Block Streaming</strong>: Large photogrammetric tiles (such as 10,000 ft &times; 10,000 ft at 1.0 ft cell size, containing 106 million single-precision float pixels) require 424 MB of RAM for raw elevation storage. To maintain a bounded memory footprint, ingest the DSM raster in horizontal scanline strips (e.g., blocks of 256 or 512 rows) using <code>GDALRaster::ReadBandData</code>:
+                <pre><code>// Windowed scanline streaming buffer
+int blockSizeRows = 512;
+std::vector&lt;float&gt; dsmBlockBuffer(blockSizeRows * rasterCols);
+for (int rowStart = 0; rowStart &lt; rasterRows; rowStart += blockSizeRows) {
+    int currentBlockRows = std::min(blockSizeRows, rasterRows - rowStart);
+    // Read block window across all columns
+    ReadRasterWindow(dsmRaster, 0, rowStart, rasterCols, currentBlockRows, dsmBlockBuffer);
+    // Process pixels into active zonal accumulators...
+}</code></pre>
+            </li>
+            <li>
+                <strong>Spatial Registration and DTM Bilinear Interpolation</strong>: For each pixel center \((x, y)\) in the input DSM block, compute its corresponding zonal output grid indices \((col_{zone}, row_{zone})\):
+                \[
+                col_{zone} = \left\lfloor \frac{x - x_{min}}{\text{cellsize}} \right\rfloor, \quad row_{zone} = \left\lfloor \frac{y_{max} - y}{\text{cellsize}} \right\rfloor
+                \]
+                Evaluate ground elevation \(z_{dtm}\) at \((x, y)\) using bilinear interpolation via <code>groundRaster.GetElevation(x, y, SampleMethod::Bilinear)</code>. Compute normalized canopy height:
+                \[
+                h = z_{dsm} - z_{dtm}
+                \]
+                If \(h \ge \text{minht}\), append \(h\) to the elevation accumulator of the target zone \((col_{zone}, row_{zone})\).
+            </li>
+            <li>
+                <strong>Metric Completeness and Compatibility</strong>: By populating FUSION2's existing <code>CellAccumulator</code> containers with height values sampled from the raster, all standard metrics computed by <code>ComputePointStatBundle</code> (including mode, average absolute deviation, median absolute deviation, and all four L-moments) are calculated without algorithmic divergence.
+            </li>
+        </ul>
+
+        <h4>B. GPU-Accelerated 2.5D CHM Rasterization (<code>canopymodel.exe</code>)</h4>
+        <p>
+            Generating a Canopy Height Model from unorganized point clouds requires finding the maximum height above ground in each grid cell. This reduction maps directly to device execution without requiring sorting or histogram buffers.
+        </p>
+        <ul>
+            <li>
+                <strong>Host Memory Buffering &amp; Coordinate Normalization</strong>: Allocate pinned host memory (via <code>cudaMallocHost</code>) for streaming point coordinates. To avoid precision degradation from large state plane coordinates (which can exceed \(2 \times 10^6\) ft) in single-precision GPU registers, subtract the tile origin \((x_{min}, y_{max})\) in double precision on the host before uploading:
+                \[
+                x_{rel} = \text{static\_cast}&lt;\text{float}&gt;(x - x_{min}), \quad y_{rel} = \text{static\_cast}&lt;\text{float}&gt;(y_{max} - y)
+                \]
+            </li>
+            <li>
+                <strong>Atomic Integer Reinterpretation Kernel</strong>: Because IEEE 754 positive single-precision floating-point numbers have identical binary ordering to signed 32-bit integers, non-negative heights (\(h \ge 0.0\text{ ft}\)) are updated in destination grid memory using hardware-accelerated <code>atomicMax</code> on 32-bit integer representations:
+                <pre><code>// CUDA kernel for atomic CHM rasterization with bounds protection
+__global__ void RasterizeCHMKernel(const float* __restrict__ xRel,
+                                   const float* __restrict__ yRel,
+                                   const float* __restrict__ z,
+                                   const float* __restrict__ dtmGrid,
+                                   float* __restrict__ chmGrid,
+                                   int numPoints,
+                                   float cellSize,
+                                   int cols,
+                                   int rows) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx &gt;= numPoints) return;
+
+    int c = static_cast&lt;int&gt;(xRel[idx] / cellSize);
+    int r = static_cast&lt;int&gt;(yRel[idx] / cellSize);
+
+    // Strict boundary checks
+    if (c &gt;= 0 &amp;&amp; c &lt; cols &amp;&amp; r &gt;= 0 &amp;&amp; r &lt; rows) {
+        int cellIndex = r * cols + c;
+        float ground = dtmGrid[cellIndex];
+        float h = z[idx] - ground;
+        if (h &gt;= 0.0f) {
+            atomicMax(reinterpret_cast&lt;int*&gt;(&amp;chmGrid[cellIndex]), __float_as_int(h));
+        }
+    }
+}</code></pre>
+            </li>
+            <li>
+                <strong>Array Initialization and Sentinel Encoding</strong>: Initialize the device destination buffer <code>chmGrid</code> to zero (or the IEEE bit-representation of the no-data sentinel value, such as \(-9999.0\text{f}\)) prior to kernel launch. Following execution, copy the raster to host memory and write a standard GeoTIFF via <code>GDALRaster</code>.
+            </li>
+            <li>
+                <strong>GPU Spatial Smoothing Pass</strong>: When the <code>/smooth:n</code> option is specified, execute a 2D separable Gaussian or box convolution kernel directly on device memory before downloading results to host memory, eliminating intermediate file writes.
+            </li>
+        </ul>
+
+        <h4>C. High-Throughput GPU Raster Zonal Analytics Engine</h4>
+        <p>
+            When porting the <code>2026_RasterMetrics</code> CUDA kernel into FUSION2, specific modifications are required to resolve the limitations documented in Section 3 and Section 5:
+        </p>
+        <ul>
+            <li>
+                <strong>Dynamic Per-Zone Histogram Scaling</strong>: Rather than enforcing a static global cap (such as 300.0 ft or 450.0 ft), evaluate the maximum height \(Z_{max}\) of each zone during an initial reduction pass across the fine pixels. Allocate 2,048 bins where the bin width is scaled dynamically:
+                \[
+                \Delta z = \frac{Z_{max}}{2048}
+                \]
+                This eliminates clipping of surface spikes and guarantees consistent bin resolution across short vegetation.
+            </li>
+            <li>
+                <strong>Shared-Memory Bitonic Sort Fallback for Sparse Cells</strong>: When the count of returns clearing the height break in a zone satisfies \(N &lt; 256\), branch execution to a shared-memory bitonic sort. Evaluate sample percentiles using R's standard <code>type = 7</code> interpolation formula directly over the sorted elements, achieving exact numerical agreement with reference CPU implementations in sparse forest canopies.
+            </li>
+            <li>
+                <strong>Exact Integer Histograms for 8-Bit Spectral Bands</strong>: For multi-spectral channels (NAIP Red, Green, Blue, Near-Infrared), allocate exact 256-bin histograms (1,024 bytes per zone). This eliminates quantization error entirely, consumes minimal shared memory, and allows concurrent evaluation of spectral metrics alongside elevation.
+            </li>
+        </ul>
+
+        <h3>10.2 Step-by-Step Implementation Milestones</h3>
+        <p>
+            We organize the technical work into five discrete, execution-ordered milestones. Each milestone produces a verifiable capability and can be reviewed independently.
+        </p>
+
+        <table>
+            <caption>Table 5: Work breakdown and milestone schedule for FUSION2 raster analytics and GPU acceleration.</caption>
+            <thead>
+                <tr>
+                    <th>Milestone</th>
+                    <th>Target Component</th>
+                    <th>Core Deliverables</th>
+                    <th>Primary Verification Criteria</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>M1</strong></td>
+                    <td><code>gridmetrics.exe</code></td>
+                    <td>Native DSM GeoTIFF ingestion via <code>GDALRaster</code>, scanline streaming, bilinear DTM subtraction</td>
+                    <td>Numerical parity against reference CPU point cloud metrics on rasterized validation tiles</td>
+                </tr>
+                <tr>
+                    <td><strong>M2</strong></td>
+                    <td><code>canopymodel.exe</code></td>
+                    <td>CUDA <code>atomicMax</code> point cloud rasterization, tile-origin normalization, optional GPU smoothing</td>
+                    <td>Bit-for-bit identical or sub-millimeter CHM elevations compared to CPU <code>canopymodel.exe</code></td>
+                </tr>
+                <tr>
+                    <td><strong>M3</strong></td>
+                    <td>Profiling &amp; Benchmarking</td>
+                    <td>High-resolution wall-clock instrumentation across LAZ decompression, spatial binning, and metric loops</td>
+                    <td>Empirical breakdown of CPU time budget on 50M+ point LAZ acquisitions across 1 to 16 threads</td>
+                </tr>
+                <tr>
+                    <td><strong>M4</strong></td>
+                    <td><code>gridmetrics.exe</code> (GPU)</td>
+                    <td>Integrated CUDA raster kernel, per-zone dynamic histogram bounds, bitonic sort for \(N &lt; 256\)</td>
+                    <td>Execution time &lt;1.0 s per 106M pixel tile; residual differences &lt;0.05 ft across all percentiles</td>
+                </tr>
+                <tr>
+                    <td><strong>M5</strong></td>
+                    <td>Testing &amp; Documentation</td>
+                    <td>Automated regression tests in <code>tests/</code>, updated CLI documentation in Quarto manual</td>
+                    <td>Zero regression in point cloud tests; complete manual entries for <code>gridmetrics</code> raster inputs</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h4>Milestone 1: Native High-Resolution DSM Raster Ingestion (CPU Baseline)</h4>
         <ol>
             <li>
-                <strong>Implement CPU-Based Raster Input in FUSION2 First</strong>:
-                Add high-resolution DSM raster reading to <code>gridmetrics.exe</code> using <code>GDALRaster</code>. This will provide an immediate capability for photogrammetric datasets and establish a real C++ CPU baseline.
+                <strong>Update Argument Parsing</strong>: Extend <code>fusion::cli::ArgumentParser</code> in <code>src/tools/gridmetrics/gridmetrics.cpp</code> to recognize raster file extensions (<code>.tif</code>, <code>.vrt</code>, <code>.img</code>) in addition to <code>.las</code> and <code>.laz</code>.
             </li>
             <li>
-                <strong>Adopt Per-Zone Histogram Bounds</strong>:
-                If histogram methods are used for elevation, derive the upper bound dynamically from each zone's computed maximum height (which the kernel already evaluates) rather than a fixed global limit or a tile-wide maximum.
+                <strong>Implement Scanline Chunk Reader</strong>: Create a streaming loop that reads horizontal raster strips of 512 rows using <code>GDALRaster</code>, maintaining memory consumption under 250 MB regardless of tile dimensions.
             </li>
             <li>
-                <strong>Implement Hybrid Quantile Rules for Sparse Zones</strong>:
-                For zones with low return counts ($N &lt; 256$), sort values in shared memory to ensure bit-level parity with sample quantile definitions.
+                <strong>Implement Sub-Pixel DTM Interpolation</strong>: Query ground elevations from the DTM raster at continuous pixel coordinates using bilinear sampling. Subtract ground elevation to produce heights above ground.
             </li>
             <li>
-                <strong>Restrict Fixed-Bin Integer Histograms to 8-Bit Rasters</strong>:
-                Use 256-bin histograms only for 8-bit imagery channels (such as NAIP RGB/NIR), where the integer domain ensures bit-for-bit accuracy. Retain sorting or adaptive reservoirs for continuous float elevations and 16-bit point cloud attributes.
+                <strong>Feed Existing Accumulator Pipeline</strong>: Push valid pixel heights into <code>CellAccumulator</code> and execute <code>ComputePointStatBundle</code>. Write output raster bands using <code>GDALRaster::Create</code> and <code>WriteBandData</code>.
             </li>
             <li>
-                <strong>Benchmark FUSION2 CPU on Point Clouds</strong>:
-                Profile <code>gridmetrics.exe</code> on a 50-million-point LAZ file to determine the exact proportion of wall-clock time spent in LAZ decompression, spatial cell assignment, sorting, and statistical calculations.
+                <strong>Verification</strong>: Process a synthetic 1,000 &times; 1,000 raster tile with known analytical statistics. Verify that all 21 core metric bands match expected mathematical values.
+            </li>
+        </ol>
+
+        <h4>Milestone 2: GPU-Accelerated 2.5D CHM Rasterization (<code>canopymodel.exe</code>)</h4>
+        <ol>
+            <li>
+                <strong>CMake CUDA Integration</strong>: Configure <code>CMakeLists.txt</code> to enable CUDA language support (<code>enable_language(CUDA)</code>), targeting architectures <code>"60;75;80;86;89;120;75-virtual"</code> with modern CMake 3.18+ syntax.
+            </li>
+            <li>
+                <strong>Implement CUDA Source Module</strong>: Create <code>src/cuda/canopymodel_cuda.cu</code> with <code>RasterizeCHMKernel</code>, implementing host-to-device pinned memory transfers and tile-origin coordinate normalization.
+            </li>
+            <li>
+                <strong>Implement CLI Switch</strong>: Add the <code>/gpu</code> option to <code>canopymodel.exe</code>, routing processing to the CUDA kernel when an NVIDIA GPU is detected, with automatic fallback to the CPU multi-threaded path if CUDA initialization fails.
+            </li>
+            <li>
+                <strong>Implement Device Smoothing</strong>: Add a separable 2D convolution kernel on the device grid to support <code>/smooth:n</code> without downloading un-smoothed data to the host.
+            </li>
+            <li>
+                <strong>Verification</strong>: Run <code>canopymodel.exe /gpu</code> on a 50-million-point LiDAR tile. Compare the resulting GeoTIFF against the standard CPU output using <code>gdal_compare.py</code> or direct pixel subtraction to confirm zero deviation.
+            </li>
+        </ol>
+
+        <h4>Milestone 3: Comprehensive CPU Point Cloud Profiling</h4>
+        <ol>
+            <li>
+                <strong>Instrument Timing Sections</strong>: Insert high-resolution <code>std::chrono::steady_clock</code> probes in <code>src/tools/gridmetrics/gridmetrics.cpp</code>, isolating:
+                <ul>
+                    <li>LAZ read and decompression time (<code>LASzip</code> / <code>MergedPointCloudReader</code>)</li>
+                    <li>Spatial coordinate transformation and cell binning</li>
+                    <li>Percentile calculation and sorting</li>
+                    <li>Higher moments, L-moments, and summary statistic evaluation</li>
+                    <li>GeoTIFF raster writing and output serialization</li>
+                </ul>
+            </li>
+            <li>
+                <strong>Execute Empirical Profile Runs</strong>: Run benchmarks on representative USFS LiDAR tiles (50 million returns, 10 ft cell size) across thread counts 1, 2, 4, 8, and 16.
+            </li>
+            <li>
+                <strong>Publish Quantitative Profiling Table</strong>: Document the measured proportions in the project documentation to establish the exact computational headroom available for GPU point cloud acceleration.
+            </li>
+        </ol>
+
+        <h4>Milestone 4: CUDA Fused Raster Zonal Engine in FUSION2</h4>
+        <ol>
+            <li>
+                <strong>Adapt Julia CUDA Kernel to C++/CUDA</strong>: Port the 2,048-bin shared-memory CDF histogram kernel from <code>2026_RasterMetrics/julia/GpuMetricsPipeline.jl</code> into a native C++/CUDA translation unit (<code>src/cuda/gridmetrics_raster_cuda.cu</code>).
+            </li>
+            <li>
+                <strong>Implement Dynamic Per-Zone Scaling</strong>: Add a two-pass reduction where pass 1 computes \(Z_{max}\) per zone and pass 2 constructs the normalized histogram using \(\Delta z = Z_{max} / 2048\).
+            </li>
+            <li>
+                <strong>Implement Shared-Memory Bitonic Sort Fallback</strong>: Add execution branching in the kernel to sort values when return count \(N &lt; 256\), guaranteeing sample quantile fidelity in sparse vegetation.
+            </li>
+            <li>
+                <strong>Fuse DTM Bilinear Interpolation</strong>: Upload coarse DTM grid data to GPU texture or constant memory, performing bilinear ground interpolation in device registers during fine pixel reading.
+            </li>
+            <li>
+                <strong>Verification</strong>: Run the kernel against validation tile <code>10011</code>. Confirm that all percentile residuals on sparse zones remain under 0.05 ft and that maximum wall-clock time remains under 0.50 s per 106M-pixel tile.
+            </li>
+        </ol>
+
+        <h4>Milestone 5: Quality Assurance, Verification &amp; Documentation</h4>
+        <ol>
+            <li>
+                <strong>Automated Regression Test Suite</strong>: Add automated test cases in <code>tests/</code> verifying raster input handling, DTM resampling correctness, and GPU fallback behavior when running in headless or non-GPU environments.
+            </li>
+            <li>
+                <strong>Update User Documentation</strong>: Document the new raster ingestion capabilities, CLI parameters (<code>/ground:</code>, <code>/cellsize:</code>, <code>/gpu</code>), and memory tuning guidelines in the Quarto manual under <code>docs/tools/gridmetrics.qmd</code> and <code>docs/tools/canopymodel.qmd</code>.
+            </li>
+            <li>
+                <strong>Final Review and Git Commit</strong>: Review changes against coding standards and narrative style guidelines, and commit all updates with clear semantic commit messages.
             </li>
         </ol>
     </div>
