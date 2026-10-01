@@ -339,12 +339,11 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                             return;
                         }
 
-                        int col = static_cast<int>((pt.x - tile.minX) / res);
-                        int row = static_cast<int>((tile.maxY - pt.y) / res);
-                        if (col == cols && pt.x == tile.maxX) col = cols - 1;
-                        if (row == rows && pt.y == tile.minY) row = rows - 1;
-
-                        if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                        // buffer points are read but never given a cell, so
+                        // a point near a tile seam is counted by one tile only
+                        int col = 0;
+                        int row = 0;
+                        if (fusion::batch::TileCellForPoint(pt.x, pt.y, tile, gridSpec, cols, rows, col, row)) {
                             double elevation = pt.z;
                             if (hasGround) {
                                 auto gz = groundRaster.GetElevation(pt.x, pt.y);

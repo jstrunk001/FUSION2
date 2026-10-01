@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
 
 namespace fusion::batch {
 
@@ -36,6 +37,31 @@ std::vector<TileInfo> TileGridManager::GenerateTiles(const TileGridSpec& spec) {
         }
     }
     return tiles;
+}
+
+bool TileCellForPoint(double x, double y, const TileInfo& tile, const TileGridSpec& spec,
+                      int cols, int rows, int& col, int& row) {
+    //1. keep only points inside the tile's own area, not its buffer
+    //  - left and top edges belong to this tile, right and bottom edges to
+    //    the neighbour, except on the project's outer right/bottom edges
+    bool onProjectRightEdge = tile.maxX >= spec.maxX;
+    bool onProjectBottomEdge = tile.minY <= spec.minY;
+    bool insideX = x >= tile.minX && (x < tile.maxX || (onProjectRightEdge && x == tile.maxX));
+    bool insideY = y <= tile.maxY && (y > tile.minY || (onProjectBottomEdge && y == tile.minY));
+    if (!insideX || !insideY) return false;
+
+    //2. find the cell, rounding down (not toward zero)
+    int colFound = static_cast<int>(std::floor((x - tile.minX) / spec.resolution));
+    int rowFound = static_cast<int>(std::floor((tile.maxY - y) / spec.resolution));
+
+    //3. a point exactly on the project's far right or bottom edge lands one
+    //   cell past the last one -- pull it back into the last cell
+    if (colFound >= cols) colFound = cols - 1;
+    if (rowFound >= rows) rowFound = rows - 1;
+
+    col = colFound;
+    row = rowFound;
+    return true;
 }
 
 BatchPipeline::BatchPipeline(TileGridSpec gridSpec, PipelineJobOptions jobOptions)

@@ -42,6 +42,19 @@ public:
     static std::vector<TileInfo> GenerateTiles(const TileGridSpec& spec);
 };
 
+// Finds the grid cell (col, row) that a point falls in within one batch
+// tile, counting columns right from the tile's left edge and rows down
+// from its top edge, with cells spec.resolution wide. A tile reads points
+// from its buffer as well as its own area, but only points inside its own
+// area are given a cell, so every point is counted by exactly one tile.
+// A point on a shared edge goes to one tile only: the left and top edges
+// belong to this tile, and the right and bottom edges belong to the
+// neighbouring tile -- except on the project's outer right and bottom
+// edges, which have no neighbour and so stay with this tile. Returns false
+// (and leaves col/row unchanged) for a point outside the tile's own area.
+bool TileCellForPoint(double x, double y, const TileInfo& tile, const TileGridSpec& spec,
+                      int cols, int rows, int& col, int& row);
+
 struct PipelineJobOptions {
     std::filesystem::path inputPointCloudDir;
     std::filesystem::path outputDir;
