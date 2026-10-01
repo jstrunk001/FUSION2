@@ -1,4 +1,5 @@
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/cuda/GridMetricsCuda.h"
 #include "test_assert.h"
 
 #include <cmath>
@@ -127,6 +128,32 @@ int RunRasterSamplingTests() {
     CHECK(!raster.ReadBandWindow(1, 0, 0, kCols + 1, 1, badWin), failures);
     CHECK(!raster.ReadBandWindow(1, 0, 0, 1, kRows + 1, badWin), failures);
     CHECK(!raster.ReadBandWindow(2, 0, 0, 1, 1, badWin), failures); // band 2 doesn't exist
+
+    //13. Verify CUDA 33-band raster metrics metadata and execution container
+    {
+        auto bandNames = fusion::cuda::GetCudaRasterMetricBandNames();
+        CHECK(bandNames.size() == 33, failures);
+        CHECK(bandNames.front() == "elev_mean", failures);
+        CHECK(bandNames.back() == "point_density", failures);
+
+        fusion::cuda::CudaGridMetricsOptions opts;
+        opts.fineCols = kCols;
+        opts.fineRows = kRows;
+        opts.fineCellSize = 1.0f;
+        opts.coarseCellSize = 2.0f;
+        opts.minHt = 2.0f;
+        opts.heightCut = 2.0f;
+        opts.nodataValue = -9999.0f;
+
+        fusion::cuda::CudaRasterMetricsBundle bundle;
+        bool ok = fusion::cuda::ComputeRasterGridMetrics(values.data(), nullptr, opts, bundle);
+        CHECK(bundle.bandNames.size() == 33, failures);
+        CHECK(bundle.bands.size() == 33, failures);
+        CHECK(bundle.outCols == 2, failures);
+        CHECK(bundle.outRows == 2, failures);
+        // If CUDA device is available, ok is true; otherwise ok is false (clean CPU fallback)
+        (void)ok;
+    }
 
     raster.Close();
     std::filesystem::remove(path);

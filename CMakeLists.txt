@@ -79,6 +79,7 @@ add_library(fusion_core STATIC
     src/libfusion_core/GroundFilter.cpp
     src/libfusion_core/PointDensity.cpp
     src/libfusion_core/CanopyModelCuda.cpp
+    src/libfusion_core/GridMetricsCuda.cpp
     deps/sqlite3_amalgamation/sqlite3.c
 )
 
@@ -91,7 +92,10 @@ if(FUSION_ENABLE_CUDA)
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         target_compile_definitions(fusion_core PUBLIC FUSION_HAS_CUDA=1)
-        target_sources(fusion_core PRIVATE src/cuda/canopymodel_cuda.cu)
+        target_sources(fusion_core PRIVATE
+            src/cuda/canopymodel_cuda.cu
+            src/cuda/gridmetrics_raster_cuda.cu
+        )
         message(STATUS "CUDA compiler found (${CMAKE_CUDA_COMPILER}) -- GPU acceleration enabled")
     else()
         message(STATUS "CUDA compiler (nvcc) not found -- building with CPU fallbacks")
