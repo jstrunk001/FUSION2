@@ -77,6 +77,7 @@ public:
     std::string GetBandDescription(int band) const;
 
     bool ReadBandData(int band, std::vector<float>& buffer) const;
+    bool ReadBandWindow(int band, int xOffset, int yOffset, int xSize, int ySize, std::vector<float>& buffer) const;
     bool WriteBandData(int band, const std::vector<float>& buffer);
 
     static bool BuildVRT(const std::filesystem::path& outputVRTPath,

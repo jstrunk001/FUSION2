@@ -1,5 +1,5 @@
 ```text
-Usage: gridmetrics <input.las/laz or directory> [optional raster ground path] [other /options]
+Usage: gridmetrics <input.las/laz/raster or directory> [optional raster ground path] [other /options]
 Computes comprehensive canopy elevation and intensity metrics grid from point clouds
 
 Options:

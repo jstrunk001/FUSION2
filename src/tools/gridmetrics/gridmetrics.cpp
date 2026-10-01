@@ -873,7 +873,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
 int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("gridmetrics", "Computes comprehensive canopy elevation and intensity metrics grid from point clouds");
-    parser.SetPositionalArgsUsage("<input.las/laz or directory> [optional raster ground path]");
+    parser.SetPositionalArgsUsage("<input.las/laz/raster or directory> [optional raster ground path]");
     parser.AddOption("ground", "Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("cellsize", "Output grid cell size in project units", "10.0");
     parser.AddOption("minht", "Minimum height above ground for canopy metrics calculation", "2.0");
@@ -994,31 +994,64 @@ int main(int argc, char* argv[]) {
         std::cout << "[GridMetrics] Loaded ground surface DEM: " << groundPathStr << "\n";
     }
 
-    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
-    if (inputFiles.empty()) {
-        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
-        return 1;
+    bool isRasterInput = false;
+    fusion::raster::GDALRaster dsmRaster;
+    std::string inExt = inputPath.extension().string();
+    std::transform(inExt.begin(), inExt.end(), inExt.begin(), ::tolower);
+    if (inExt == ".tif" || inExt == ".tiff" || inExt == ".vrt" || inExt == ".img" || inExt == ".asc" || inExt == ".dem") {
+        if (dsmRaster.Open(inputPath)) {
+            isRasterInput = true;
+        }
+    } else if (inExt != ".las" && inExt != ".laz") {
+        if (dsmRaster.Open(inputPath)) {
+            isRasterInput = true;
+        }
     }
 
+    double gridMinX = 0.0, gridMinY = 0.0, gridMaxX = 0.0, gridMaxY = 0.0;
+    std::string gridProjectionWKT;
+    std::vector<std::filesystem::path> inputFiles;
     fusion::lidar::MergedPointCloudReader lasReader;
-    if (!lasReader.Open(inputFiles)) {
-        std::cerr << "Error: Failed to open point cloud file(s).\n";
-        return 1;
-    }
-
-    auto header = lasReader.GetHeader();
-    std::cout << "[GridMetrics] Processing Point Cloud: " << (inputFiles.size() == 1 ? inputFiles[0].filename().string() : ("merged " + std::to_string(inputFiles.size()) + " files"))
-              << " (" << header.pointCount << " points)\n";
-
-    // /rgb: -- a requested channel absent from the file's point format is a
-    // printed warning, never a hard failure, since a batch run over
-    // mixed-format tiles is a real, expected case.
     fusion::metrics::SpectralChannelSelection spectralSelection;
-    if (auto rgbOpt = parser.GetOption("rgb")) {
-        spectralSelection = fusion::metrics::ParseSpectralChannels(*rgbOpt, header.pointFormat);
-        for (const auto& token : spectralSelection.unknownTokens) {
-            std::cerr << "Warning: /rgb channel '" << token << "' is not available for LAS point format "
-                      << static_cast<int>(header.pointFormat) << " -- skipped.\n";
+
+    if (isRasterInput) {
+        const auto& dsmInfo = dsmRaster.GetInfo();
+        std::cout << "[GridMetrics] Processing DSM Raster: " << inputPath.filename().string()
+                  << " (" << dsmInfo.width << "x" << dsmInfo.height << " pixels, cell size "
+                  << dsmInfo.pixelWidth << "x" << std::abs(dsmInfo.pixelHeight) << ")\n";
+        gridMinX = dsmInfo.minX;
+        gridMinY = dsmInfo.minY;
+        gridMaxX = dsmInfo.maxX;
+        gridMaxY = dsmInfo.maxY;
+        gridProjectionWKT = dsmInfo.projectionWKT;
+        noIntensity = true;
+    } else {
+        inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+        if (inputFiles.empty()) {
+            std::cerr << "Error: No valid .las, .laz, or raster files found from input arguments.\n";
+            return 1;
+        }
+
+        if (!lasReader.Open(inputFiles)) {
+            std::cerr << "Error: Failed to open point cloud file(s).\n";
+            return 1;
+        }
+
+        auto header = lasReader.GetHeader();
+        std::cout << "[GridMetrics] Processing Point Cloud: " << (inputFiles.size() == 1 ? inputFiles[0].filename().string() : ("merged " + std::to_string(inputFiles.size()) + " files"))
+                  << " (" << header.pointCount << " points)\n";
+        gridMinX = header.minX;
+        gridMinY = header.minY;
+        gridMaxX = header.maxX;
+        gridMaxY = header.maxY;
+        gridProjectionWKT = header.projectionWKT;
+
+        if (auto rgbOpt = parser.GetOption("rgb")) {
+            spectralSelection = fusion::metrics::ParseSpectralChannels(*rgbOpt, header.pointFormat);
+            for (const auto& token : spectralSelection.unknownTokens) {
+                std::cerr << "Warning: /rgb channel '" << token << "' is not available for LAS point format "
+                          << static_cast<int>(header.pointFormat) << " -- skipped.\n";
+            }
         }
     }
 
@@ -1028,109 +1061,180 @@ int main(int argc, char* argv[]) {
         enableRgbStrata = false;
     }
 
-    int cols = static_cast<int>(std::ceil((header.maxX - header.minX) / cellSize));
-    int rows = static_cast<int>(std::ceil((header.maxY - header.minY) / cellSize));
+    int cols = static_cast<int>(std::ceil((gridMaxX - gridMinX) / cellSize));
+    int rows = static_cast<int>(std::ceil((gridMaxY - gridMinY) / cellSize));
     if (cols <= 0) cols = 1;
     if (rows <= 0) rows = 1;
 
-    // Bucket counts for this run, constant across every cell -- used both to
-    // lazily size CellAccumulator::Extras the first time a given cell needs
-    // it (point loop below) and as the fixed output column/band count
-    // downstream (a cell's own extras may be null even when these are
-    // nonzero, e.g. a cell with zero points). No per-cell strata/intstrata/
-    // spectral containers are pre-allocated here -- see the big comment on
-    // CellAccumulator::Extras for why.
     size_t numStrataBuckets = strata.empty() ? 0 : strata.size() + 1;
     size_t numIntStrataBuckets = (intStrata.empty() || noIntensity) ? 0 : intStrata.size() + 1;
 
     std::vector<CellAccumulator> grid(cols * rows);
 
-    fusion::lidar::PointRecord pt;
-    while (lasReader.ReadNextPoint(pt)) {
-        if (!pointFilter.Keep(pt)) {
-            continue;
-        }
+    if (isRasterInput) {
+        const auto& dsmInfo = dsmRaster.GetInfo();
+        int blockSizeRows = 512;
+        std::vector<float> dsmBlock;
+        for (int rowStart = 0; rowStart < dsmInfo.height; rowStart += blockSizeRows) {
+            int currentBlockRows = std::min(blockSizeRows, dsmInfo.height - rowStart);
+            if (!dsmRaster.ReadBandWindow(1, 0, rowStart, dsmInfo.width, currentBlockRows, dsmBlock)) {
+                std::cerr << "Error: Failed to read DSM raster window at row " << rowStart << "\n";
+                return 1;
+            }
 
-        if (firstOnly && pt.returnNumber != 1) {
-            continue;
-        }
+            for (int br = 0; br < currentBlockRows; ++br) {
+                int rGlobal = rowStart + br;
+                double y = dsmInfo.originY + (rGlobal + 0.5) * dsmInfo.pixelHeight;
+                for (int cGlobal = 0; cGlobal < dsmInfo.width; ++cGlobal) {
+                    double x = dsmInfo.originX + (cGlobal + 0.5) * dsmInfo.pixelWidth;
+                    float val = dsmBlock[br * dsmInfo.width + cGlobal];
 
-        int col = static_cast<int>((pt.x - header.minX) / cellSize);
-        int row = static_cast<int>((header.maxY - pt.y) / cellSize);
-        if (col == cols && pt.x == header.maxX) col = cols - 1;
-        if (row == rows && pt.y == header.minY) row = rows - 1;
+                    if (dsmInfo.hasNoData && val == static_cast<float>(dsmInfo.noDataValue)) {
+                        continue;
+                    }
+                    if (std::isnan(val)) {
+                        continue;
+                    }
 
-        if (col >= 0 && col < cols && row >= 0 && row < rows) {
-            double elevation = pt.z;
-            if (hasGround) {
-                auto gz = groundRaster.GetElevation(pt.x, pt.y);
-                if (!gz) {
-                    continue;
+                    int col = static_cast<int>((x - gridMinX) / cellSize);
+                    int row = static_cast<int>((gridMaxY - y) / cellSize);
+                    if (col == cols && x == gridMaxX) col = cols - 1;
+                    if (row == rows && y == gridMinY) row = rows - 1;
+
+                    if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                        double elevation = val;
+                        if (hasGround) {
+                            auto gz = groundRaster.GetElevation(x, y, fusion::raster::SampleMethod::Bilinear);
+                            if (!gz) {
+                                continue;
+                            }
+                            elevation -= *gz;
+                        }
+
+                        auto& cell = grid[row * cols + col];
+                        cell.totalReturns++;
+                        cell.firstReturns++;
+                        cell.returnNumberCounts[0]++;
+
+                        if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
+                            continue;
+                        }
+
+                        if (enableExp) {
+                            cell.cellPoints.push_back({x, y, elevation});
+                        }
+
+                        if (elevation >= 0.0) {
+                            cell.returnsAboveGround++;
+                        }
+
+                        if (elevation >= heightCut) {
+                            cell.returnsAboveHeightCut++;
+                        }
+
+                        if (!strata.empty()) {
+                            size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
+                            auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                            extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
+                        }
+
+                        if (elevation >= minHt) {
+                            cell.returnsAboveMinHt++;
+                            cell.elevations.push_back(static_cast<float>(elevation));
+                        }
+                    }
                 }
-                elevation -= *gz;
             }
-
-            auto& cell = grid[row * cols + col];
-            cell.totalReturns++;
-            if (pt.returnNumber == 1) cell.firstReturns++;
-            {
-                int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
-                cell.returnNumberCounts[rnIdx]++;
-            }
-
-            if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
+        }
+        dsmRaster.Close();
+    } else {
+        fusion::lidar::PointRecord pt;
+        while (lasReader.ReadNextPoint(pt)) {
+            if (!pointFilter.Keep(pt)) {
                 continue;
             }
 
-            if (enableExp) {
-                cell.cellPoints.push_back({pt.x, pt.y, elevation});
+            if (firstOnly && pt.returnNumber != 1) {
+                continue;
             }
 
-            if (elevation >= 0.0) {
-                cell.returnsAboveGround++;
-            }
+            int col = static_cast<int>((pt.x - gridMinX) / cellSize);
+            int row = static_cast<int>((gridMaxY - pt.y) / cellSize);
+            if (col == cols && pt.x == gridMaxX) col = cols - 1;
+            if (row == rows && pt.y == gridMinY) row = rows - 1;
 
-            if (elevation >= heightCut) {
-                cell.returnsAboveHeightCut++;
-            }
+            if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                double elevation = pt.z;
+                if (hasGround) {
+                    auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                    if (!gz) {
+                        continue;
+                    }
+                    elevation -= *gz;
+                }
 
-            if (!strata.empty()) {
-                size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
-                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
-                if (enableRgbStrata) {
-                    for (const auto& spec : spectralSelection.channels) {
-                        auto& perPrefix = extras.strataSpectralValues[spec.prefix];
-                        if (perPrefix.size() != numStrataBuckets) {
-                            perPrefix.resize(numStrataBuckets);
+                auto& cell = grid[row * cols + col];
+                cell.totalReturns++;
+                if (pt.returnNumber == 1) cell.firstReturns++;
+                {
+                    int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
+                    cell.returnNumberCounts[rnIdx]++;
+                }
+
+                if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
+                    continue;
+                }
+
+                if (enableExp) {
+                    cell.cellPoints.push_back({pt.x, pt.y, elevation});
+                }
+
+                if (elevation >= 0.0) {
+                    cell.returnsAboveGround++;
+                }
+
+                if (elevation >= heightCut) {
+                    cell.returnsAboveHeightCut++;
+                }
+
+                if (!strata.empty()) {
+                    size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
+                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                    extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
+                    if (enableRgbStrata) {
+                        for (const auto& spec : spectralSelection.channels) {
+                            auto& perPrefix = extras.strataSpectralValues[spec.prefix];
+                            if (perPrefix.size() != numStrataBuckets) {
+                                perPrefix.resize(numStrataBuckets);
+                            }
+                            perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
                         }
-                        perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
                     }
                 }
-            }
 
-            if (!noIntensity && !intStrata.empty()) {
-                size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
-                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
-            }
-
-            if (elevation >= minHt) {
-                cell.returnsAboveMinHt++;
-                cell.elevations.push_back(static_cast<float>(elevation));
-                if (!noIntensity) {
-                    cell.intensities.push_back(static_cast<float>(pt.intensity));
-                }
-                if (!spectralSelection.channels.empty()) {
+                if (!noIntensity && !intStrata.empty()) {
+                    size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
                     auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                    for (const auto& spec : spectralSelection.channels) {
-                        extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                    extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
+                }
+
+                if (elevation >= minHt) {
+                    cell.returnsAboveMinHt++;
+                    cell.elevations.push_back(static_cast<float>(elevation));
+                    if (!noIntensity) {
+                        cell.intensities.push_back(static_cast<float>(pt.intensity));
+                    }
+                    if (!spectralSelection.channels.empty()) {
+                        auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                        for (const auto& spec : spectralSelection.channels) {
+                            extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                        }
                     }
                 }
             }
         }
+        lasReader.Close();
     }
-    lasReader.Close();
 
     // Prepare metric output arrays. Every band defaults to the resolved
     // /nodata value -- a cell that never enters any of the branches below
@@ -1372,8 +1476,10 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
-    std::string stem = (inputFiles.size() == 1) ? inputFiles[0].stem().string() : "merged_gridmetrics";
+    double geotransform[6] = { gridMinX, cellSize, 0.0, gridMaxY, 0.0, -cellSize };
+    std::string stem = isRasterInput
+        ? inputPath.stem().string()
+        : ((inputFiles.size() == 1) ? inputFiles[0].stem().string() : "merged_gridmetrics");
     if (auto outRoot = parser.GetOption("outroot")) {
         stem = *outRoot;
     }
@@ -1451,8 +1557,8 @@ int main(int argc, char* argv[]) {
     bool noRaster = parser.HasFlag("noraster");
     bool wantTable = parser.WasExplicit("output-table");
 
-    std::string projWKT = !header.projectionWKT.empty()
-        ? header.projectionWKT
+    std::string projWKT = !gridProjectionWKT.empty()
+        ? gridProjectionWKT
         : (hasGround ? groundRaster.GetInfo().projectionWKT : "");
 
     if (!noRaster) {
@@ -1545,8 +1651,8 @@ int main(int argc, char* argv[]) {
                 for (int c = 0; c < cols; ++c) {
                     size_t idx = r * cols + c;
                     const auto& cell = grid[idx];
-                    double x = header.minX + (c + 0.5) * cellSize;
-                    double y = header.maxY - (r + 0.5) * cellSize;
+                    double x = gridMinX + (c + 0.5) * cellSize;
+                    double y = gridMaxY - (r + 0.5) * cellSize;
                     bool cellEmpty = (cell.totalReturns == 0); // /nodata applies to every column, including counts
 
                     std::vector<double> row;

@@ -432,6 +432,20 @@ bool GDALRaster::ReadBandData(int bandIdx, std::vector<float>& buffer) const {
     return (band->RasterIO(GF_Read, 0, 0, m_info.width, m_info.height, buffer.data(), m_info.width, m_info.height, GDT_Float32, 0, 0) == CE_None);
 }
 
+bool GDALRaster::ReadBandWindow(int bandIdx, int xOffset, int yOffset, int xSize, int ySize, std::vector<float>& buffer) const {
+    if (!IsOpen() || bandIdx < 1 || bandIdx > m_info.numBands) {
+        return false;
+    }
+    if (xOffset < 0 || yOffset < 0 || xSize <= 0 || ySize <= 0 ||
+        xOffset + xSize > m_info.width || yOffset + ySize > m_info.height) {
+        return false;
+    }
+
+    buffer.resize(static_cast<size_t>(xSize) * ySize);
+    GDALRasterBand* band = m_impl->dataset->GetRasterBand(bandIdx);
+    return (band->RasterIO(GF_Read, xOffset, yOffset, xSize, ySize, buffer.data(), xSize, ySize, GDT_Float32, 0, 0) == CE_None);
+}
+
 bool GDALRaster::WriteBandData(int bandIdx, const std::vector<float>& buffer) {
     if (!IsOpen() || bandIdx < 1 || bandIdx > m_info.numBands || buffer.size() != static_cast<size_t>(m_info.width) * m_info.height) {
         return false;

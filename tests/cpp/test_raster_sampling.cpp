@@ -110,6 +110,24 @@ int RunRasterSamplingTests() {
     //10. the nodata cell's own centre returns nothing under nearest sampling
     CHECK(!raster.GetElevation(CellCentreX(2), CellCentreY(1), SampleMethod::Nearest).has_value(), failures);
 
+    //11. ReadBandWindow reads sub-windows accurately
+    std::vector<float> win;
+    CHECK(raster.ReadBandWindow(1, 1, 0, 2, 2, win), failures);
+    CHECK(win.size() == 4, failures);
+    if (win.size() == 4) {
+        CHECK(std::abs(win[0] - values[0 * kCols + 1]) < kTolerance, failures);
+        CHECK(std::abs(win[1] - values[0 * kCols + 2]) < kTolerance, failures);
+        CHECK(std::abs(win[2] - values[1 * kCols + 1]) < kTolerance, failures);
+        CHECK(std::abs(win[3] - values[1 * kCols + 2]) < kTolerance, failures);
+    }
+
+    //12. ReadBandWindow rejects out-of-bounds windows
+    std::vector<float> badWin;
+    CHECK(!raster.ReadBandWindow(1, -1, 0, 2, 2, badWin), failures);
+    CHECK(!raster.ReadBandWindow(1, 0, 0, kCols + 1, 1, badWin), failures);
+    CHECK(!raster.ReadBandWindow(1, 0, 0, 1, kRows + 1, badWin), failures);
+    CHECK(!raster.ReadBandWindow(2, 0, 0, 1, 1, badWin), failures); // band 2 doesn't exist
+
     raster.Close();
     std::filesystem::remove(path);
 
