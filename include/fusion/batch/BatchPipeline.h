@@ -107,6 +107,8 @@ struct PipelineJobOptions {
     std::string surfStatsSource{"max"};
     double voxelSize{20.0};
     bool enableRgbStrata{false};
+    // /strataraster: also write the per-stratum bands into each tile raster
+    bool enableStrataRaster{false};
 
     // When non-empty, the tile task also writes a per-tile metrics table
     // (path extension picked from this option's extension, filename
