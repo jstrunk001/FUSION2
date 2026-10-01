@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evaluation of GPU Acceleration and Raster Analytics for FUSION2</title>
+    <!-- MathJax for rendering mathematical formulas properly -->
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --surface-color: #ffffff;
+            --text-primary: #0f172a;
+            --text-secondary: #334155;
+            --border-color: #cbd5e1;
+            --primary: #0284c7;
+            --primary-dark: #0369a1;
+            --accent-green: #059669;
+            --accent-purple: #7c3aed;
+            --code-bg: #0f172a;
+            --code-text: #f8fafc;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.7;
+            margin: 0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1040px;
+            margin: 0 auto;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
+            padding: 56px;
+        }
+
+        header {
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 28px;
+            margin-bottom: 36px;
+        }
+
+        h1 {
+            font-size: 2.25rem;
+            color: #0f172a;
+            margin: 0 0 14px 0;
+            letter-spacing: -0.025em;
+            line-height: 1.25;
+        }
+
+        .metadata {
+            color: #64748b;
+            font-size: 0.95rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .badge {
+            background-color: #e0f2fe;
+            color: #0369a1;
+            padding: 3px 12px;
+            border-radius: 9999px;
+            font-weight: 700;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .toc-box {
+            background-color: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px 32px;
+            margin: 28px 0 36px 0;
+        }
+
+        .toc-title {
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: #1e293b;
+            margin-bottom: 12px;
+        }
+
+        .toc-list {
+            margin: 0;
+            padding-left: 20px;
+            columns: 2;
+            column-gap: 40px;
+        }
+
+        .toc-list li {
+            margin-bottom: 6px;
+            font-size: 0.95rem;
+        }
+
+        .toc-list a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .toc-list a:hover {
+            text-decoration: underline;
+        }
+
+        h2 {
+            font-size: 1.55rem;
+            color: #0f172a;
+            margin-top: 44px;
+            margin-bottom: 18px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+            letter-spacing: -0.02em;
+        }
+
+        h3 {
+            font-size: 1.22rem;
+            color: #1e293b;
+            margin-top: 28px;
+            margin-bottom: 12px;
+        }
+
+        p, li {
+            color: var(--text-secondary);
+            font-size: 1.01rem;
+        }
+
+        ul, ol {
+            padding-left: 26px;
+            margin-bottom: 20px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        .callout-note {
+            background-color: #f8fafc;
+            border-left: 4px solid #64748b;
+            padding: 18px 24px;
+            border-radius: 0 8px 8px 0;
+            margin: 24px 0;
+        }
+
+        .callout-note-title {
+            font-weight: 700;
+            color: #334155;
+            margin-bottom: 4px;
+            font-size: 1.05rem;
+        }
+
+        .callout-warning {
+            background-color: #fffbeb;
+            border-left: 4px solid #f59e0b;
+            padding: 18px 24px;
+            border-radius: 0 8px 8px 0;
+            margin: 24px 0;
+        }
+
+        .callout-warning-title {
+            font-weight: 700;
+            color: #92400e;
+            margin-bottom: 4px;
+            font-size: 1.05rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 24px 0 12px 0;
+            font-size: 0.93rem;
+        }
+
+        caption {
+            font-weight: 600;
+            text-align: left;
+            padding-bottom: 8px;
+            color: #0f172a;
+            font-size: 0.98rem;
+        }
+
+        th, td {
+            padding: 10px 14px;
+            text-align: left;
+            border: 1px solid var(--border-color);
+        }
+
+        th {
+            background-color: #f1f5f9;
+            color: #0f172a;
+            font-weight: 600;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+
+        pre, code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        pre {
+            background-color: var(--code-bg);
+            color: var(--code-text);
+            padding: 18px 22px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.88rem;
+            line-height: 1.5;
+            margin: 20px 0;
+        }
+
+        code:not(pre code) {
+            background-color: #e2e8f0;
+            color: #0f172a;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.88em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div style="margin-bottom: 10px;">
+                <span class="badge">Technical Evaluation Report</span>
+            </div>
+            <h1>Evaluation of GPU Acceleration and Raster Analytics for FUSION2</h1>
+            <div class="metadata">
+                <span><strong>Date:</strong> October 2026</span>
+                <span><strong>Target System:</strong> FUSION2 Point Cloud &amp; Raster Architecture</span>
+                <span><strong>Reference Study:</strong> 2026_RasterMetrics (Julia GPU Zonal Metrics Pipeline)</span>
+            </div>
+        </header>
+
+        <div class="toc-box">
+            <div class="toc-title">Table of Contents</div>
+            <ol class="toc-list">
+                <li><a href="#section-1">1. Executive Summary</a></li>
+                <li><a href="#section-2">2. Empirical Benchmark Evidence</a></li>
+                <li><a href="#section-3">3. Numerical Accuracy Analysis: GPU Kernel vs. Reference</a></li>
+                <li><a href="#section-4">4. Metric Set Comparison: GPU Kernel vs. FUSION2</a></li>
+                <li><a href="#section-5">5. Assessment of Histogram Methods on CPU</a></li>
+                <li><a href="#section-6">6. Point Cloud Processing on GPUs: Opportunities &amp; Constraints</a></li>
+                <li><a href="#section-7">7. Integration &amp; Engineering Specifications</a></li>
+                <li><a href="#section-8">8. Overall Verdict &amp; Feasibility</a></li>
+                <li><a href="#section-9">9. Study Limitations</a></li>
+                <li><a href="#section-10">10. Actionable Recommendations</a></li>
+            </ol>
+        </div>
+
+        <h2 id="section-1">1. Executive Summary</h2>
+        <p>
+            This evaluation investigates whether the GPU-accelerated raster processing engine developed in the <code>2026_RasterMetrics/julia</code> project can provide computational efficiencies for <strong>FUSION2</strong>.
+        </p>
+        <p>
+            The Julia project evaluated high-resolution Digital Surface Model (DSM) rasters derived from aerial photography (NAIP3D), measuring canopy metrics across 10,000 ft &times; 10,000 ft tiles (106 million fine pixels per tile). That investigation demonstrated that a CUDA kernel utilizing a 2,048-bin shared-memory cumulative distribution function (CDF) histogram, combined with an 8-stream CPU RAM pre-caching pipeline, reduced per-tile wall-clock time from <strong>50.0 seconds down to 0.42 seconds</strong> when compared against a single-threaded R / <code>terra</code> baseline.
+        </p>
+        <p>
+            When assessing the relevance of these findings to FUSION2, this evaluation identified key distinctions:
+        </p>
+        <ul>
+            <li>
+                <strong>Baseline Distinction</strong>: The measured speedup reflects an R / <code>terra</code> baseline. FUSION2 is implemented in native C++17 with multi-threaded batching; no empirical comparison exists between FUSION2 and the Julia GPU implementation on identical inputs.
+            </li>
+            <li>
+                <strong>Metric Completeness</strong>: The Julia CUDA kernel computes a 21-band raster subset (mean, standard deviation, min, max, 15 percentiles, canopy relief ratio, and cover). It omits metrics standard to FUSION2's <code>PointStatBundle</code>, including mode, average absolute deviation, median absolute deviation, and all four L-moments.
+            </li>
+            <li>
+                <strong>Percentile Agreement Characteristics</strong>: Across approximately 24,000 zones on validation tile <code>10011</code>, the average difference per percentile was small (0.02 to 0.10 ft). For percentiles below p95, only 1 to 16 zones per band differed by more than 1.0 ft. These differences were concentrated in sparsely vegetated zones (under 20 pixels clearing the height break). On p99, 156 zones differed by more than 1.0 ft due to a fixed 300 ft histogram upper bound clipping photogrammetric surface spikes (up to 348.9 ft) in the test dataset.
+            </li>
+            <li>
+                <strong>Point Cloud I/O Constraints</strong>: For raw LiDAR processing, single-threaded LAZ decompression (LASzip) limits per-tile ingestion rates. Furthermore, at small grid resolutions (e.g. 10 ft), storing 2,048-bin histograms in CPU memory requires up to 20&times; more RAM than storing raw point elevations.
+            </li>
+        </ul>
+
+        <h2 id="section-2">2. Empirical Benchmark Evidence (from 2026_RasterMetrics)</h2>
+        <p>
+            The benchmarks recorded in <code>2026_RasterMetrics/docs/speed_comparison_chart.md</code> were executed on an NVIDIA Quadro RTX 5000 (16 GB VRAM), 256 GB host RAM, and a 15-disk RAID 6 storage array. The workload processed 106-million-pixel tiles (10,000 ft &times; 10,000 ft at 1.0 ft cell size), aggregating them to 24,336 zonal cells on a 66.0 ft grid.
+        </p>
+
+        <table>
+            <caption>Table 1: Measured execution times per tile across pipeline architectures in the 2026_RasterMetrics project, alongside projected batch runtimes.</caption>
+            <thead>
+                <tr>
+                    <th>Pipeline Architecture</th>
+                    <th>Execution Mechanics</th>
+                    <th>Measured Time / Tile (s)</th>
+                    <th>Projected Time: 1,933 Tiles (h)</th>
+                    <th>Projected Time: 20,300 Tiles (h)</th>
+                    <th>Speedup vs. R Baseline</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>1. R / Terra Baseline</strong></td>
+                    <td>Single-threaded CPU, sequential windowed disk reads</td>
+                    <td>50.0</td>
+                    <td>26.8</td>
+                    <td>281.9 (11.7 d)</td>
+                    <td>1.0&times;</td>
+                </tr>
+                <tr>
+                    <td><strong>2. Julia CPU Multithreaded</strong></td>
+                    <td>5 CPU worker processes, sorting percentiles</td>
+                    <td>13.5</td>
+                    <td>7.2</td>
+                    <td>76.1 (3.2 d)</td>
+                    <td>3.7&times;</td>
+                </tr>
+                <tr>
+                    <td><strong>3. Julia GPU Serial</strong></td>
+                    <td>1 CPU thread + CUDA 2,048-bin CDF histogram</td>
+                    <td>7.2</td>
+                    <td>3.9</td>
+                    <td>40.6 (1.7 d)</td>
+                    <td>6.9&times;</td>
+                </tr>
+                <tr>
+                    <td><strong>4. Julia GPU + RAM Pipelining</strong></td>
+                    <td>8 CPU worker threads (DTM resample) + CUDA CDF</td>
+                    <td>0.90</td>
+                    <td>0.48 (29.0 min)</td>
+                    <td>5.08</td>
+                    <td>55.6&times;</td>
+                </tr>
+                <tr>
+                    <td><strong>5. Julia GPU + Fused DTM Kernel</strong></td>
+                    <td>Zero-copy register DTM interpolation + 8-stream RAM queue</td>
+                    <td>0.42</td>
+                    <td>0.23 (13.5 min)</td>
+                    <td>2.37</td>
+                    <td>119.0&times;</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="callout-note">
+            <div class="callout-note-title">Analytical Observation: Sources of Acceleration</div>
+            <p>
+                Of the total acceleration observed between the serial GPU run (7.2 s) and the final fused run (0.42 s), an 8-fold reduction (from 7.2 s down to 0.90 s) resulted from multi-threaded CPU storage pre-fetching and host memory buffering. The fused CUDA kernel provided an additional 2.1-fold improvement (from 0.90 s to 0.42 s) primarily by moving ground DTM bilinear interpolation into GPU registers, which eliminated the need for CPU-side DTM surface resampling prior to upload.
+            </p>
+        </div>
+
+        <table>
+            <caption>Table 2: Sequential whole-file read throughput from 15-disk RAID 6 array across varying thread counts (12 raw DSM GeoTIFF files, 400 MB each).</caption>
+            <thead>
+                <tr>
+                    <th>Transfer Threads</th>
+                    <th>Wall Time (s)</th>
+                    <th>Measured Throughput (MB/s)</th>
+                    <th>Tile Ingestion Rate (tiles/s)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>2 threads</td>
+                    <td>5.99</td>
+                    <td>800.9</td>
+                    <td>2.00</td>
+                </tr>
+                <tr>
+                    <td>4 threads</td>
+                    <td>2.15</td>
+                    <td>2,231.6</td>
+                    <td>5.58</td>
+                </tr>
+                <tr>
+                    <td>6 threads</td>
+                    <td>2.15</td>
+                    <td>2,234.7</td>
+                    <td>5.59</td>
+                </tr>
+                <tr>
+                    <td>8 threads</td>
+                    <td>1.96</td>
+                    <td>2,451.5</td>
+                    <td>6.13</td>
+                </tr>
+                <tr>
+                    <td>12 threads</td>
+                    <td>1.77</td>
+                    <td>2,710.4</td>
+                    <td>6.78</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2 id="section-3">3. Numerical Accuracy Analysis: GPU Kernel vs. Reference</h2>
+        <p>
+            To evaluate quantile estimation accuracy, the verification script <code>scripts/compare_gpu_vs_r_reference.jl</code> was executed on the validation output <code>2023_hxip_wa_dsm_10011_metrics.tif</code> against the reference R / <code>terra</code> output. The validation raster reflects the earlier implementation using <code>max_ht = 300.0 ft</code> (subsequently adjusted to 450.0 ft in the Julia source repository).
+        </p>
+
+        <table>
+            <caption>Table 3: Numerical residuals between Julia GPU output and R reference raster across all 21 metric bands on validation tile 10011 (24,034 valid zones).</caption>
+            <thead>
+                <tr>
+                    <th>Band Name</th>
+                    <th>Units</th>
+                    <th>Max Absolute Difference</th>
+                    <th>Mean Absolute Difference</th>
+                    <th>Zones Differing &gt; 1.0 Unit</th>
+                    <th>Evaluation Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>mean</code></td>
+                    <td>ft</td>
+                    <td>0.0839</td>
+                    <td>0.0001</td>
+                    <td>0 (0.00%)</td>
+                    <td>Close agreement</td>
+                </tr>
+                <tr>
+                    <td><code>sd</code></td>
+                    <td>ft</td>
+                    <td>0.0422</td>
+                    <td>0.0001</td>
+                    <td>0 (0.00%)</td>
+                    <td>Close agreement</td>
+                </tr>
+                <tr>
+                    <td><code>min</code></td>
+                    <td>ft</td>
+                    <td>0.1152</td>
+                    <td>0.0001</td>
+                    <td>0 (0.00%)</td>
+                    <td>Minor DTM resampling offset</td>
+                </tr>
+                <tr>
+                    <td><code>max</code></td>
+                    <td>ft</td>
+                    <td>0.0002</td>
+                    <td>0.0001</td>
+                    <td>0 (0.00%)</td>
+                    <td>Exact agreement</td>
+                </tr>
+                <tr>
+                    <td><code>p01</code></td>
+                    <td>ft</td>
+                    <td>1.6378</td>
+                    <td>0.0432</td>
+                    <td>8 (0.033%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p05</code></td>
+                    <td>ft</td>
+                    <td>8.1887</td>
+                    <td>0.0271</td>
+                    <td>1 (0.004%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p10</code></td>
+                    <td>ft</td>
+                    <td>16.2350</td>
+                    <td>0.0239</td>
+                    <td>1 (0.004%)</td>
+                    <td>Discrepancy in sparse zones (Zone 46, 104)</td>
+                </tr>
+                <tr>
+                    <td><code>p20</code></td>
+                    <td>ft</td>
+                    <td>6.0727</td>
+                    <td>0.0222</td>
+                    <td>2 (0.008%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p25</code></td>
+                    <td>ft</td>
+                    <td>4.6138</td>
+                    <td>0.0212</td>
+                    <td>1 (0.004%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p30</code></td>
+                    <td>ft</td>
+                    <td>12.7919</td>
+                    <td>0.0213</td>
+                    <td>1 (0.004%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p40</code></td>
+                    <td>ft</td>
+                    <td>8.7100</td>
+                    <td>0.0213</td>
+                    <td>2 (0.008%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p50</code> (median)</td>
+                    <td>ft</td>
+                    <td>3.8013</td>
+                    <td>0.0214</td>
+                    <td>3 (0.012%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p60</code></td>
+                    <td>ft</td>
+                    <td>1.5853</td>
+                    <td>0.0224</td>
+                    <td>2 (0.008%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p70</code></td>
+                    <td>ft</td>
+                    <td>2.3802</td>
+                    <td>0.0243</td>
+                    <td>3 (0.012%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p75</code></td>
+                    <td>ft</td>
+                    <td>0.8926</td>
+                    <td>0.0259</td>
+                    <td>0 (0.00%)</td>
+                    <td>Close agreement</td>
+                </tr>
+                <tr>
+                    <td><code>p80</code></td>
+                    <td>ft</td>
+                    <td>3.4994</td>
+                    <td>0.0284</td>
+                    <td>3 (0.012%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p90</code></td>
+                    <td>ft</td>
+                    <td>4.5942</td>
+                    <td>0.0376</td>
+                    <td>16 (0.067%)</td>
+                    <td>Discrepancy in sparse zones</td>
+                </tr>
+                <tr>
+                    <td><code>p95</code></td>
+                    <td>ft</td>
+                    <td>9.2401</td>
+                    <td>0.0526</td>
+                    <td>43 (0.179%)</td>
+                    <td>Histogram cap clipping noise</td>
+                </tr>
+                <tr>
+                    <td><code>p99</code></td>
+                    <td>ft</td>
+                    <td>23.7294</td>
+                    <td>0.1033</td>
+                    <td>156 (0.649%)</td>
+                    <td>Histogram cap clipping noise (Zone 76, 119)</td>
+                </tr>
+                <tr>
+                    <td><code>crr</code></td>
+                    <td>unitless</td>
+                    <td>0.0085</td>
+                    <td>0.0000</td>
+                    <td>0 (0.00%)</td>
+                    <td>Close agreement</td>
+                </tr>
+                <tr>
+                    <td><code>cover</code></td>
+                    <td>%</td>
+                    <td>0.0459</td>
+                    <td>0.0002</td>
+                    <td>0 (0.00%)</td>
+                    <td>Close agreement</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Analysis of Discrepancies and Root Causes</h3>
+        <ol>
+            <li>
+                <strong>Ground Resampling Differences in Minimum Height</strong>:
+                The small difference in <code>min</code> (maximum difference 0.1152 ft, e.g. 6.12 ft vs. 6.00 ft) arises because the Julia pipeline implements a custom bilinear DTM interpolation (renormalizing across NaN corners), whereas the R pipeline relies on <code>terra::resample()</code>.
+            </li>
+            <li>
+                <strong>Low-Sample Quantile Estimation in Sparse Zones</strong>:
+                Outside of p95 and p99, large residuals (&gt;1 ft) occurred in only 1 to 16 out of 24,034 zones (&lt;0.07% of the tile). In these zones (such as Zone 46, 104 with 0.23% canopy cover, where only 10 pixels cleared the 6.0 ft height break), R's sample quantile interpolation (<code>type = 7</code>) operates between discrete order statistics, whereas the CUDA kernel interpolates within continuous histogram bin intervals.
+            </li>
+            <li>
+                <strong>Surface Model Spikes and Histogram Clamping</strong>:
+                In the reference raster, 156 zones have maximum heights exceeding 300.0 ft, reaching up to 348.9 ft. In Washington forests, trees exceeding 320 ft are rare; photogrammetric DSM heights of 348 ft typically represent surface matching artifacts (birds, cloud noise, or DTM interpolation depressions). The 300 ft cap in the earlier kernel clipped these artifacts at bin 2048, resulting in a 23.73 ft difference on p99 in Zone (76, 119).
+            </li>
+        </ol>
+
+        <h3>Potential Algorithmic Remedies for Sparse Zones</h3>
+        <p>
+            The quantile discrepancy in low-cover cells can be resolved on the GPU using two lightweight methods:
+        </p>
+        <ul>
+            <li><strong>Shared-Memory Sorting for Small $N$</strong>: When a zone contains fewer than 256 pixels clearing the height break (such as Zone 46, 104 with $N = 10$), threads can collect the values into a small shared array and execute a 256-element bitonic sort, matching R's <code>type = 7</code> rule.</li>
+            <li><strong>Discrete CDF Step Indexing</strong>: Rather than interpolating within a histogram bin assuming continuous density, evaluate sample quantiles directly at non-zero bin steps.</li>
+        </ul>
+
+        <h2 id="section-4">4. Metric Set Comparison: GPU Kernel vs. FUSION2</h2>
+        <p>
+            FUSION2 computes a broader suite of point and canopy metrics through <code>ComputePointStatBundle</code> (in <code>src/libfusion_core/PointCloudStats.cpp</code>). The Julia CUDA kernel computes a subset.
+        </p>
+
+        <table>
+            <caption>Table 4: Detailed comparison of metrics computed by FUSION2 PointStatBundle versus the Julia CUDA kernel.</caption>
+            <thead>
+                <tr>
+                    <th>Metric Name</th>
+                    <th>FUSION2 <code>PointStatBundle</code></th>
+                    <th>Julia CUDA Kernel</th>
+                    <th>Derivation &amp; Feasibility in CUDA</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>mean</code></td>
+                    <td>Yes (Float64 two-pass)</td>
+                    <td>Yes (Float32 single-pass)</td>
+                    <td>Direct from $\sum x / n$</td>
+                </tr>
+                <tr>
+                    <td><code>variance</code></td>
+                    <td>Yes (Sample variance, $n-1$)</td>
+                    <td><strong>No</strong> (Can be added)</td>
+                    <td>Direct from running sum: $\frac{\sum x^2 - (\sum x)^2 / n}{n-1}$</td>
+                </tr>
+                <tr>
+                    <td><code>stddev</code></td>
+                    <td>Yes (Population variance, $n$)*</td>
+                    <td>Yes (Sample variance, $n-1$)</td>
+                    <td>*FUSION2 inconsistency: stddev uses $n$, variance uses $n-1$</td>
+                </tr>
+                <tr>
+                    <td><code>cv</code> (Coefficient of Variation)</td>
+                    <td>Yes ($\text{stddev} / \text{mean}$)</td>
+                    <td><strong>No</strong> (Can be added)</td>
+                    <td>Direct from $\text{stddev} / \text{mean}$</td>
+                </tr>
+                <tr>
+                    <td><code>min</code>, <code>max</code></td>
+                    <td>Yes</td>
+                    <td>Yes</td>
+                    <td>Computed via thread reductions</td>
+                </tr>
+                <tr>
+                    <td><code>crr</code> (Canopy Relief Ratio)</td>
+                    <td>Yes</td>
+                    <td>Yes</td>
+                    <td>Formula: $(\text{mean} - \text{min}) / (\text{max} - \text{min})$</td>
+                </tr>
+                <tr>
+                    <td><code>cover</code></td>
+                    <td>Yes</td>
+                    <td>Yes</td>
+                    <td>Percentage of returns clearing height break</td>
+                </tr>
+                <tr>
+                    <td>Percentiles (<code>p01</code>..<code>p99</code>)</td>
+                    <td>Yes (15 percentiles)</td>
+                    <td>Yes (15 percentiles)</td>
+                    <td>Extracted via CDF prefix-sum scan</td>
+                </tr>
+                <tr>
+                    <td><code>median</code> (<code>p50</code>)</td>
+                    <td>Yes</td>
+                    <td>Yes</td>
+                    <td>Identical to <code>p50</code></td>
+                </tr>
+                <tr>
+                    <td><code>iqr</code></td>
+                    <td>Yes (<code>p75 - p25</code>)</td>
+                    <td><strong>No</strong> (Can be added)</td>
+                    <td>Direct from $\text{p75} - \text{p25}$</td>
+                </tr>
+                <tr>
+                    <td><code>quadraticMean</code></td>
+                    <td>Yes ($\sqrt{\sum x^2 / n}$)</td>
+                    <td><strong>No</strong> (Can be added)</td>
+                    <td>Direct from running sum of squares</td>
+                </tr>
+                <tr>
+                    <td><code>cubicMean</code></td>
+                    <td>Yes ($\sqrt[3]{\sum x^3 / n}$)</td>
+                    <td><strong>No</strong> (Can be added)</td>
+                    <td>Requires running sum of cubes $\sum x^3$</td>
+                </tr>
+                <tr>
+                    <td><code>skewness</code>, <code>kurtosis</code></td>
+                    <td>Yes (3rd &amp; 4th moments)</td>
+                    <td><strong>No</strong> (Can be added)</td>
+                    <td>Requires running sums $\sum x^3, \sum x^4$ (Float32 precision sensitive)</td>
+                </tr>
+                <tr>
+                    <td><code>mode</code></td>
+                    <td>Yes (0.5 ft binning)</td>
+                    <td><strong>No</strong></td>
+                    <td>Requires peak bin search over histogram</td>
+                </tr>
+                <tr>
+                    <td><code>aad</code>, <code>madMedian</code>, <code>madMode</code></td>
+                    <td>Yes</td>
+                    <td><strong>No</strong></td>
+                    <td>Requires second pass over observations after mean/median are known</td>
+                </tr>
+                <tr>
+                    <td>L-Moments ($l_1, l_2, l_3, l_4$)</td>
+                    <td>Yes (Hosking 1990)</td>
+                    <td><strong>No</strong></td>
+                    <td>Requires sorted order-statistic rank weights ($i - 1$)</td>
+                </tr>
+                <tr>
+                    <td>L-Moment Ratios ($l_{CV}, l_{skew}, l_{kurt}$)</td>
+                    <td>Yes</td>
+                    <td><strong>No</strong></td>
+                    <td>Derived from $l_1 \dots l_4$</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="callout-note">
+            <div class="callout-note-title">FUSION2 Variance Inconsistency Note</div>
+            <p>
+                In <code>src/libfusion_core/PointCloudStats.cpp:118-119</code>, FUSION2 defines sample variance dividing by $n - 1$ (<code>var = sqSum / (n - 1)</code>), but computes standard deviation dividing by $n$ (<code>stdDev = std::sqrt(sqSum / n)</code>). Consequently, $\text{variance} \ne \text{stddev}^2$ in FUSION2 output.
+            </p>
+        </div>
+
+        <h2 id="section-5">5. Assessment of Histogram Methods on CPU</h2>
+        <p>
+            The proposal to replace sorting with fixed-bin histograms on the CPU requires evaluating data types and memory access patterns in FUSION2.
+        </p>
+
+        <h3>A. LAS Spectral Channels vs. 8-Bit Rasters</h3>
+        <p>
+            In LAS 1.4 point data record formats 2, 3, 7, and 8, Red, Green, Blue, and NIR are defined as <strong>unsigned 16-bit integers (<code>uint16_t</code>, $0 \dots 65,535$)</strong>, as declared in <code>src/libfusion_core/LASPointCloud.cpp</code>.
+        </p>
+        <ul>
+            <li>For 8-bit imagery rasters (such as NAIP GeoTIFFs), values occupy $0 \dots 255$, allowing an exact 256-bin histogram (1.02 KB) with zero approximation error.</li>
+            <li>For raw LAS point clouds, an exact integer histogram requires 65,536 bins (256 KB per channel). Allocating 256 KB per cell across millions of cells in CPU memory is impractical. Binned approximations (e.g. 1,024 bins) introduce small quantization boundaries (~64 counts).</li>
+        </ul>
+
+        <h3>B. Memory Footprint Inversion on CPU at Small Cell Sizes</h3>
+        <p>
+            LiDAR points arrive in scanline acquisition order, spanning the geographic extent of a tile. A streaming CPU pipeline cannot process cells sequentially; it must maintain open accumulators for every grid cell simultaneously until the entire file is read.
+        </p>
+        <p>
+            Consider a standard forestry acquisition processed at FUSION's default 10.0 ft cell size:
+        </p>
+        <ul>
+            <li>At nominal pulse densities (e.g. 8–12 pulses/\(\text{m}^2\)), each 10 ft &times; 10 ft cell receives approximately 80 to 120 points.</li>
+            <li>Storing 100 raw single-precision float elevations consumes <strong>400 bytes per cell</strong>.</li>
+            <li>An open 2,048-bin <code>int32</code> histogram consumes <strong>8,192 bytes per cell</strong>.</li>
+        </ul>
+        <p>
+            Under these conditions, a histogram accumulator requires <strong>approximately 20 times more host RAM</strong> than storing raw point elevations. Histograms become memory-efficient only when the cell size is large (such as 66.0 ft or 100.0 ft, where each cell contains &gt;4,000 observations) or when memory is allocated on the GPU for in-flight threadblocks only.
+        </p>
+
+        <h2 id="section-6">6. Point Cloud Processing on GPUs: Opportunities &amp; Constraints</h2>
+        <p>
+            <em>Note: The GPU methods discussed in this section represent conceptual designs. Unlike the raster pipeline, they were not evaluated in the 2026_RasterMetrics project.</em>
+        </p>
+
+        <h3>A. Ingestion Constraints in Point Cloud Processing</h3>
+        <p>
+            While GPU radix sorting (e.g. via NVIDIA CUB) can reorder arrays in device memory at high throughput, sorting raw points is only one component of end-to-end processing.
+        </p>
+        <p>
+            In FUSION2, reading compressed <code>.laz</code> files relies on single-threaded LASzip decompression per file stream. Estimated decompression times for a 50-million-point LAZ file on CPU range from 8 to 15 seconds, while PCIe 4.0 host-to-device memory transfer adds 0.5 to 1.0 second. FUSION2 mitigates this by decoding multiple tiles in parallel across CPU cores using <code>/threads</code>. Accelerating spatial binning on the GPU addresses in-memory reordering, but end-to-end speedups for raw point clouds will remain bounded by LAZ decompression rates unless GPU-native decompression engines (such as NVCOMP) are implemented.
+        </p>
+
+        <h3>B. 2.5D Rasterization for Canopy Height Models</h3>
+        <p>
+            A direct candidate for GPU point cloud processing exists in <code>canopymodel.exe</code>. Generating a Canopy Height Model requires finding the maximum elevation within each grid cell. On a GPU, this can be implemented via an <code>atomicMax()</code> kernel across an unorganized point buffer:
+        </p>
+        <pre><code>// CUDA kernel for point cloud CHM rasterization:
+// Requires non-negative normalized heights (h >= 0.0f) and float64 tile-origin offset
+__global__ void rasterize_chm_kernel(const double* __restrict__ x,
+                                     const double* __restrict__ y,
+                                     const float* __restrict__ z,
+                                     const float* __restrict__ ground,
+                                     float* __restrict__ chm,
+                                     int n, double xmin, double ymax,
+                                     double res, int cols, int rows) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
+    // Relative double-precision offset prevents precision loss in state plane coordinates
+    int col = static_cast<int>((x[i] - xmin) / res);
+    int row = static_cast<int>((ymax - y[i]) / res);
+
+    if (col >= 0 && col < cols && row >= 0 && row < rows) {
+        int idx = row * cols + col;
+        float h = z[i] - ground[idx];
+        if (h >= 0.0f) {
+            // Reinterpreting non-negative float32 as int32 preserves monotonic ordering
+            atomicMax(reinterpret_cast<int*>(&chm[idx]), __float_as_int(h));
+        }
+    }
+}</code></pre>
+        <p>
+            This operation requires no histograms, no sorting, and minimal shared memory, making it an appropriate candidate for initial GPU integration in FUSION2. Smoothing (<code>/smooth</code>) can follow as a standard 2D image filter pass.
+        </p>
+
+        <h2 id="section-7">7. Integration &amp; Engineering Specifications</h2>
+
+        <h3>A. FUSION2 Executable Profiles</h3>
+        <p>
+            FUSION2 executables are built as statically-linked standalone binaries. File sizes in <code>FUSION2/bin/</code> are:
+        </p>
+        <ul>
+            <li><code>gridmetrics.exe</code>: 40.4 MB</li>
+            <li><code>canopymodel.exe</code>: 40.2 MB</li>
+            <li><code>groundfilter.exe</code>: 40.2 MB</li>
+            <li><code>filterdata.exe</code>: 1.75 MB</li>
+            <li><code>thindata.exe</code>: 1.75 MB</li>
+        </ul>
+        <p>
+            The larger executables (~40 MB) incorporate static PROJ projection tables and GDAL driver support. Adding static CUDA runtime support (<code>cudart_static.lib</code>) and multi-architecture machine code will add approximately 6 to 10 MB, resulting in binaries of approximately <strong>46 to 50 MB</strong>.
+        </p>
+
+        <h3>B. Command-Line Syntax in FUSION2</h3>
+        <p>
+            CLI integration must follow FUSION2's established parameter conventions. In <code>gridmetrics.cpp</code>:
+        </p>
+        <ul>
+            <li>Cell size is passed via the <code>/cellsize:&lt;val&gt;</code> option, not as a positional parameter.</li>
+            <li>Output directory is governed by <code>/outdir:&lt;path&gt;</code> and <code>/outroot:&lt;name&gt;</code>.</li>
+            <li>The positional arguments are strictly: <code>&lt;input_file_or_dir&gt; [optional_ground_raster]</code>.</li>
+        </ul>
+        <p>
+            Valid invocation examples:
+        </p>
+        <pre><code># Correct point cloud invocation:
+gridmetrics /ground:dtm.tif /cellsize:66.0 /outdir:./output lidar_tile.laz
+
+# Correct raster invocation (as proposed):
+gridmetrics /ground:dtm.tif /cellsize:66.0 /outdir:./output dsm_tile.tif</code></pre>
+
+        <h3>C. CMake CUDA Configuration &amp; GPU Architectures</h3>
+        <p>
+            The build specification in <code>CMakeLists.txt</code> must use valid architecture target syntax. In modern CMake (3.18+), virtual architectures use the <code>-virtual</code> suffix:
+        </p>
+        <pre><code># Target Pascal, Turing, Ampere, Ada Lovelace, and Blackwell with PTX fallback:
+set(CMAKE_CUDA_ARCHITECTURES "60;75;80;86;89;120;75-virtual")</code></pre>
+        <ul>
+            <li><code>60</code>: Pascal architecture (GTX 1060–1080 / Quadro P-series, compute capability 6.0/6.1). <em>Note: CUDA 13 dropped support for architecture 60, so compiling for Pascal requires a CUDA 12.x or earlier toolkit.</em></li>
+            <li><code>75</code>: Turing (Quadro RTX 5000, RTX 20-series).</li>
+            <li><code>80</code>, <code>86</code>: Ampere (RTX 30-series, RTX A-series).</li>
+            <li><code>89</code>: Ada Lovelace (RTX 40-series, RTX 4000–6000 Ada).</li>
+            <li><code>120</code>: Blackwell consumer generation (RTX 50-series).</li>
+            <li><code>75-virtual</code>: Embeds virtual PTX assembly, allowing the installed NVIDIA driver to JIT-compile kernels on unlisted or future architectures.</li>
+        </ul>
+
+        <h2 id="section-8">8. Overall Verdict &amp; Feasibility</h2>
+        <p>
+            <strong>Is GPU acceleration worth pursuing for FUSION2?</strong>
+        </p>
+        <ul>
+            <li>
+                <strong>For Raster Ingestion (High Return)</strong>: Yes. Incorporating a GPU-accelerated raster pipeline into FUSION2 offers proven utility. For statewide photogrammetric DSM processing (e.g. NAIP3D), where data are dense, continuous, and require no point decompression, the CUDA fused bilinear DTM kernel provides real operational speedups.
+            </li>
+            <li>
+                <strong>For Canopy Height Models (High Return)</strong>: Yes. In <code>canopymodel.exe</code>, direct 2.5D rasterization via <code>atomicMax()</code> is technically simple, numerically robust, and avoids the memory penalties of histogram approaches.
+            </li>
+            <li>
+                <strong>For General Point Cloud GridMetrics (Moderate Return)</strong>: The benefits are more constrained. Because FUSION2 already saturates CPU cores across tiles using <code>/threads</code>, and because single-threaded LAZ decompression bounds throughput per core, offloading only the point reduction phase yields lower net improvements on raw LiDAR than on pre-rasterized DSMs.
+            </li>
+        </ul>
+
+        <h2 id="section-9">9. Study Limitations</h2>
+        <ol>
+            <li>
+                <strong>No FUSION2 CPU Baseline on Test Rasters</strong>:
+                The 119&times; speedup reported in the Julia study was measured against single-threaded R / <code>terra</code>. FUSION2 currently lacks raster input support, so no empirical C++ baseline exists for this workload.
+            </li>
+            <li>
+                <strong>Percentile Inaccuracy in Low-Canopy Zones</strong>:
+                The 2,048-bin CDF histogram does not reproduce standard sample quantiles in cells with sparse canopy cover ($N &lt; 20$), exhibiting errors up to 16.2 ft on validation data.
+            </li>
+            <li>
+                <strong>Surface Noise Sensitivity with Fixed Bounds</strong>:
+                Using a fixed 300 ft upper bound clipped photogrammetric surface spikes (up to 348.9 ft) in validation testing. Setting bounds from each zone's own maximum height is required to avoid skewing histogram resolution across a tile.
+            </li>
+            <li>
+                <strong>Omission of Higher Moments &amp; L-Moments</strong>:
+                The CUDA kernel computes 21 bands. It does not compute mode, skewness, kurtosis, MAD, AAD, or L-moments, which are required by FUSION2's <code>PointStatBundle</code>.
+            </li>
+            <li>
+                <strong>Point Cloud GPU Binning Remains Unmeasured</strong>:
+                Point cloud processing on the GPU was not evaluated. Single-threaded LAZ decompression on the CPU remains a primary rate-limiting factor for raw LiDAR workflows.
+            </li>
+        </ol>
+
+        <h2 id="section-10">10. Actionable Recommendations</h2>
+        <ol>
+            <li>
+                <strong>Implement CPU-Based Raster Input in FUSION2 First</strong>:
+                Add high-resolution DSM raster reading to <code>gridmetrics.exe</code> using <code>GDALRaster</code>. This will provide an immediate capability for photogrammetric datasets and establish a real C++ CPU baseline.
+            </li>
+            <li>
+                <strong>Adopt Per-Zone Histogram Bounds</strong>:
+                If histogram methods are used for elevation, derive the upper bound dynamically from each zone's computed maximum height (which the kernel already evaluates) rather than a fixed global limit or a tile-wide maximum.
+            </li>
+            <li>
+                <strong>Implement Hybrid Quantile Rules for Sparse Zones</strong>:
+                For zones with low return counts ($N &lt; 256$), sort values in shared memory to ensure bit-level parity with sample quantile definitions.
+            </li>
+            <li>
+                <strong>Restrict Fixed-Bin Integer Histograms to 8-Bit Rasters</strong>:
+                Use 256-bin histograms only for 8-bit imagery channels (such as NAIP RGB/NIR), where the integer domain ensures bit-for-bit accuracy. Retain sorting or adaptive reservoirs for continuous float elevations and 16-bit point cloud attributes.
+            </li>
+            <li>
+                <strong>Benchmark FUSION2 CPU on Point Clouds</strong>:
+                Profile <code>gridmetrics.exe</code> on a 50-million-point LAZ file to determine the exact proportion of wall-clock time spent in LAZ decompression, spatial cell assignment, sorting, and statistical calculations.
+            </li>
+        </ol>
+    </div>
+</body>
+</html>
