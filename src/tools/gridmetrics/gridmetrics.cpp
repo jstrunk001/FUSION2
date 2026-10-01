@@ -30,6 +30,7 @@
 #include <array>
 #include <limits>
 #include <memory>
+#include <chrono>
 
 struct CellAccumulator {
     std::vector<float> elevations;
@@ -899,6 +900,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output-mode", "Output raster mode: multiband or singleband", "multiband");
     parser.AddOption("output-table", "Write the full per-cell metrics table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster(s) -- only valid together with /output-table, since a run must produce at least one output");
+    parser.AddFlag("profile", "Report high-resolution wall-clock timing breakdown across decompression, binning, metric computation, and I/O");
 
     // Batch/tiled mode options (used only when the positional input is a directory --
     // see RunBatchTiledMode above). Ignored in single-file mode.
@@ -961,6 +963,13 @@ int main(int argc, char* argv[]) {
     sentinel.noheight = fusion::metrics::ParseSentinelOption(parser.GetOption("noheight").value_or("0"));
     fusion::metrics::RasterNoDataResolution rasterNoData = fusion::metrics::ResolveRasterNoData(
         sentinel, parser.WasExplicit("nodata"), parser.WasExplicit("noheight"));
+
+    bool enableProfile = parser.HasFlag("profile");
+    auto tProfileStart = std::chrono::steady_clock::now();
+    double secReadDecomp = 0.0;
+    double secBinning = 0.0;
+    double secMetrics = 0.0;
+    double secIO = 0.0;
     if (rasterNoData.conflict) {
         std::cerr << "Warning: /nodata and /noheight were both set to different, non-NA values -- "
                      "GDAL supports only one registered NoData value per raster. Using /nodata's value ("
@@ -1077,10 +1086,15 @@ int main(int argc, char* argv[]) {
         std::vector<float> dsmBlock;
         for (int rowStart = 0; rowStart < dsmInfo.height; rowStart += blockSizeRows) {
             int currentBlockRows = std::min(blockSizeRows, dsmInfo.height - rowStart);
+            auto tRead0 = std::chrono::steady_clock::now();
             if (!dsmRaster.ReadBandWindow(1, 0, rowStart, dsmInfo.width, currentBlockRows, dsmBlock)) {
                 std::cerr << "Error: Failed to read DSM raster window at row " << rowStart << "\n";
                 return 1;
             }
+            auto tRead1 = std::chrono::steady_clock::now();
+            secReadDecomp += std::chrono::duration<double>(tRead1 - tRead0).count();
+
+            auto tBin0 = std::chrono::steady_clock::now();
 
             for (int br = 0; br < currentBlockRows; ++br) {
                 int rGlobal = rowStart + br;
@@ -1145,89 +1159,175 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
+            auto tBin1 = std::chrono::steady_clock::now();
+            secBinning += std::chrono::duration<double>(tBin1 - tBin0).count();
         }
         dsmRaster.Close();
     } else {
-        fusion::lidar::PointRecord pt;
-        while (lasReader.ReadNextPoint(pt)) {
-            if (!pointFilter.Keep(pt)) {
-                continue;
-            }
-
-            if (firstOnly && pt.returnNumber != 1) {
-                continue;
-            }
-
-            int col = static_cast<int>((pt.x - gridMinX) / cellSize);
-            int row = static_cast<int>((gridMaxY - pt.y) / cellSize);
-            if (col == cols && pt.x == gridMaxX) col = cols - 1;
-            if (row == rows && pt.y == gridMinY) row = rows - 1;
-
-            if (col >= 0 && col < cols && row >= 0 && row < rows) {
-                double elevation = pt.z;
-                if (hasGround) {
-                    auto gz = groundRaster.GetElevation(pt.x, pt.y);
-                    if (!gz) {
-                        continue;
-                    }
-                    elevation -= *gz;
+        if (enableProfile) {
+            constexpr size_t kBatchSize = 8192;
+            std::vector<fusion::lidar::PointRecord> batch;
+            batch.reserve(kBatchSize);
+            while (true) {
+                auto tRead0 = std::chrono::steady_clock::now();
+                batch.clear();
+                fusion::lidar::PointRecord pt;
+                while (batch.size() < kBatchSize && lasReader.ReadNextPoint(pt)) {
+                    batch.push_back(pt);
                 }
+                auto tRead1 = std::chrono::steady_clock::now();
+                secReadDecomp += std::chrono::duration<double>(tRead1 - tRead0).count();
 
-                auto& cell = grid[row * cols + col];
-                cell.totalReturns++;
-                if (pt.returnNumber == 1) cell.firstReturns++;
-                {
-                    int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
-                    cell.returnNumberCounts[rnIdx]++;
-                }
+                if (batch.empty()) break;
 
-                if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
-                    continue;
-                }
+                auto tBin0 = std::chrono::steady_clock::now();
+                for (const auto& p : batch) {
+                    if (!pointFilter.Keep(p)) continue;
+                    if (firstOnly && p.returnNumber != 1) continue;
 
-                if (enableExp) {
-                    cell.cellPoints.push_back({pt.x, pt.y, elevation});
-                }
+                    int col = static_cast<int>((p.x - gridMinX) / cellSize);
+                    int row = static_cast<int>((gridMaxY - p.y) / cellSize);
+                    if (col == cols && p.x == gridMaxX) col = cols - 1;
+                    if (row == rows && p.y == gridMinY) row = rows - 1;
 
-                if (elevation >= 0.0) {
-                    cell.returnsAboveGround++;
-                }
+                    if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                        double elevation = p.z;
+                        if (hasGround) {
+                            auto gz = groundRaster.GetElevation(p.x, p.y);
+                            if (!gz) continue;
+                            elevation -= *gz;
+                        }
 
-                if (elevation >= heightCut) {
-                    cell.returnsAboveHeightCut++;
-                }
+                        auto& cell = grid[row * cols + col];
+                        cell.totalReturns++;
+                        if (p.returnNumber == 1) cell.firstReturns++;
+                        {
+                            int rnIdx = (p.returnNumber >= 1 && p.returnNumber <= 8) ? (p.returnNumber - 1) : 8;
+                            cell.returnNumberCounts[rnIdx]++;
+                        }
 
-                if (!strata.empty()) {
-                    size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
-                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                    extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
-                    if (enableRgbStrata) {
-                        for (const auto& spec : spectralSelection.channels) {
-                            auto& perPrefix = extras.strataSpectralValues[spec.prefix];
-                            if (perPrefix.size() != numStrataBuckets) {
-                                perPrefix.resize(numStrataBuckets);
+                        if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) continue;
+                        if (enableExp) cell.cellPoints.push_back({p.x, p.y, elevation});
+                        if (elevation >= 0.0) cell.returnsAboveGround++;
+                        if (elevation >= heightCut) cell.returnsAboveHeightCut++;
+
+                        if (!strata.empty()) {
+                            size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
+                            auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                            extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
+                            if (enableRgbStrata) {
+                                for (const auto& spec : spectralSelection.channels) {
+                                    auto& perPrefix = extras.strataSpectralValues[spec.prefix];
+                                    if (perPrefix.size() != numStrataBuckets) perPrefix.resize(numStrataBuckets);
+                                    perPrefix[sIdx].push_back(static_cast<float>(p.*(spec.field)));
+                                }
                             }
-                            perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
+                        }
+
+                        if (!noIntensity && !intStrata.empty()) {
+                            size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
+                            auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                            extras.strataIntensities[sIdx].push_back(static_cast<float>(p.intensity));
+                        }
+
+                        if (elevation >= minHt) {
+                            cell.returnsAboveMinHt++;
+                            cell.elevations.push_back(static_cast<float>(elevation));
+                            if (!noIntensity) cell.intensities.push_back(static_cast<float>(p.intensity));
+                            if (!spectralSelection.channels.empty()) {
+                                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                                for (const auto& spec : spectralSelection.channels) {
+                                    extras.spectralValues[spec.prefix].push_back(static_cast<float>(p.*(spec.field)));
+                                }
+                            }
                         }
                     }
                 }
-
-                if (!noIntensity && !intStrata.empty()) {
-                    size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
-                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                    extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
+                auto tBin1 = std::chrono::steady_clock::now();
+                secBinning += std::chrono::duration<double>(tBin1 - tBin0).count();
+            }
+        } else {
+            fusion::lidar::PointRecord pt;
+            while (lasReader.ReadNextPoint(pt)) {
+                if (!pointFilter.Keep(pt)) {
+                    continue;
                 }
 
-                if (elevation >= minHt) {
-                    cell.returnsAboveMinHt++;
-                    cell.elevations.push_back(static_cast<float>(elevation));
-                    if (!noIntensity) {
-                        cell.intensities.push_back(static_cast<float>(pt.intensity));
+                if (firstOnly && pt.returnNumber != 1) {
+                    continue;
+                }
+
+                int col = static_cast<int>((pt.x - gridMinX) / cellSize);
+                int row = static_cast<int>((gridMaxY - pt.y) / cellSize);
+                if (col == cols && pt.x == gridMaxX) col = cols - 1;
+                if (row == rows && pt.y == gridMinY) row = rows - 1;
+
+                if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                    double elevation = pt.z;
+                    if (hasGround) {
+                        auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                        if (!gz) {
+                            continue;
+                        }
+                        elevation -= *gz;
                     }
-                    if (!spectralSelection.channels.empty()) {
+
+                    auto& cell = grid[row * cols + col];
+                    cell.totalReturns++;
+                    if (pt.returnNumber == 1) cell.firstReturns++;
+                    {
+                        int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
+                        cell.returnNumberCounts[rnIdx]++;
+                    }
+
+                    if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
+                        continue;
+                    }
+
+                    if (enableExp) {
+                        cell.cellPoints.push_back({pt.x, pt.y, elevation});
+                    }
+
+                    if (elevation >= 0.0) {
+                        cell.returnsAboveGround++;
+                    }
+
+                    if (elevation >= heightCut) {
+                        cell.returnsAboveHeightCut++;
+                    }
+
+                    if (!strata.empty()) {
+                        size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
                         auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                        for (const auto& spec : spectralSelection.channels) {
-                            extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                        extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
+                        if (enableRgbStrata) {
+                            for (const auto& spec : spectralSelection.channels) {
+                                auto& perPrefix = extras.strataSpectralValues[spec.prefix];
+                                if (perPrefix.size() != numStrataBuckets) {
+                                    perPrefix.resize(numStrataBuckets);
+                                }
+                                perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
+                            }
+                        }
+                    }
+
+                    if (!noIntensity && !intStrata.empty()) {
+                        size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
+                        auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                        extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
+                    }
+
+                    if (elevation >= minHt) {
+                        cell.returnsAboveMinHt++;
+                        cell.elevations.push_back(static_cast<float>(elevation));
+                        if (!noIntensity) {
+                            cell.intensities.push_back(static_cast<float>(pt.intensity));
+                        }
+                        if (!spectralSelection.channels.empty()) {
+                            auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                            for (const auto& spec : spectralSelection.channels) {
+                                extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
+                            }
                         }
                     }
                 }
@@ -1235,6 +1335,8 @@ int main(int argc, char* argv[]) {
         }
         lasReader.Close();
     }
+
+    auto tMetrics0 = std::chrono::steady_clock::now();
 
     // Prepare metric output arrays. Every band defaults to the resolved
     // /nodata value -- a cell that never enters any of the branches below
@@ -1475,6 +1577,11 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+
+    auto tMetrics1 = std::chrono::steady_clock::now();
+    secMetrics = std::chrono::duration<double>(tMetrics1 - tMetrics0).count();
+
+    auto tIO0 = std::chrono::steady_clock::now();
 
     double geotransform[6] = { gridMinX, cellSize, 0.0, gridMaxY, 0.0, -cellSize };
     std::string stem = isRasterInput
@@ -1753,6 +1860,38 @@ int main(int argc, char* argv[]) {
             }
             tableWriter.Close();
         }
+    }
+    auto tIO1 = std::chrono::steady_clock::now();
+    secIO = std::chrono::duration<double>(tIO1 - tIO0).count();
+
+    if (enableProfile) {
+        auto tProfileEnd = std::chrono::steady_clock::now();
+        double secTotal = std::chrono::duration<double>(tProfileEnd - tProfileStart).count();
+        double secOther = secTotal - (secReadDecomp + secBinning + secMetrics + secIO);
+        if (secOther < 0.0) secOther = 0.0;
+
+        std::cout << "\n"
+                  << "================================================================================\n"
+                  << "GridMetrics High-Resolution Execution Profile\n"
+                  << "================================================================================\n"
+                  << std::left << std::setw(36) << "Section"
+                  << std::right << std::setw(12) << "Time (s)"
+                  << std::setw(12) << "Percent\n"
+                  << "--------------------------------------------------------------------------------\n";
+        auto printRow = [&](const char* name, double sec) {
+            double pct = (secTotal > 0.0) ? (sec / secTotal * 100.0) : 0.0;
+            std::cout << std::left << std::setw(36) << name
+                      << std::right << std::setw(10) << std::fixed << std::setprecision(3) << sec << " s"
+                      << std::setw(10) << std::fixed << std::setprecision(1) << pct << " %\n";
+        };
+        printRow("Read & Decompression", secReadDecomp);
+        printRow("Spatial Binning & Ground Lookup", secBinning);
+        printRow("Metric Computation & Statistics", secMetrics);
+        printRow("GeoTIFF Raster & Table I/O", secIO);
+        printRow("Setup & Other", secOther);
+        std::cout << "--------------------------------------------------------------------------------\n";
+        printRow("Total Elapsed Time", secTotal);
+        std::cout << "================================================================================\n\n";
     }
 
     std::cout << "[GridMetrics] Grid metrics processing completed successfully.\n";

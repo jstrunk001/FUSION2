@@ -5,6 +5,7 @@ Computes comprehensive canopy elevation and intensity metrics grid from point cl
 Options:
   /merge	Batch/tiled mode: merge the VRT into a single global GeoTIFF file
   /vrt	Batch/tiled mode: generate a GDAL Virtual Raster (.vrt) across tile rasters (on by default)
+  /profile	Report high-resolution wall-clock timing breakdown across decompression, binning, metric computation, and I/O
   /noraster	Skip writing the GeoTIFF raster(s) -- only valid together with /output-table, since a run must produce at least one output
   /exp	Compute additional experimental metrics from RSForTools
   /strataraster	With /strata or /intstrata, also append per-stratum bands (density_stratum_NN, stratum_NN_count/proportion/mean/stddev/min/max, intstratum_NN_...) to the multiband output, in single-file and batch mode
