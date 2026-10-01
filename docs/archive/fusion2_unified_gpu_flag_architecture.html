@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Design Specification: Unified --gpu Switch for FUSION2</title>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --surface-color: #ffffff;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --border-color: #e2e8f0;
+            --primary: #0284c7;
+            --primary-dark: #0369a1;
+            --accent-green: #10b981;
+            --accent-purple: #8b5cf6;
+            --code-bg: #1e293b;
+            --code-text: #f1f5f9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.65;
+            margin: 0;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+            padding: 48px;
+        }
+
+        header {
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 24px;
+            margin-bottom: 36px;
+        }
+
+        h1 {
+            font-size: 2.25rem;
+            color: #0f172a;
+            margin: 0 0 12px 0;
+            letter-spacing: -0.025em;
+        }
+
+        .metadata {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 18px;
+        }
+
+        .badge {
+            background-color: #e0f2fe;
+            color: #0369a1;
+            padding: 2px 10px;
+            border-radius: 9999px;
+            font-weight: 600;
+            font-size: 0.825rem;
+            text-transform: uppercase;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            color: #1e293b;
+            margin-top: 36px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h3 {
+            font-size: 1.2rem;
+            color: #334155;
+            margin-top: 24px;
+            margin-bottom: 10px;
+        }
+
+        p, li {
+            color: var(--text-secondary);
+            font-size: 1.025rem;
+        }
+
+        ul, ol {
+            padding-left: 24px;
+            margin-bottom: 18px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        .callout {
+            background-color: #f0fdf4;
+            border-left: 4px solid var(--accent-green);
+            padding: 16px 20px;
+            border-radius: 0 8px 8px 0;
+            margin: 24px 0;
+        }
+
+        .callout-title {
+            font-weight: 700;
+            color: #166534;
+            margin-bottom: 4px;
+        }
+
+        .callout p {
+            margin: 0;
+            color: #14532d;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 24px 0;
+            font-size: 0.95rem;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border: 1px solid var(--border-color);
+        }
+
+        th {
+            background-color: #f1f5f9;
+            color: #1e293b;
+            font-weight: 600;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+
+        pre, code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        pre {
+            background-color: var(--code-bg);
+            color: var(--code-text);
+            padding: 18px 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin: 20px 0;
+        }
+
+        code:not(pre code) {
+            background-color: #e2e8f0;
+            color: #0f172a;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.875em;
+        }
+
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin: 24px 0;
+        }
+
+        .card {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            background: #ffffff;
+        }
+
+        .card-title {
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: var(--primary-dark);
+            margin-bottom: 8px;
+        }
+
+        .card p {
+            font-size: 0.95rem;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div style="margin-bottom: 8px;">
+                <span class="badge">Design Specification</span>
+            </div>
+            <h1>Baking Harmonized GPU Acceleration into FUSION2 via <code>--gpu</code></h1>
+            <div class="metadata">
+                <span><strong>Target Project:</strong> FUSION2 Architecture</span>
+                <span><strong>CLI Switch:</strong> <code>--gpu</code> or <code>/gpu</code></span>
+                <span><strong>Status:</strong> Recommended Architectural Specification</span>
+                <span><strong>Date:</strong> October 2026</span>
+            </div>
+        </header>
+
+        <h2>1. Executive Summary</h2>
+        <p>
+            <strong>Yes, baking GPU acceleration directly into FUSION2's existing command-line tools under a single <code>--gpu</code> (or <code>/gpu</code>) switch is entirely feasible and is the cleanest architectural design.</strong>
+        </p>
+        <p>
+            Instead of creating disjoint tools (e.g. <code>rastermetrics.exe</code> vs <code>gridmetrics.exe</code>), the existing tools can seamlessly detect input formats and hardware capabilities. When <code>--gpu</code> is passed:
+        </p>
+        <ul>
+            <li>If the input is a <strong>Point Cloud</strong> (<code>.las</code>, <code>.laz</code>, <code>.copc.laz</code>), it activates the <strong>GPU Sparse Raster Binning &amp; Histogram Engine</strong>.</li>
+            <li>If the input is a <strong>High-Resolution Raster</strong> (<code>.tif</code>, <code>.img</code>, <code>.vrt</code>), it activates the <strong>Fused Bilinear DTM &amp; Zonal CDF Engine</strong> (derived from the Julia pipeline).</li>
+            <li>If no compatible NVIDIA GPU is found, it automatically logs a notice and falls back to the multi-threaded CPU engine without crashing.</li>
+        </ul>
+
+        <div class="callout">
+            <div class="callout-title">Zero Breaking Changes for Existing Users</div>
+            <p>
+                Existing scripts and automation workflows using FUSION2 syntax continue running identically on CPU by default. Adding <code>/gpu</code> or <code>--gpu</code> simply activates the hardware accelerator, producing bit-for-bit consistent outputs in a fraction of the time.
+            </p>
+        </div>
+
+        <h2>2. CLI Syntax &amp; Harmonization Across Tools</h2>
+        <p>
+            Because FUSION2's <code>ArgumentParser.h</code> natively treats single-slash (<code>/</code>), single-dash (<code>-</code>), and double-dash (<code>--</code>) transparently and case-insensitively, both <code>--gpu</code> and <code>/gpu</code> work interchangeably:
+        </p>
+
+        <h3>Example Commands:</h3>
+        <pre><code># 1. Point Cloud GridMetrics with GPU Acceleration
+gridmetrics --gpu /ground:dtm.tif lidar_tile.laz 66.0 metrics.tif
+
+# 2. Raster-to-Raster Canopy Metrics (NAIP3D / Photogrammetry DSM directly in gridmetrics!)
+gridmetrics --gpu /ground:dtm.tif dsm_10011.tif 66.0 metrics.tif
+
+# 3. Canopy Height Model (CHM) generation via GPU atomicMax
+canopymodel --gpu /ground:dtm.tif points.laz chm.tif
+
+# 4. Individual Tree Top Detection via GPU 2D stencil
+canopymaxima --gpu chm.tif /output:tree_tops.csv
+
+# 5. Topographic Terrain Derivatives (Horn's Slope & Aspect via GPU stencil)
+topometrics --gpu dem.tif /output:topo.tif</code></pre>
+
+        <h2>3. Multi-Modal Input Polymorphism in <code>gridmetrics</code></h2>
+        <p>
+            One of the greatest benefits of this harmonization is that <code>gridmetrics.exe</code> becomes a <strong>single, unified canopy metrics engine</strong> for both point clouds and rasters:
+        </p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Input Format</th>
+                    <th>Detection</th>
+                    <th>CPU Execution Path</th>
+                    <th>GPU Execution Path (<code>--gpu</code>)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Point Clouds (<code>.las</code>, <code>.laz</code>)</strong></td>
+                    <td>Header / Extension</td>
+                    <td><code>std::vector</code> heap cells + <code>std::sort</code></td>
+                    <td>CUB Radix Sort &rarr; Shared-Memory CDF Histogram</td>
+                </tr>
+                <tr>
+                    <td><strong>Fine Rasters (<code>.tif</code>, <code>.img</code>)</strong></td>
+                    <td>GDAL Probe</td>
+                    <td>Bilinear resample + CPU zonal aggregation</td>
+                    <td>Zero-copy register DTM interpolation + CUDA CDF kernel</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>4. Internal Engine Architecture</h2>
+
+        <h3>A. Dispatch Logic in <code>gridmetrics.cpp</code></h3>
+        <pre><code>int main(int argc, char* argv[]) {
+    fusion::cli::ArgumentParser parser("gridmetrics", "Gridded canopy metrics from point clouds or rasters");
+    // Standard options...
+    parser.AddFlag("gpu", "Enable NVIDIA CUDA GPU acceleration (falls back to CPU if unavailable)");
+
+    if (!parser.Parse(argc, argv)) return 0;
+
+    bool wantGpu = parser.HasFlag("gpu");
+    bool gpuReady = wantGpu &amp;&amp; fusion::cuda::IsCudaAvailable();
+
+    if (wantGpu &amp;&amp; !gpuReady) {
+        std::cout &lt;&lt; "[gridmetrics] Notice: /gpu requested but no compatible NVIDIA GPU detected. Using CPU engine.\n";
+    }
+
+    if (IsRasterFormat(inputPath)) {
+        if (gpuReady) {
+            return RunRasterMetricsCuda(inputPath, groundPath, res, outTif, parser);
+        } else {
+            return RunRasterMetricsCpu(inputPath, groundPath, res, outTif, parser);
+        }
+    } else {
+        if (gpuReady) {
+            return RunPointCloudMetricsCuda(inputPath, groundPath, res, outTif, parser);
+        } else {
+            return RunPointCloudMetricsCpu(inputPath, groundPath, res, outTif, parser);
+        }
+    }
+}</code></pre>
+
+        <h3>B. Safe Build &amp; Distribution Architecture</h3>
+        <ul>
+            <li>
+                <strong>Unified Core Library</strong>: Add a clean CUDA translation unit (<code>src/libfusion_core/cuda/</code>) containing the CUDA kernels.
+            </li>
+            <li>
+                <strong>Static CUDA Runtime (<code>-cudart=static</code>)</strong>: Statically linking the CUDA runtime ensures the final binaries have <strong>zero external DLL dependencies</strong>. The user does not need to install the CUDA Toolkit.
+            </li>
+            <li>
+                <strong>Multi-Architecture Fatbins</strong>: Compiled with <code>CMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;compute_75"</code>, ensuring a single binary runs natively across Turing, Ampere, Ada Lovelace, Hopper, and future GPUs via PTX JIT.
+            </li>
+        </ul>
+
+        <h2>5. Benefits for the FUSION2 Suite</h2>
+        <div class="card-grid">
+            <div class="card">
+                <div class="card-title">1. Clean User Interface</div>
+                <p>No extra executables or command names to memorize. One flag (<code>--gpu</code> or <code>/gpu</code>) accelerates all supported operations across the entire 15-tool suite.</p>
+            </div>
+            <div class="card">
+                <div class="card-title">2. Batch Pipeline Transparency</div>
+                <p>In <code>pipeline.exe</code> and batch/tiled mode, passing <code>--gpu</code> propagates to all stage child processes (<code>groundfilter</code> &rarr; <code>canopymodel</code> &rarr; <code>canopymaxima</code>), accelerating the entire workflow.</p>
+            </div>
+            <div class="card">
+                <div class="card-title">3. Resilient Portability</div>
+                <p>Scripts written with <code>--gpu</code> can safely run on any machine—if an NVIDIA GPU is present, it runs at 100&times; speed; if executed on a CPU-only server, it finishes correctly on the CPU.</p>
+            </div>
+        </div>
+
+        <h2>6. Conclusion &amp; Next Steps</h2>
+        <p>
+            Baking this harmonization directly into FUSION2 under <code>--gpu</code> combines the raw speed of the Julia GPU raster research with the comprehensive feature set and proven reliability of FUSION2. The transition can be implemented incrementally, starting with <code>gridmetrics</code> and <code>canopymodel</code>.
+        </p>
+    </div>
+</body>
+</html>

@@ -12,8 +12,8 @@ out/
 
 # build.ps1 output -- zipped tool bundles are published to GitHub Releases,
 # not committed (see README.md "Building" section)
-dist/
-archive/
+/dist/
+/archive/
 
 # Dependencies -- deps/* (not deps/) so individual children can be
 # un-ignored below; everything under deps/ is a build script's output
