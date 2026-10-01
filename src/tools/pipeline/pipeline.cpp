@@ -362,14 +362,23 @@ int main(int argc, char* argv[]) {
     // 3. Build the tile grid and hand tile dispatch to BatchPipeline, exactly
     //    as gridmetrics's own batch mode does -- just with generateVRT off,
     //    since finalization here is per-stage, not one mosaic.
+    //  - without /extent, the extent of the input files is used, snapped to
+    //    /cellsize (or to whole units when no /cellsize is forwarded)
     fusion::batch::TileGridSpec gridSpec;
+    bool hasExtent = false;
     if (auto ext = parser.GetOption("extent")) {
         std::stringstream ss(*ext);
         char ch;
         ss >> gridSpec.minX >> ch >> gridSpec.minY >> ch >> gridSpec.maxX >> ch >> gridSpec.maxY;
-    } else {
-        gridSpec.minX = 0; gridSpec.minY = 0; gridSpec.maxX = 5000; gridSpec.maxY = 5000;
+        hasExtent = true;
     }
+    double extentSnap = std::stod(parser.GetOption("cellsize").value_or("1.0"));
+    std::string extentMessage;
+    if (!fusion::batch::ResolveProjectExtent(inputPath, hasExtent, extentSnap, gridSpec, extentMessage)) {
+        std::cerr << "Error: " << extentMessage << "\n";
+        return 1;
+    }
+    if (!extentMessage.empty()) std::cout << "[Pipeline] " << extentMessage << "\n";
     if (auto ts = parser.GetOption("tilesize")) {
         std::stringstream ss(*ts);
         char ch;

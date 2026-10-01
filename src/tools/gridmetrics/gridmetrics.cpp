@@ -164,13 +164,15 @@ using fusion::cli::ParseFloatList;
 // (/output-table), not additional raster bands.
 static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::filesystem::path& inputDir,
                               const std::filesystem::path& outDir, const fusion::lidar::PointFilter& pointFilter) {
+    // Without /extent, the project extent comes from the LAS/LAZ headers
+    // (see ResolveProjectExtent), snapped outward to the cell size.
     fusion::batch::TileGridSpec gridSpec;
+    bool hasExtent = false;
     if (auto ext = parser.GetOption("extent")) {
         std::stringstream ss(*ext);
         char ch;
         ss >> gridSpec.minX >> ch >> gridSpec.minY >> ch >> gridSpec.maxX >> ch >> gridSpec.maxY;
-    } else {
-        gridSpec.minX = 0; gridSpec.minY = 0; gridSpec.maxX = 5000; gridSpec.maxY = 5000;
+        hasExtent = true;
     }
 
     if (auto ts = parser.GetOption("tilesize")) {
@@ -184,6 +186,13 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     }
 
     gridSpec.resolution = std::stod(parser.GetOption("cellsize").value_or("10.0"));
+
+    std::string extentMessage;
+    if (!fusion::batch::ResolveProjectExtent(inputDir, hasExtent, gridSpec.resolution, gridSpec, extentMessage)) {
+        std::cerr << "Error: " << extentMessage << "\n";
+        return 1;
+    }
+    if (!extentMessage.empty()) std::cout << "[GridMetrics] " << extentMessage << "\n";
 
     fusion::batch::PipelineJobOptions jobOpts;
     jobOpts.inputPointCloudDir = inputDir;
@@ -781,7 +790,7 @@ int main(int argc, char* argv[]) {
 
     // Batch/tiled mode options (used only when the positional input is a directory --
     // see RunBatchTiledMode above). Ignored in single-file mode.
-    parser.AddOption("extent", "Batch/tiled mode: project extent LLX,LLY,URX,URY");
+    parser.AddOption("extent", "Batch/tiled mode: project extent LLX,LLY,URX,URY (default: the extent of the input files, snapped to the cell size)");
     parser.AddOption("tilesize", "Batch/tiled mode: tile width,height in project units", "1000,1000");
     parser.AddOption("buffer", "Batch/tiled mode: tile buffer distance", "50");
     parser.AddOption("threads", "Batch/tiled mode: number of parallel worker threads", "4");

@@ -55,6 +55,17 @@ public:
 bool TileCellForPoint(double x, double y, const TileInfo& tile, const TileGridSpec& spec,
                       int cols, int rows, int& col, int& row);
 
+// Sets the project extent for a batch run over the LAS/LAZ files in
+// inputDir, reading only their headers. With hasExtent false, spec's
+// extent is set to the combined extent of the files, snapped outward to
+// multiples of snapSize, and messageOut describes the extent chosen. With
+// hasExtent true, spec's extent is kept as given. Returns false, with
+// messageOut holding the error, when the directory holds no readable
+// LAS/LAZ file or when none of the files overlap the given extent -- so a
+// run over the wrong area stops instead of writing a mosaic of empty tiles.
+bool ResolveProjectExtent(const std::filesystem::path& inputDir, bool hasExtent, double snapSize,
+                          TileGridSpec& spec, std::string& messageOut);
+
 struct PipelineJobOptions {
     std::filesystem::path inputPointCloudDir;
     std::filesystem::path outputDir;

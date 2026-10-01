@@ -29,7 +29,7 @@ Tiles and buffers every LAS/LAZ file in the input directory, computes the same g
 
 A COPC (Cloud Optimized Point Cloud) file in the input directory is detected automatically (no separate flag) -- its own chunk index is used to seek directly to the chunks overlapping each tile's buffered extent, instead of reading the whole file sequentially per tile. A plain (non-indexed) LAS/LAZ file is read sequentially. This mainly pays off when the input directory holds one very large regional COPC file rather than pre-tiled LAS/LAZ -- pre-tiled input is already read efficiently without it.
 
-- `/extent:<LLX,LLY,URX,URY>`: Batch mode only. Project extent (default: a `0,0,5000,5000` grid if omitted).
+- `/extent:<LLX,LLY,URX,URY>`: Batch mode only. Project extent (default: the combined extent of the input files, snapped outward to `/cellsize`). The run stops with an error if no input file overlaps the extent.
 - `/tilesize:<w,h>`: Batch mode only. Tile width,height in project units (default: `1000,1000`).
 - `/buffer:<val>`: Batch mode only. Tile buffer distance (default: `50`).
 - `/threads:<N>`: Batch mode only. Number of parallel worker threads (default: `4`).
@@ -281,7 +281,7 @@ pipeline /pipeline:<stage1,stage2,...> /input:<dir> /output:<dir> [other /option
 - `/tool:<name>`: Shorthand for a single-stage `/pipeline:<name>`.
 - `/input:<dir>`: Input directory containing LAS/LAZ files. **Required.**
 - `/output:<dir>`: Output directory for each stage's finalized (mosaicked/concatenated) result. **Required.**
-- `/extent:<LLX,LLY,URX,URY>`: Project extent (default: a `0,0,5000,5000` grid if omitted).
+- `/extent:<LLX,LLY,URX,URY>`: Project extent (default: the combined extent of the input files, snapped outward to `/cellsize`, or to whole units without `/cellsize`). The run stops with an error if no input file overlaps the extent.
 - `/tilesize:<w,h>`: Tile width,height in project units (default: `1000,1000`).
 - `/buffer:<val>`: Tile buffer distance (default: `50`).
 - `/threads:<N>`: Number of parallel worker threads -- each one runs one tile's stage chain at a time, so this is also how many child processes run concurrently (default: `4`).
