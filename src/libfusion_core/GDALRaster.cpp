@@ -473,12 +473,26 @@ bool GDALRaster::BuildVRT(const std::filesystem::path& outputVRTPath,
                                            options,
                                            &error);
     GDALBuildVRTOptionsFree(options);
+    if (!vrtDataset) return false;
 
-    if (vrtDataset) {
-        GDALClose(vrtDataset);
-        return true;
+    // GDALBuildVRT does not carry band descriptions (names) into the VRT,
+    // so readers would see generic band names -- copy them from the first
+    // input raster, which every tile shares. They are saved when the VRT
+    // is closed below.
+    GDALDatasetH firstInput = GDALOpen(pathStrings.front().c_str(), GA_ReadOnly);
+    if (firstInput) {
+        int numBands = (std::min)(GDALGetRasterCount(firstInput), GDALGetRasterCount(vrtDataset));
+        for (int b = 1; b <= numBands; ++b) {
+            const char* name = GDALGetDescription(GDALGetRasterBand(firstInput, b));
+            if (name && name[0] != '\0') {
+                GDALSetDescription(GDALGetRasterBand(vrtDataset, b), name);
+            }
+        }
+        GDALClose(firstInput);
     }
-    return false;
+
+    GDALClose(vrtDataset);
+    return true;
 }
 
 bool GDALRaster::MergeVRTToGeoTIFF(const std::filesystem::path& vrtPath,

@@ -257,9 +257,10 @@ int RunLASWriterTests() {
         }
         std::filesystem::remove(path);
 
-        // Raster, VRT, and merged GeoTIFF CRS propagation:
+        // Raster, VRT, and merged GeoTIFF CRS and band-name propagation:
         // GeoTIFF created with projectionWKT must preserve the CRS, and
-        // GDALRaster::BuildVRT and MergeVRTToGeoTIFF must carry it through.
+        // GDALRaster::BuildVRT and MergeVRTToGeoTIFF must carry it, and the
+        // tile's band names, through (GDAL's VRT builder drops band names).
         auto rasterPath = ScratchPath("crs_tile.tif");
         auto vrtPath = ScratchPath("crs_mosaic.vrt");
         auto mergedPath = ScratchPath("crs_merged.tif");
@@ -270,6 +271,7 @@ int RunLASWriterTests() {
         fusion::raster::GDALRaster outRaster;
         CHECK(outRaster.Create(rasterPath, 10, 10, 1, "Float32", "GTiff", header.projectionWKT, geotransform, -9999.0), failures);
         outRaster.WriteBandData(1, dummyData);
+        outRaster.SetBandDescription(1, "elev_p95");
         outRaster.Close();
 
         fusion::raster::GDALRaster inRaster;
@@ -281,12 +283,14 @@ int RunLASWriterTests() {
         fusion::raster::GDALRaster inVrt;
         CHECK(inVrt.Open(vrtPath), failures);
         CHECK(!inVrt.GetInfo().projectionWKT.empty(), failures);
+        CHECK(inVrt.GetBandDescription(1) == "elev_p95", failures);
         inVrt.Close();
 
         CHECK(fusion::raster::GDALRaster::MergeVRTToGeoTIFF(vrtPath, mergedPath), failures);
         fusion::raster::GDALRaster inMerged;
         CHECK(inMerged.Open(mergedPath), failures);
         CHECK(!inMerged.GetInfo().projectionWKT.empty(), failures);
+        CHECK(inMerged.GetBandDescription(1) == "elev_p95", failures);
         inMerged.Close();
 
         std::filesystem::remove(rasterPath);
