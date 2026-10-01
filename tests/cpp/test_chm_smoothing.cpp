@@ -1,4 +1,5 @@
 #include "fusion/raster/ChmSmoothing.h"
+#include "fusion/cuda/CanopyModelCuda.h"
 #include "test_assert.h"
 
 #include <cmath>
@@ -126,6 +127,30 @@ int RunChmSmoothingTests() {
         std::vector<float> grid(cols * rows, kNodata);
         auto smoothed = fusion::raster::SmoothNodataAwareBox(grid, cols, rows, 3, kNodata);
         for (float v : smoothed) CHECK(v == kNodata, failures);
+    }
+
+    // Verify GPU/fallback CHM rasterization interface
+    {
+        fusion::cuda::CudaChmRasterizationOptions opts;
+        opts.cols = 4;
+        opts.rows = 4;
+        opts.cellSize = 1.0f;
+        opts.nodataValue = kNodata;
+        std::vector<float> xRel = {0.5f, 1.5f, 0.5f};
+        std::vector<float> yRel = {0.5f, 0.5f, 0.5f};
+        std::vector<float> z = {10.0f, 15.0f, 20.0f};
+        std::vector<float> dtm;
+        std::vector<float> outGrid;
+
+        bool ok = fusion::cuda::RasterizeChmPoints(xRel, yRel, z, dtm, opts, outGrid);
+        if (ok) {
+            CHECK(outGrid[0 * 4 + 0] == 20.0f, failures);
+            CHECK(outGrid[0 * 4 + 1] == 15.0f, failures);
+            CHECK(outGrid[1 * 4 + 0] == kNodata, failures);
+        } else {
+            CHECK(outGrid.size() == 16, failures);
+            CHECK(outGrid[0] == kNodata, failures);
+        }
     }
 
     std::cout << (failures == 0 ? "  all passed\n" : ("  " + std::to_string(failures) + " failure(s)\n"));

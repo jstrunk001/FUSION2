@@ -4,6 +4,8 @@ Generates Canopy Height Model (CHM) GeoTIFF from point cloud
 
 Options:
   /noraster	Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output
+  /nogpu	Disable CUDA GPU acceleration (force CPU rasterization)
+  /gpu	Enable CUDA GPU acceleration for CHM rasterization
   /slope	Normalize heights perpendicular to local terrain slope plane
   /output-table:<value>	Also write a one-band multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely (default: )
   /return:<value>	Return numbers to keep: /return:1 or /return:1,2 for an explicit list (ranges like /return:1-2 also work), or the mnemonics /return:first, /return:last, /return:only, /return:intermediate. Omit to keep every return. (default: )

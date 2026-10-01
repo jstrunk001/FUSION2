@@ -20,6 +20,7 @@ itself (see -LocalRoot's default below and its comment for why):
 
 param(
     [switch]$Publish
+  , [switch]$NoVcpkg
   , [string]$VcpkgRoot = $env:VCPKG_ROOT
   # Build output was previously rooted directly under the repo, which lives
   # under Box Sync -- real timed comparisons (see tests/R/speed_benchmark.qmd)
@@ -37,6 +38,10 @@ param(
   , [switch]$FullGDAL
   , [string]$GDALDir = ""
   )
+
+if ($NoVcpkg) {
+    $VcpkgRoot = ""
+}
 
 $ErrorActionPreference = "Stop"
 $repo_root = $PSScriptRoot

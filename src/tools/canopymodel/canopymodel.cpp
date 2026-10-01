@@ -3,6 +3,7 @@
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/raster/ChmSmoothing.h"
+#include "fusion/cuda/CanopyModelCuda.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
@@ -23,6 +24,8 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output", "Output GeoTIFF CHM file path");
     parser.AddFlag("slope", "Normalize heights perpendicular to local terrain slope plane");
     parser.AddOption("smooth", "Spatial smoothing window size (e.g. 3 for 3x3 filter)", "");
+    parser.AddFlag("gpu", "Enable CUDA GPU acceleration for CHM rasterization");
+    parser.AddFlag("nogpu", "Disable CUDA GPU acceleration (force CPU rasterization)");
     fusion::lidar::PointFilter::RegisterOptions(parser);
     parser.AddOption("output-table", "Also write a one-band multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
@@ -97,49 +100,106 @@ int main(int argc, char* argv[]) {
     if (groundPixelSize <= 0) groundPixelSize = 1.0;
 
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
-    fusion::lidar::PointRecord pt;
-    while (reader.ReadNextPoint(pt)) {
-        if (!pointFilter.Keep(pt)) continue;
-        int col = static_cast<int>((pt.x - header.minX) / cellSize);
-        int row = static_cast<int>((header.maxY - pt.y) / cellSize);
-        if (col == cols && pt.x == header.maxX) col = cols - 1;
-        if (row == rows && pt.y == header.minY) row = rows - 1;
 
-        if (col >= 0 && col < cols && row >= 0 && row < rows) {
-            double chmZ = pt.z;
-            if (hasGround) {
-                auto gz = groundRaster.GetElevation(pt.x, pt.y);
-                if (!gz) {
-                    continue;
-                }
-                double normHt = pt.z - *gz;
-                if (useSlope) {
-                    double gzE = groundRaster.GetElevation(pt.x + groundPixelSize, pt.y).value_or(*gz);
-                    double gzW = groundRaster.GetElevation(pt.x - groundPixelSize, pt.y).value_or(*gz);
-                    double gzN = groundRaster.GetElevation(pt.x, pt.y + groundPixelSize).value_or(*gz);
-                    double gzS = groundRaster.GetElevation(pt.x, pt.y - groundPixelSize).value_or(*gz);
-                    double dzdx = (gzE - gzW) / (2.0 * groundPixelSize);
-                    double dzdy = (gzN - gzS) / (2.0 * groundPixelSize);
-                    double slopeFactor = std::sqrt(1.0 + dzdx * dzdx + dzdy * dzdy);
-                    normHt /= slopeFactor;
-                }
-                chmZ = normHt;
-            }
+    bool wantGpu = parser.HasFlag("gpu");
+    bool forceCpu = parser.HasFlag("nogpu");
+    bool gpuReady = (wantGpu && !forceCpu && !useSlope && fusion::cuda::IsCudaAvailable());
 
-            size_t idx = row * cols + col;
-            if (static_cast<float>(chmZ) > maxElevGrid[idx]) {
-                maxElevGrid[idx] = static_cast<float>(chmZ);
+    if (wantGpu && !fusion::cuda::IsCudaAvailable()) {
+        std::cout << "[CanopyModel] Notice: /gpu requested but CUDA support is not compiled into this build. Falling back to CPU.\n";
+    }
+
+    bool gpuExecuted = false;
+    if (gpuReady) {
+        std::cout << "[CanopyModel] Ingesting point coordinates with tile-origin normalization for GPU rasterization...\n";
+        std::vector<float> xRel;
+        std::vector<float> yRel;
+        std::vector<float> zPts;
+
+        fusion::lidar::PointRecord pt;
+        while (reader.ReadNextPoint(pt)) {
+            if (!pointFilter.Keep(pt)) continue;
+            xRel.push_back(static_cast<float>(pt.x - header.minX));
+            yRel.push_back(static_cast<float>(header.maxY - pt.y));
+            zPts.push_back(static_cast<float>(pt.z));
+        }
+        reader.Close();
+
+        std::vector<float> dtmGrid;
+        if (hasGround) {
+            dtmGrid.resize(static_cast<size_t>(cols) * rows, 0.0f);
+            for (int r = 0; r < rows; ++r) {
+                for (int c = 0; c < cols; ++c) {
+                    double cellX = header.minX + (c + 0.5) * cellSize;
+                    double cellY = header.maxY - (r + 0.5) * cellSize;
+                    dtmGrid[r * cols + c] = static_cast<float>(groundRaster.GetElevation(cellX, cellY).value_or(0.0));
+                }
             }
         }
-    }
-    reader.Close();
 
-    // Apply spatial smoothing filter if requested -- see ChmSmoothing.cpp for
-    // why the separable two-pass box sum matches the brute-force WxW average.
-    if (smoothWidth >= 3) {
-        if (smoothWidth % 2 == 0) smoothWidth += 1; // Ensure odd window size
-        std::cout << "[CanopyModel] Applying " << smoothWidth << "x" << smoothWidth << " spatial smoothing filter...\n";
-        maxElevGrid = fusion::raster::SmoothNodataAwareBox(maxElevGrid, cols, rows, smoothWidth, -9999.0f);
+        fusion::cuda::CudaChmRasterizationOptions gpuOpts;
+        gpuOpts.cellSize = static_cast<float>(cellSize);
+        gpuOpts.cols = cols;
+        gpuOpts.rows = rows;
+        gpuOpts.nodataValue = -9999.0f;
+        gpuOpts.smoothWidth = smoothWidth;
+
+        std::cout << "[CanopyModel] Launching CUDA atomicMax CHM kernel (" << xRel.size() << " points)...\n";
+        gpuExecuted = fusion::cuda::RasterizeChmPoints(xRel, yRel, zPts, dtmGrid, gpuOpts, maxElevGrid);
+        if (gpuExecuted) {
+            std::cout << "[CanopyModel] GPU CHM rasterization and smoothing completed successfully.\n";
+        } else {
+            std::cerr << "[CanopyModel] Warning: CUDA kernel execution failed -- falling back to CPU.\n";
+            // Re-open reader for CPU fallback pass
+            reader.Open(inputFiles);
+        }
+    }
+
+    if (!gpuExecuted) {
+        fusion::lidar::PointRecord pt;
+        while (reader.ReadNextPoint(pt)) {
+            if (!pointFilter.Keep(pt)) continue;
+            int col = static_cast<int>((pt.x - header.minX) / cellSize);
+            int row = static_cast<int>((header.maxY - pt.y) / cellSize);
+            if (col == cols && pt.x == header.maxX) col = cols - 1;
+            if (row == rows && pt.y == header.minY) row = rows - 1;
+
+            if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                double chmZ = pt.z;
+                if (hasGround) {
+                    auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                    if (!gz) {
+                        continue;
+                    }
+                    double normHt = pt.z - *gz;
+                    if (useSlope) {
+                        double gzE = groundRaster.GetElevation(pt.x + groundPixelSize, pt.y).value_or(*gz);
+                        double gzW = groundRaster.GetElevation(pt.x - groundPixelSize, pt.y).value_or(*gz);
+                        double gzN = groundRaster.GetElevation(pt.x, pt.y + groundPixelSize).value_or(*gz);
+                        double gzS = groundRaster.GetElevation(pt.x, pt.y - groundPixelSize).value_or(*gz);
+                        double dzdx = (gzE - gzW) / (2.0 * groundPixelSize);
+                        double dzdy = (gzN - gzS) / (2.0 * groundPixelSize);
+                        double slopeFactor = std::sqrt(1.0 + dzdx * dzdx + dzdy * dzdy);
+                        normHt /= slopeFactor;
+                    }
+                    chmZ = normHt;
+                }
+
+                size_t idx = row * cols + col;
+                if (static_cast<float>(chmZ) > maxElevGrid[idx]) {
+                    maxElevGrid[idx] = static_cast<float>(chmZ);
+                }
+            }
+        }
+        reader.Close();
+
+        // Apply spatial smoothing filter if requested -- see ChmSmoothing.cpp for
+        // why the separable two-pass box sum matches the brute-force WxW average.
+        if (smoothWidth >= 3) {
+            if (smoothWidth % 2 == 0) smoothWidth += 1; // Ensure odd window size
+            std::cout << "[CanopyModel] Applying " << smoothWidth << "x" << smoothWidth << " spatial smoothing filter...\n";
+            maxElevGrid = fusion::raster::SmoothNodataAwareBox(maxElevGrid, cols, rows, smoothWidth, -9999.0f);
+        }
     }
 
     double geotransform[6] = { header.minX, cellSize, 0.0, header.maxY, 0.0, -cellSize };
