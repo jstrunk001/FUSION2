@@ -7,7 +7,7 @@ Options:
   /vrt	Batch/tiled mode: generate a GDAL Virtual Raster (.vrt) across tile rasters (on by default)
   /noraster	Skip writing the GeoTIFF raster(s) -- only valid together with /output-table, since a run must produce at least one output
   /exp	Compute additional experimental metrics from RSForTools
-  /strataraster	With /strata, also append one return-density band per stratum bucket to the multiband output (density_stratum_NN)
+  /strataraster	With /strata or /intstrata, also append per-stratum bands (density_stratum_NN, stratum_NN_count/proportion/mean/stddev/min/max, intstratum_NN_...) to the multiband output, in single-file and batch mode
   /surfstats	Compute surface_area_ratio and roughness bands from the per-cell elevation grid (see /surfstats-source)
   /nointensity	Skip computing intensity metrics
   /all	Use all returns for canopy cover and metric calculations
@@ -15,7 +15,7 @@ Options:
   /first	Use only first returns for metric calculations
   /buffer:<value>	Batch/tiled mode: tile buffer distance (default: 50)
   /tilesize:<value>	Batch/tiled mode: tile width,height in project units (default: 1000,1000)
-  /extent:<value>	Batch/tiled mode: project extent LLX,LLY,URX,URY (default: )
+  /extent:<value>	Batch/tiled mode: project extent LLX,LLY,URX,URY (default: the extent of the input files, snapped to the cell size) (default: )
   /output-table:<value>	Write the full per-cell metrics table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely (default: )
   /output-mode:<value>	Output raster mode: multiband or singleband (default: multiband)
   /outdir:<value>	Output directory for rasters and CSV reports (also the batch/tiled mode output directory) (default: .)

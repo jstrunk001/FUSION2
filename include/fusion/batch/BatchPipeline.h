@@ -42,6 +42,30 @@ public:
     static std::vector<TileInfo> GenerateTiles(const TileGridSpec& spec);
 };
 
+// Finds the grid cell (col, row) that a point falls in within one batch
+// tile, counting columns right from the tile's left edge and rows down
+// from its top edge, with cells spec.resolution wide. A tile reads points
+// from its buffer as well as its own area, but only points inside its own
+// area are given a cell, so every point is counted by exactly one tile.
+// A point on a shared edge goes to one tile only: the left and top edges
+// belong to this tile, and the right and bottom edges belong to the
+// neighbouring tile -- except on the project's outer right and bottom
+// edges, which have no neighbour and so stay with this tile. Returns false
+// (and leaves col/row unchanged) for a point outside the tile's own area.
+bool TileCellForPoint(double x, double y, const TileInfo& tile, const TileGridSpec& spec,
+                      int cols, int rows, int& col, int& row);
+
+// Sets the project extent for a batch run over the LAS/LAZ files in
+// inputDir, reading only their headers. With hasExtent false, spec's
+// extent is set to the combined extent of the files, snapped outward to
+// multiples of snapSize, and messageOut describes the extent chosen. With
+// hasExtent true, spec's extent is kept as given. Returns false, with
+// messageOut holding the error, when the directory holds no readable
+// LAS/LAZ file or when none of the files overlap the given extent -- so a
+// run over the wrong area stops instead of writing a mosaic of empty tiles.
+bool ResolveProjectExtent(const std::filesystem::path& inputDir, bool hasExtent, double snapSize,
+                          TileGridSpec& spec, std::string& messageOut);
+
 struct PipelineJobOptions {
     std::filesystem::path inputPointCloudDir;
     std::filesystem::path outputDir;
@@ -83,6 +107,8 @@ struct PipelineJobOptions {
     std::string surfStatsSource{"max"};
     double voxelSize{20.0};
     bool enableRgbStrata{false};
+    // /strataraster: also write the per-stratum bands into each tile raster
+    bool enableStrataRaster{false};
 
     // When non-empty, the tile task also writes a per-tile metrics table
     // (path extension picked from this option's extension, filename

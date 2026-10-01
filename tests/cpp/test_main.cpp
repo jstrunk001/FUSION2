@@ -12,6 +12,8 @@ int RunSurfaceStatsTests();
 int RunStageRegistryTests();
 int RunArgumentParserTests();
 int RunPointDensityTests();
+int RunTileCellTests();
+int RunProjectExtentTests();
 
 int main() {
     int failures = 0;
@@ -27,6 +29,8 @@ int main() {
     failures += RunStageRegistryTests();
     failures += RunArgumentParserTests();
     failures += RunPointDensityTests();
+    failures += RunTileCellTests();
+    failures += RunProjectExtentTests();
 
     if (failures == 0) {
         std::cout << "\nAll fusion_tests passed.\n";

@@ -252,7 +252,7 @@
                 <li><a href="#section-7">7. Integration &amp; Engineering Specifications</a></li>
                 <li><a href="#section-8">8. Overall Verdict &amp; Feasibility</a></li>
                 <li><a href="#section-9">9. Study Limitations</a></li>
-                <li><a href="#section-10">10. Actionable Recommendations</a></li>
+                <li><a href="#section-10">10. Actionable Recommendations &amp; Implementation Roadmap</a></li>
             </ol>
         </div>
 
@@ -271,13 +271,13 @@
                 <strong>Baseline Distinction</strong>: The measured speedup reflects an R / <code>terra</code> baseline. FUSION2 is implemented in native C++17 with multi-threaded batching; no empirical comparison exists between FUSION2 and the Julia GPU implementation on identical inputs.
             </li>
             <li>
-                <strong>Metric Completeness</strong>: The Julia CUDA kernel computes a 21-band raster subset (mean, standard deviation, min, max, 15 percentiles, canopy relief ratio, and cover). It omits metrics standard to FUSION2's <code>PointStatBundle</code>, including mode, average absolute deviation, median absolute deviation, and all four L-moments.
+                <strong>Metric Completeness &amp; Expansion</strong>: The reference Julia CUDA kernel computes a 21-band raster subset (mean, standard deviation, min, max, 15 percentiles, canopy relief ratio, and cover). Under the planned FUSION2 GPU architecture, this is expanded to <strong>33 bands</strong> by incorporating variance, CV, IQR, quadratic/cubic means, mode, average absolute deviation (AAD), median absolute deviations (MAD), skewness, and kurtosis through lightweight shared-memory reductions. The 7 order-statistic L-moment metrics ($l_1 \dots l_4, l_{CV}, l_{skew}, l_{kurt}$) are deliberately excluded because their rank-order sorting requirements are prohibitively complex for streaming histogram execution.
             </li>
             <li>
                 <strong>Percentile Agreement Characteristics</strong>: Across approximately 24,000 zones on validation tile <code>10011</code>, the average difference per percentile was small (0.02 to 0.10 ft). For percentiles below p95, only 1 to 16 zones per band differed by more than 1.0 ft. These differences were concentrated in sparsely vegetated zones (under 20 pixels clearing the height break). On p99, 156 zones differed by more than 1.0 ft due to a fixed 300 ft histogram upper bound clipping photogrammetric surface spikes (up to 348.9 ft) in the test dataset.
             </li>
             <li>
-                <strong>Point Cloud I/O Constraints</strong>: For raw LiDAR processing, single-threaded LAZ decompression (LASzip) limits per-tile ingestion rates. Furthermore, at small grid resolutions (e.g. 10 ft), storing 2,048-bin histograms in CPU memory requires up to 20&times; more RAM than storing raw point elevations.
+                <strong>Point Cloud I/O Constraints</strong>: For raw LiDAR processing, single-threaded LAZ decompression (LASzip) limits per-tile ingestion rates. In addition, at small grid resolutions (such as 10 ft), storing 2,048-bin histograms in CPU memory requires up to 20&times; more RAM than storing raw point elevations.
             </li>
         </ul>
 
@@ -609,17 +609,18 @@
 
         <h2 id="section-4">4. Metric Set Comparison: GPU Kernel vs. FUSION2</h2>
         <p>
-            FUSION2 computes a broader suite of point and canopy metrics through <code>ComputePointStatBundle</code> (in <code>src/libfusion_core/PointCloudStats.cpp</code>). The Julia CUDA kernel computes a subset.
+            FUSION2 computes a comprehensive suite of point and canopy metrics through <code>ComputePointStatBundle</code> (in <code>src/libfusion_core/PointCloudStats.cpp</code>). The original Julia CUDA kernel computed a 21-band subset. Here we evaluate which missing metrics can be incorporated into the CUDA kernel without prohibitive algorithmic complexity or multi-step global memory passes, and identify metrics that should be excluded.
         </p>
 
         <table>
-            <caption>Table 4: Detailed comparison of metrics computed by FUSION2 PointStatBundle versus the Julia CUDA kernel.</caption>
+            <caption>Table 4: Comprehensive comparison of canopy metrics across FUSION2 PointStatBundle, the reference Julia CUDA kernel, and the planned FUSION2 CUDA architecture.</caption>
             <thead>
                 <tr>
                     <th>Metric Name</th>
                     <th>FUSION2 <code>PointStatBundle</code></th>
-                    <th>Julia CUDA Kernel</th>
-                    <th>Derivation &amp; Feasibility in CUDA</th>
+                    <th>Julia CUDA (21 Bands)</th>
+                    <th>Planned CUDA (33 Bands)</th>
+                    <th>Implementation Mechanics &amp; Complexity Rationale</th>
                 </tr>
             </thead>
             <tbody>
@@ -627,103 +628,134 @@
                     <td><code>mean</code></td>
                     <td>Yes (Float64 two-pass)</td>
                     <td>Yes (Float32 single-pass)</td>
-                    <td>Direct from $\sum x / n$</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Direct from $\sum x / n$ during primary reduction</td>
                 </tr>
                 <tr>
                     <td><code>variance</code></td>
                     <td>Yes (Sample variance, $n-1$)</td>
-                    <td><strong>No</strong> (Can be added)</td>
-                    <td>Direct from running sum: $\frac{\sum x^2 - (\sum x)^2 / n}{n-1}$</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Direct from running sum of squares: $\frac{\sum x^2 - (\sum x)^2 / n}{n-1}$</td>
                 </tr>
                 <tr>
                     <td><code>stddev</code></td>
                     <td>Yes (Population variance, $n$)*</td>
                     <td>Yes (Sample variance, $n-1$)</td>
-                    <td>*FUSION2 inconsistency: stddev uses $n$, variance uses $n-1$</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Evaluated directly from $\sqrt{\text{variance}}$ in registers</td>
                 </tr>
                 <tr>
                     <td><code>cv</code> (Coefficient of Variation)</td>
                     <td>Yes ($\text{stddev} / \text{mean}$)</td>
-                    <td><strong>No</strong> (Can be added)</td>
-                    <td>Direct from $\text{stddev} / \text{mean}$</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Direct register division: $\text{stddev} / \text{mean}$</td>
                 </tr>
                 <tr>
                     <td><code>min</code>, <code>max</code></td>
                     <td>Yes</td>
                     <td>Yes</td>
-                    <td>Computed via thread reductions</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Evaluated via parallel thread reductions</td>
                 </tr>
                 <tr>
                     <td><code>crr</code> (Canopy Relief Ratio)</td>
                     <td>Yes</td>
                     <td>Yes</td>
+                    <td><strong>Yes</strong></td>
                     <td>Formula: $(\text{mean} - \text{min}) / (\text{max} - \text{min})$</td>
                 </tr>
                 <tr>
                     <td><code>cover</code></td>
                     <td>Yes</td>
                     <td>Yes</td>
-                    <td>Percentage of returns clearing height break</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Fraction of returns clearing the height break ($n_{above} / n_{total}$)</td>
                 </tr>
                 <tr>
-                    <td>Percentiles (<code>p01</code>..<code>p99</code>)</td>
+                    <td>Percentiles (<code>p01</code>..<code>p99</code>, 15 bands)</td>
                     <td>Yes (15 percentiles)</td>
                     <td>Yes (15 percentiles)</td>
-                    <td>Extracted via CDF prefix-sum scan</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Extracted via shared-memory CDF prefix-sum scan</td>
                 </tr>
                 <tr>
                     <td><code>median</code> (<code>p50</code>)</td>
                     <td>Yes</td>
                     <td>Yes</td>
-                    <td>Identical to <code>p50</code></td>
+                    <td><strong>Yes</strong></td>
+                    <td>Identical to <code>p50</code> extracted from CDF</td>
                 </tr>
                 <tr>
                     <td><code>iqr</code></td>
                     <td>Yes (<code>p75 - p25</code>)</td>
-                    <td><strong>No</strong> (Can be added)</td>
-                    <td>Direct from $\text{p75} - \text{p25}$</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Direct subtraction in registers: $\text{p75} - \text{p25}$</td>
                 </tr>
                 <tr>
                     <td><code>quadraticMean</code></td>
                     <td>Yes ($\sqrt{\sum x^2 / n}$)</td>
-                    <td><strong>No</strong> (Can be added)</td>
-                    <td>Direct from running sum of squares</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Direct from primary running sum of squares: $\sqrt{\sum x^2 / n}$</td>
                 </tr>
                 <tr>
                     <td><code>cubicMean</code></td>
                     <td>Yes ($\sqrt[3]{\sum x^3 / n}$)</td>
-                    <td><strong>No</strong> (Can be added)</td>
-                    <td>Requires running sum of cubes $\sum x^3$</td>
-                </tr>
-                <tr>
-                    <td><code>skewness</code>, <code>kurtosis</code></td>
-                    <td>Yes (3rd &amp; 4th moments)</td>
-                    <td><strong>No</strong> (Can be added)</td>
-                    <td>Requires running sums $\sum x^3, \sum x^4$ (Float32 precision sensitive)</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Direct from primary running sum of cubes: $\sqrt[3]{\sum x^3 / n}$</td>
                 </tr>
                 <tr>
                     <td><code>mode</code></td>
                     <td>Yes (0.5 ft binning)</td>
-                    <td><strong>No</strong></td>
-                    <td>Requires peak bin search over histogram</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Argmax peak search over the 2,048 shared-memory histogram bins</td>
                 </tr>
                 <tr>
-                    <td><code>aad</code>, <code>madMedian</code>, <code>madMode</code></td>
+                    <td><code>aad</code> (Average Absolute Deviation)</td>
                     <td>Yes</td>
-                    <td><strong>No</strong></td>
-                    <td>Requires second pass over observations after mean/median are known</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Secondary shared-memory reduction over 2,048 bins: $\frac{1}{n} \sum c_k |z_k - \text{mean}|$</td>
+                </tr>
+                <tr>
+                    <td><code>madMedian</code></td>
+                    <td>Yes</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Secondary shared-memory reduction over 2,048 bins: $\frac{1}{n} \sum c_k |z_k - \text{median}|$</td>
+                </tr>
+                <tr>
+                    <td><code>madMode</code></td>
+                    <td>Yes</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Secondary shared-memory reduction over 2,048 bins: $\frac{1}{n} \sum c_k |z_k - \text{mode}|$</td>
+                </tr>
+                <tr>
+                    <td><code>skewness</code>, <code>kurtosis</code></td>
+                    <td>Yes (3rd &amp; 4th central moments)</td>
+                    <td>No</td>
+                    <td><strong>Yes</strong></td>
+                    <td>Secondary shared-memory central-moment reduction over 2,048 bins</td>
                 </tr>
                 <tr>
                     <td>L-Moments ($l_1, l_2, l_3, l_4$)</td>
                     <td>Yes (Hosking 1990)</td>
-                    <td><strong>No</strong></td>
-                    <td>Requires sorted order-statistic rank weights ($i - 1$)</td>
+                    <td>No</td>
+                    <td><strong style="color: #dc2626;">Excluded</strong></td>
+                    <td><strong>Prohibitively complex</strong>: Requires sorting all $n$ raw returns into discrete ranks $i$ to evaluate weights $(i-1)/(n-1)$</td>
                 </tr>
                 <tr>
                     <td>L-Moment Ratios ($l_{CV}, l_{skew}, l_{kurt}$)</td>
                     <td>Yes</td>
-                    <td><strong>No</strong></td>
-                    <td>Derived from $l_1 \dots l_4$</td>
+                    <td>No</td>
+                    <td><strong style="color: #dc2626;">Excluded</strong></td>
+                    <td><strong>Prohibitively complex</strong>: Derived directly from $l_1 \dots l_4$</td>
                 </tr>
             </tbody>
         </table>
@@ -734,6 +766,31 @@
                 In <code>src/libfusion_core/PointCloudStats.cpp:118-119</code>, FUSION2 defines sample variance dividing by $n - 1$ (<code>var = sqSum / (n - 1)</code>), but computes standard deviation dividing by $n$ (<code>stdDev = std::sqrt(sqSum / n)</code>). Consequently, $\text{variance} \ne \text{stddev}^2$ in FUSION2 output.
             </p>
         </div>
+
+        <h3>4.1 Feasibility Assessment: 33-Band Expansion vs. L-Moment Exclusion</h3>
+        <p>
+            Incorporating 12 additional metrics into the CUDA kernel expands coverage to <strong>33 of FUSION2's 40 standard canopy metrics (82.5%)</strong> while preserving high throughput. This is achieved without reading the fine pixels from global memory a second time:
+        </p>
+        <ol>
+            <li>
+                <strong>Single-Pass Running Reductions</strong>: During initial fine-pixel streaming, threads accumulate running sums $\sum x, \sum x^2, \sum x^3$ alongside $\min, \max$, and return counts in 64-bit registers. These directly yield <code>variance</code>, <code>cv</code>, <code>quadraticMean</code>, and <code>cubicMean</code> at zero additional memory cost.
+            </li>
+            <li>
+                <strong>Shared-Memory Post-Scan Reductions</strong>: Once the 2,048-bin histogram is accumulated and <code>mean</code>, <code>median</code>, and <code>mode</code> are extracted via the CDF prefix scan, a block of 256 threads performs a fast reduction over the 2,048 histogram bins ($2,048 / 256 = 8$ elements per thread in on-chip SRAM). Each bin $k$ has count $c_k$ and center elevation $z_k$. This enables evaluation of:
+                \[
+                \text{AAD} = \frac{1}{n} \sum_{k=1}^{2048} c_k |z_k - \bar{x}|, \quad \text{MAD}_{\text{median}} = \frac{1}{n} \sum_{k=1}^{2048} c_k |z_k - \text{median}|, \quad \text{MAD}_{\text{mode}} = \frac{1}{n} \sum_{k=1}^{2048} c_k |z_k - \text{mode}|
+                \]
+                and central moments $\mu_3 = \frac{1}{n}\sum c_k (z_k - \bar{x})^3$ and $\mu_4 = \frac{1}{n}\sum c_k (z_k - \bar{x})^4$, yielding <code>skewness</code> ($\mu_3 / \sigma^3$) and <code>kurtosis</code> ($\mu_4 / \sigma^4$) with zero additional global memory bandwidth.
+            </li>
+            <li>
+                <strong>Technical Rationale for Dropping L-Moments</strong>:
+                Sample L-moments (Hosking 1990) are linear combinations of probability-weighted moments $b_r$:
+                \[
+                b_r = \frac{1}{n} \sum_{i=1}^n x_{(i)} \frac{(i - 1)(i - 2)\dots(i - r)}{(n - 1)(n - 2)\dots(n - r)}
+                \]
+                where $x_{(i)}$ is the $i$-th order statistic (the $i$-th smallest value) and $i$ is its exact integer rank ($1 \le i \le n$). Unlike standard moments, which sum independent powers $\sum x^p$ or histogram bins $\sum c_k f(z_k)$, L-moments require every observation to be paired with its exact discrete rank across the entire sample. In a $66\text{ ft}$ grid cell with 4,356 fine pixels, evaluating $b_r$ requires sorting all 4,356 individual values into an explicit array. Storing 4,356 floating-point values per zone exceeds shared-memory limits per threadblock, while allocating global scratch buffers across 24,000 zones requires substantial VRAM and complex multi-pass radix sorting. Dropping L-moments from the GPU raster pipeline preserves streaming single-kernel execution and high device occupancy. Users requiring L-moments can continue to process raw point clouds or rasters through FUSION2's native CPU pipeline.
+            </li>
+        </ol>
 
         <h2 id="section-5">5. Assessment of Histogram Methods on CPU</h2>
         <p>
@@ -867,7 +924,7 @@ set(CMAKE_CUDA_ARCHITECTURES "60;75;80;86;89;120;75-virtual")</code></pre>
         </p>
         <ul>
             <li>
-                <strong>For Raster Ingestion (High Return)</strong>: Yes. Incorporating a GPU-accelerated raster pipeline into FUSION2 offers proven utility. For statewide photogrammetric DSM processing (e.g. NAIP3D), where data are dense, continuous, and require no point decompression, the CUDA fused bilinear DTM kernel provides real operational speedups.
+                <strong>For Raster Ingestion (High Return)</strong>: Yes. Incorporating a GPU-accelerated raster pipeline into FUSION2 offers proven utility. For statewide photogrammetric DSM processing (e.g. NAIP3D), where data are dense, continuous, and require no point decompression, the CUDA fused bilinear DTM kernel provides real operational speedups. By expanding the CUDA kernel to compute 33 canopy metrics (incorporating variance, CV, IQR, quadratic/cubic means, mode, AAD, MADs, skewness, and kurtosis while dropping only the 7 order-statistic L-moments), FUSION2 achieves 82.5% metric coverage without sacrificing sub-second per-tile processing.
             </li>
             <li>
                 <strong>For Canopy Height Models (High Return)</strong>: Yes. In <code>canopymodel.exe</code>, direct 2.5D rasterization via <code>atomicMax()</code> is technically simple, numerically robust, and avoids the memory penalties of histogram approaches.
@@ -892,8 +949,8 @@ set(CMAKE_CUDA_ARCHITECTURES "60;75;80;86;89;120;75-virtual")</code></pre>
                 Using a fixed 300 ft upper bound clipped photogrammetric surface spikes (up to 348.9 ft) in validation testing. Setting bounds from each zone's own maximum height is required to avoid skewing histogram resolution across a tile.
             </li>
             <li>
-                <strong>Omission of Higher Moments &amp; L-Moments</strong>:
-                The CUDA kernel computes 21 bands. It does not compute mode, skewness, kurtosis, MAD, AAD, or L-moments, which are required by FUSION2's <code>PointStatBundle</code>.
+                <strong>Exclusion of Order-Statistic L-Moments on GPU</strong>:
+                While the expanded CUDA architecture incorporates variance, CV, quadratic/cubic means, mode, AAD, MADs, skewness, and kurtosis into a 33-band output, L-moments and their ratios ($l_1 \dots l_4, l_{CV}, l_{skew}, l_{kurt}$) are excluded from GPU execution due to individual-observation rank sorting constraints. Full L-moments remain available through FUSION2's native CPU pipeline.
             </li>
             <li>
                 <strong>Point Cloud GPU Binning Remains Unmeasured</strong>:
@@ -901,27 +958,275 @@ set(CMAKE_CUDA_ARCHITECTURES "60;75;80;86;89;120;75-virtual")</code></pre>
             </li>
         </ol>
 
-        <h2 id="section-10">10. Actionable Recommendations</h2>
+        <h2 id="section-10">10. Actionable Recommendations &amp; Implementation Roadmap</h2>
+        <p>
+            Based on the empirical evidence, accuracy analyses, and memory constraints evaluated in this report, we outline a phased engineering roadmap for FUSION2. The architecture prioritizes native CPU raster ingestion to establish an empirical C++ baseline, followed by targeted GPU acceleration where computational returns are highest and implementation risk is lowest.
+        </p>
+
+        <h3>10.1 Detailed Architectural Specifications</h3>
+
+        <h4>A. Native High-Resolution DSM Raster Ingestion (<code>gridmetrics.exe</code>)</h4>
+        <p>
+            FUSION2 currently processes raw point clouds (<code>.las</code> and <code>.laz</code>). Adding raster input capability enables direct processing of photogrammetric surface models (such as NAIP3D) and gridded point products without converting rasters to intermediate point files.
+        </p>
+        <ul>
+            <li>
+                <strong>Format Detection and Dispatch</strong>: In <code>src/tools/gridmetrics/gridmetrics.cpp</code>, inspect the positional input argument using GDAL driver probing. If the input file extension or header indicates a supported raster format (such as GeoTIFF, VRT, or ENVI) rather than an ASPRS LAS file, route execution to a dedicated raster processing pipeline:
+                <pre><code>// Format dispatch in gridmetrics.cpp
+std::filesystem::path inputPath(argv[inputArgIndex]);
+bool isRasterInput = false;
+GDALDriverH hDriver = GDALIdentifyDriver(inputPath.string().c_str(), nullptr);
+if (hDriver != nullptr) {
+    // Verified GDAL-compatible raster dataset
+    isRasterInput = true;
+}</code></pre>
+            </li>
+            <li>
+                <strong>Windowed Scanline Block Streaming</strong>: Large photogrammetric tiles (such as 10,000 ft &times; 10,000 ft at 1.0 ft cell size, containing 106 million single-precision float pixels) require 424 MB of RAM for raw elevation storage. To maintain a bounded memory footprint, ingest the DSM raster in horizontal scanline strips (e.g., blocks of 256 or 512 rows) using <code>GDALRaster::ReadBandData</code>:
+                <pre><code>// Windowed scanline streaming buffer
+int blockSizeRows = 512;
+std::vector&lt;float&gt; dsmBlockBuffer(blockSizeRows * rasterCols);
+for (int rowStart = 0; rowStart &lt; rasterRows; rowStart += blockSizeRows) {
+    int currentBlockRows = std::min(blockSizeRows, rasterRows - rowStart);
+    // Read block window across all columns
+    ReadRasterWindow(dsmRaster, 0, rowStart, rasterCols, currentBlockRows, dsmBlockBuffer);
+    // Process pixels into active zonal accumulators...
+}</code></pre>
+            </li>
+            <li>
+                <strong>Spatial Registration and DTM Bilinear Interpolation</strong>: For each pixel center \((x, y)\) in the input DSM block, compute its corresponding zonal output grid indices \((col_{zone}, row_{zone})\):
+                \[
+                col_{zone} = \left\lfloor \frac{x - x_{min}}{\text{cellsize}} \right\rfloor, \quad row_{zone} = \left\lfloor \frac{y_{max} - y}{\text{cellsize}} \right\rfloor
+                \]
+                Evaluate ground elevation \(z_{dtm}\) at \((x, y)\) using bilinear interpolation via <code>groundRaster.GetElevation(x, y, SampleMethod::Bilinear)</code>. Compute normalized canopy height:
+                \[
+                h = z_{dsm} - z_{dtm}
+                \]
+                If \(h \ge \text{minht}\), append \(h\) to the elevation accumulator of the target zone \((col_{zone}, row_{zone})\).
+            </li>
+            <li>
+                <strong>Metric Completeness and Compatibility</strong>: By populating FUSION2's existing <code>CellAccumulator</code> containers with height values sampled from the raster, all standard metrics computed by <code>ComputePointStatBundle</code> (including mode, average absolute deviation, median absolute deviation, and all four L-moments) are calculated without algorithmic divergence.
+            </li>
+        </ul>
+
+        <h4>B. GPU-Accelerated 2.5D CHM Rasterization (<code>canopymodel.exe</code>)</h4>
+        <p>
+            Generating a Canopy Height Model from unorganized point clouds requires finding the maximum height above ground in each grid cell. This reduction maps directly to device execution without requiring sorting or histogram buffers.
+        </p>
+        <ul>
+            <li>
+                <strong>Host Memory Buffering &amp; Coordinate Normalization</strong>: Allocate pinned host memory (via <code>cudaMallocHost</code>) for streaming point coordinates. To avoid precision degradation from large state plane coordinates (which can exceed \(2 \times 10^6\) ft) in single-precision GPU registers, subtract the tile origin \((x_{min}, y_{max})\) in double precision on the host before uploading:
+                \[
+                x_{rel} = \text{static\_cast}&lt;\text{float}&gt;(x - x_{min}), \quad y_{rel} = \text{static\_cast}&lt;\text{float}&gt;(y_{max} - y)
+                \]
+            </li>
+            <li>
+                <strong>Atomic Integer Reinterpretation Kernel</strong>: Because IEEE 754 positive single-precision floating-point numbers have identical binary ordering to signed 32-bit integers, non-negative heights (\(h \ge 0.0\text{ ft}\)) are updated in destination grid memory using hardware-accelerated <code>atomicMax</code> on 32-bit integer representations:
+                <pre><code>// CUDA kernel for atomic CHM rasterization with bounds protection
+__global__ void RasterizeCHMKernel(const float* __restrict__ xRel,
+                                   const float* __restrict__ yRel,
+                                   const float* __restrict__ z,
+                                   const float* __restrict__ dtmGrid,
+                                   float* __restrict__ chmGrid,
+                                   int numPoints,
+                                   float cellSize,
+                                   int cols,
+                                   int rows) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx &gt;= numPoints) return;
+
+    int c = static_cast&lt;int&gt;(xRel[idx] / cellSize);
+    int r = static_cast&lt;int&gt;(yRel[idx] / cellSize);
+
+    // Strict boundary checks
+    if (c &gt;= 0 &amp;&amp; c &lt; cols &amp;&amp; r &gt;= 0 &amp;&amp; r &lt; rows) {
+        int cellIndex = r * cols + c;
+        float ground = dtmGrid[cellIndex];
+        float h = z[idx] - ground;
+        if (h &gt;= 0.0f) {
+            atomicMax(reinterpret_cast&lt;int*&gt;(&amp;chmGrid[cellIndex]), __float_as_int(h));
+        }
+    }
+}</code></pre>
+            </li>
+            <li>
+                <strong>Array Initialization and Sentinel Encoding</strong>: Initialize the device destination buffer <code>chmGrid</code> to zero (or the IEEE bit-representation of the no-data sentinel value, such as \(-9999.0\text{f}\)) prior to kernel launch. Following execution, copy the raster to host memory and write a standard GeoTIFF via <code>GDALRaster</code>.
+            </li>
+            <li>
+                <strong>GPU Spatial Smoothing Pass</strong>: When the <code>/smooth:n</code> option is specified, execute a 2D separable Gaussian or box convolution kernel directly on device memory before downloading results to host memory, eliminating intermediate file writes.
+            </li>
+        </ul>
+
+        <h4>C. High-Throughput GPU Raster Zonal Analytics Engine (33-Band Suite)</h4>
+        <p>
+            When porting the <code>2026_RasterMetrics</code> CUDA kernel into FUSION2, the architecture is upgraded to compute a 33-band metric suite while deliberately excluding order-statistic L-moments:
+        </p>
+        <ul>
+            <li>
+                <strong>Dynamic Per-Zone Histogram Scaling</strong>: Rather than enforcing a static global cap (such as 300.0 ft or 450.0 ft), evaluate the maximum height \(Z_{max}\) of each zone during an initial reduction pass across the fine pixels. Allocate 2,048 bins where the bin width is scaled dynamically:
+                \[
+                \Delta z = \frac{Z_{max}}{2048}
+                \]
+                This eliminates clipping of surface spikes and guarantees consistent bin resolution across short vegetation.
+            </li>
+            <li>
+                <strong>Shared-Memory Bitonic Sort Fallback for Sparse Cells</strong>: When the count of returns clearing the height break in a zone satisfies \(N &lt; 256\), branch execution to a shared-memory bitonic sort. Evaluate sample percentiles using R's standard <code>type = 7</code> interpolation formula directly over the sorted elements, achieving exact numerical agreement with reference CPU implementations in sparse forest canopies.
+            </li>
+            <li>
+                <strong>Three-Phase Shared-Memory Metric Derivation</strong>:
+                <ol>
+                    <li><em>Phase 1 (Primary Reduction)</em>: Accumulate running sums $\sum x, \sum x^2, \sum x^3$, $\min, \max$, return counts, and the 2,048-bin shared-memory histogram. This yields <code>mean</code>, <code>variance</code>, <code>stddev</code>, <code>cv</code>, <code>crr</code>, <code>quadraticMean</code>, <code>cubicMean</code>, and <code>cover</code>.</li>
+                    <li><em>Phase 2 (Prefix-Sum Scan)</em>: Compute the prefix sum of the 2,048-bin histogram in shared memory to extract all 15 percentiles (<code>p01</code>..<code>p99</code>), <code>median</code> (<code>p50</code>), and <code>iqr</code> ($\text{p75} - \text{p25}$).</li>
+                    <li><em>Phase 3 (Secondary Histogram Reduction)</em>: Using the known <code>mean</code>, <code>median</code>, and peak histogram bin (<code>mode</code>), the 256 threads in the block perform an 8-iteration reduction over the 2,048 shared-memory bins. This extracts <code>aad</code> ($\frac{1}{n} \sum c_k |z_k - \bar{x}|$), <code>madMedian</code> ($\frac{1}{n} \sum c_k |z_k - \text{median}|$), <code>madMode</code> ($\frac{1}{n} \sum c_k |z_k - \text{mode}|$), <code>skewness</code>, and <code>kurtosis</code> with zero additional global memory traffic.</li>
+                </ol>
+            </li>
+            <li>
+                <strong>Exclusion of Order-Statistic L-Moments</strong>: L-moments ($l_1 \dots l_4$) and their ratios ($l_{CV}, l_{skew}, l_{kurt}$) are deliberately excluded from GPU execution. Because Hosking's probability-weighted moments $b_r = \frac{1}{n} \sum x_{(i)} \frac{(i-1)\dots(i-r)}{(n-1)\dots(n-r)}$ require pairing every fine pixel with its sorted global rank $i$, computing L-moments requires sorting all 4,356 observations per zone in device memory. This introduces substantial register spilling, reduces warp occupancy, and increases memory bandwidth requirements without proportional analytical benefit.
+            </li>
+            <li>
+                <strong>Exact Integer Histograms for 8-Bit Spectral Bands</strong>: For multi-spectral channels (NAIP Red, Green, Blue, Near-Infrared), allocate exact 256-bin histograms (1,024 bytes per zone). This eliminates quantization error entirely, consumes minimal shared memory, and allows concurrent evaluation of spectral metrics alongside elevation.
+            </li>
+        </ul>
+
+        <h3>10.2 Step-by-Step Implementation Milestones</h3>
+        <p>
+            We organize the technical work into five discrete, execution-ordered milestones. Each milestone produces a verifiable capability and can be reviewed independently.
+        </p>
+
+        <table>
+            <caption>Table 5: Work breakdown and milestone schedule for FUSION2 raster analytics and GPU acceleration.</caption>
+            <thead>
+                <tr>
+                    <th>Milestone</th>
+                    <th>Target Component</th>
+                    <th>Core Deliverables</th>
+                    <th>Primary Verification Criteria</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>M1</strong></td>
+                    <td><code>gridmetrics.exe</code></td>
+                    <td>Native DSM GeoTIFF ingestion via <code>GDALRaster</code>, scanline streaming, bilinear DTM subtraction</td>
+                    <td>Numerical parity against reference CPU point cloud metrics on rasterized validation tiles</td>
+                </tr>
+                <tr>
+                    <td><strong>M2</strong></td>
+                    <td><code>canopymodel.exe</code></td>
+                    <td>CUDA <code>atomicMax</code> point cloud rasterization, tile-origin normalization, optional GPU smoothing</td>
+                    <td>Bit-for-bit identical or sub-millimeter CHM elevations compared to CPU <code>canopymodel.exe</code></td>
+                </tr>
+                <tr>
+                    <td><strong>M3</strong></td>
+                    <td>Profiling &amp; Benchmarking</td>
+                    <td>High-resolution wall-clock instrumentation across LAZ decompression, spatial binning, and metric loops</td>
+                    <td>Empirical breakdown of CPU time budget on 50M+ point LAZ acquisitions across 1 to 16 threads</td>
+                </tr>
+                <tr>
+                    <td><strong>M4</strong></td>
+                    <td><code>gridmetrics.exe</code> (GPU)</td>
+                    <td>Integrated 33-band CUDA raster kernel (omitting L-moments), per-zone dynamic histogram bounds, bitonic sort for \(N &lt; 256\)</td>
+                    <td>Execution time &lt;1.0 s per 106M pixel tile; residual differences &lt;0.05 ft across all 33 metric bands</td>
+                </tr>
+                <tr>
+                    <td><strong>M5</strong></td>
+                    <td>Testing &amp; Documentation</td>
+                    <td>Automated regression tests in <code>tests/</code>, updated CLI documentation in Quarto manual</td>
+                    <td>Zero regression in point cloud tests; complete manual entries for <code>gridmetrics</code> raster inputs</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h4>Milestone 1: Native High-Resolution DSM Raster Ingestion (CPU Baseline)</h4>
         <ol>
             <li>
-                <strong>Implement CPU-Based Raster Input in FUSION2 First</strong>:
-                Add high-resolution DSM raster reading to <code>gridmetrics.exe</code> using <code>GDALRaster</code>. This will provide an immediate capability for photogrammetric datasets and establish a real C++ CPU baseline.
+                <strong>Update Argument Parsing</strong>: Extend <code>fusion::cli::ArgumentParser</code> in <code>src/tools/gridmetrics/gridmetrics.cpp</code> to recognize raster file extensions (<code>.tif</code>, <code>.vrt</code>, <code>.img</code>) in addition to <code>.las</code> and <code>.laz</code>.
             </li>
             <li>
-                <strong>Adopt Per-Zone Histogram Bounds</strong>:
-                If histogram methods are used for elevation, derive the upper bound dynamically from each zone's computed maximum height (which the kernel already evaluates) rather than a fixed global limit or a tile-wide maximum.
+                <strong>Implement Scanline Chunk Reader</strong>: Create a streaming loop that reads horizontal raster strips of 512 rows using <code>GDALRaster</code>, maintaining memory consumption under 250 MB regardless of tile dimensions.
             </li>
             <li>
-                <strong>Implement Hybrid Quantile Rules for Sparse Zones</strong>:
-                For zones with low return counts ($N &lt; 256$), sort values in shared memory to ensure bit-level parity with sample quantile definitions.
+                <strong>Implement Sub-Pixel DTM Interpolation</strong>: Query ground elevations from the DTM raster at continuous pixel coordinates using bilinear sampling. Subtract ground elevation to produce heights above ground.
             </li>
             <li>
-                <strong>Restrict Fixed-Bin Integer Histograms to 8-Bit Rasters</strong>:
-                Use 256-bin histograms only for 8-bit imagery channels (such as NAIP RGB/NIR), where the integer domain ensures bit-for-bit accuracy. Retain sorting or adaptive reservoirs for continuous float elevations and 16-bit point cloud attributes.
+                <strong>Feed Existing Accumulator Pipeline</strong>: Push valid pixel heights into <code>CellAccumulator</code> and execute <code>ComputePointStatBundle</code>. Write output raster bands using <code>GDALRaster::Create</code> and <code>WriteBandData</code>.
             </li>
             <li>
-                <strong>Benchmark FUSION2 CPU on Point Clouds</strong>:
-                Profile <code>gridmetrics.exe</code> on a 50-million-point LAZ file to determine the exact proportion of wall-clock time spent in LAZ decompression, spatial cell assignment, sorting, and statistical calculations.
+                <strong>Verification</strong>: Process a synthetic 1,000 &times; 1,000 raster tile with known analytical statistics. Verify that all 21 core metric bands match expected mathematical values.
+            </li>
+        </ol>
+
+        <h4>Milestone 2: GPU-Accelerated 2.5D CHM Rasterization (<code>canopymodel.exe</code>)</h4>
+        <ol>
+            <li>
+                <strong>CMake CUDA Integration</strong>: Configure <code>CMakeLists.txt</code> to enable CUDA language support (<code>enable_language(CUDA)</code>), targeting architectures <code>"60;75;80;86;89;120;75-virtual"</code> with modern CMake 3.18+ syntax.
+            </li>
+            <li>
+                <strong>Implement CUDA Source Module</strong>: Create <code>src/cuda/canopymodel_cuda.cu</code> with <code>RasterizeCHMKernel</code>, implementing host-to-device pinned memory transfers and tile-origin coordinate normalization.
+            </li>
+            <li>
+                <strong>Implement CLI Switch</strong>: Add the <code>/gpu</code> option to <code>canopymodel.exe</code>, routing processing to the CUDA kernel when an NVIDIA GPU is detected, with automatic fallback to the CPU multi-threaded path if CUDA initialization fails.
+            </li>
+            <li>
+                <strong>Implement Device Smoothing</strong>: Add a separable 2D convolution kernel on the device grid to support <code>/smooth:n</code> without downloading un-smoothed data to the host.
+            </li>
+            <li>
+                <strong>Verification</strong>: Run <code>canopymodel.exe /gpu</code> on a 50-million-point LiDAR tile. Compare the resulting GeoTIFF against the standard CPU output using <code>gdal_compare.py</code> or direct pixel subtraction to confirm zero deviation.
+            </li>
+        </ol>
+
+        <h4>Milestone 3: Comprehensive CPU Point Cloud Profiling</h4>
+        <ol>
+            <li>
+                <strong>Instrument Timing Sections</strong>: Insert high-resolution <code>std::chrono::steady_clock</code> probes in <code>src/tools/gridmetrics/gridmetrics.cpp</code>, isolating:
+                <ul>
+                    <li>LAZ read and decompression time (<code>LASzip</code> / <code>MergedPointCloudReader</code>)</li>
+                    <li>Spatial coordinate transformation and cell binning</li>
+                    <li>Percentile calculation and sorting</li>
+                    <li>Higher moments, L-moments, and summary statistic evaluation</li>
+                    <li>GeoTIFF raster writing and output serialization</li>
+                </ul>
+            </li>
+            <li>
+                <strong>Execute Empirical Profile Runs</strong>: Run benchmarks on representative USFS LiDAR tiles (50 million returns, 10 ft cell size) across thread counts 1, 2, 4, 8, and 16.
+            </li>
+            <li>
+                <strong>Publish Quantitative Profiling Table</strong>: Document the measured proportions in the project documentation to establish the exact computational headroom available for GPU point cloud acceleration.
+            </li>
+        </ol>
+
+        <h4>Milestone 4: CUDA Fused Raster Zonal Engine in FUSION2 (33-Band Suite)</h4>
+        <ol>
+            <li>
+                <strong>Adapt Julia CUDA Kernel to C++/CUDA</strong>: Port the 2,048-bin shared-memory CDF histogram kernel from <code>2026_RasterMetrics/julia/GpuMetricsPipeline.jl</code> into a native C++/CUDA translation unit (<code>src/cuda/gridmetrics_raster_cuda.cu</code>).
+            </li>
+            <li>
+                <strong>Implement 33-Band Metric Reduction Suite</strong>: Implement the three-phase shared-memory reduction, adding single-pass running power sums ($\sum x^2, \sum x^3$) and post-scan histogram reductions for <code>mode</code>, <code>aad</code>, <code>madMedian</code>, <code>madMode</code>, <code>skewness</code>, and <code>kurtosis</code>. Exclude the 7 order-statistic L-moment metrics to preserve streaming efficiency.
+            </li>
+            <li>
+                <strong>Implement Dynamic Per-Zone Scaling</strong>: Add a two-pass reduction where pass 1 computes \(Z_{max}\) per zone and pass 2 constructs the normalized histogram using \(\Delta z = Z_{max} / 2048\).
+            </li>
+            <li>
+                <strong>Implement Shared-Memory Bitonic Sort Fallback</strong>: Add execution branching in the kernel to sort values when return count \(N &lt; 256\), guaranteeing sample quantile fidelity in sparse vegetation.
+            </li>
+            <li>
+                <strong>Fuse DTM Bilinear Interpolation</strong>: Upload coarse DTM grid data to GPU texture or constant memory, performing bilinear ground interpolation in device registers during fine pixel reading.
+            </li>
+            <li>
+                <strong>Verification</strong>: Run the kernel against validation tile <code>10011</code>. Confirm that all residuals across all 33 metric bands remain under 0.05 ft and that maximum wall-clock time remains under 0.50 s per 106M-pixel tile.
+            </li>
+        </ol>
+
+        <h4>Milestone 5: Quality Assurance, Verification &amp; Documentation</h4>
+        <ol>
+            <li>
+                <strong>Automated Regression Test Suite</strong>: Add automated test cases in <code>tests/</code> verifying raster input handling, DTM resampling correctness, and GPU fallback behavior when running in headless or non-GPU environments.
+            </li>
+            <li>
+                <strong>Update User Documentation</strong>: Document the new raster ingestion capabilities, CLI parameters (<code>/ground:</code>, <code>/cellsize:</code>, <code>/gpu</code>), and memory tuning guidelines in the Quarto manual under <code>docs/tools/gridmetrics.qmd</code> and <code>docs/tools/canopymodel.qmd</code>.
+            </li>
+            <li>
+                <strong>Final Review and Git Commit</strong>: Review changes against coding standards and narrative style guidelines, and commit all updates with clear semantic commit messages.
             </li>
         </ol>
     </div>

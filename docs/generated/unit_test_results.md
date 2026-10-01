@@ -25,6 +25,10 @@ ArgumentParser tests
   all passed
 Point-count raster (catalog /density) tests
   all passed
+TileCellForPoint tests
+  all passed
+ResolveProjectExtent tests
+  all passed
 
 All fusion_tests passed.
 ```

@@ -23,20 +23,20 @@ Processes one point cloud file, writing its raster(s) and CSV summary directly i
 
 ### Batch/tiled mode
 ```bash
-gridmetrics <input_directory> /outdir:<dir> [/tilesize:...] [/buffer:...] [/threads:...] [other /options]
+gridmetrics <input_directory> [optional raster ground path] /outdir:<dir> [/tilesize:...] [/buffer:...] [/threads:...] [other /options]
 ```
 Tiles and buffers every LAS/LAZ file in the input directory, computes the same grid metrics per tile in parallel (multithreaded, in-process — no child processes), and mosaics the tile rasters into a `.vrt` in `/outdir`. Batch mode always writes one multiband raster per tile (`/output-mode` is ignored, since singleband mode would write many files per tile). With `/output-table`, each tile's table is written in parallel and the tiles are then joined, in tile order, into one project-level table.
 
 A COPC (Cloud Optimized Point Cloud) file in the input directory is detected automatically (no separate flag) -- its own chunk index is used to seek directly to the chunks overlapping each tile's buffered extent, instead of reading the whole file sequentially per tile. A plain (non-indexed) LAS/LAZ file is read sequentially. This mainly pays off when the input directory holds one very large regional COPC file rather than pre-tiled LAS/LAZ -- pre-tiled input is already read efficiently without it.
 
-- `/extent:<LLX,LLY,URX,URY>`: Batch mode only. Project extent (default: a `0,0,5000,5000` grid if omitted).
+- `/extent:<LLX,LLY,URX,URY>`: Batch mode only. Project extent (default: the combined extent of the input files, snapped outward to `/cellsize`). The run stops with an error if no input file overlaps the extent.
 - `/tilesize:<w,h>`: Batch mode only. Tile width,height in project units (default: `1000,1000`).
 - `/buffer:<val>`: Batch mode only. Tile buffer distance (default: `50`).
 - `/threads:<N>`: Batch mode only. Number of parallel worker threads (default: `4`).
 - `/vrt`: Batch mode only. Generate a GDAL Virtual Raster (`.vrt`) across tile rasters (on by default).
 - `/merge`: Batch mode only. Merge the VRT into a single global GeoTIFF file.
 
-The `elev_*` and `int_*` bands are the full statistic bundle (min, max, mean, standard deviation, variance, coefficient of variation, skewness, kurtosis, canopy relief ratio, mode, median, interquartile range, percentiles, mean and median absolute deviations, L-moments, quadratic and cubic means, plus `elev_profile_area`); @sec-metrics lists every column. Every run also writes `r1count` to `r9count` (counts by return number) and the cover variants `allcover`, `afcover`, `allabovemean`, `allabovemode`, `afabovemean`, and `afabovemode`, computed from the unfiltered returns. Single-file and batch mode compute the same metrics, including `/rgb`, `/strata`, `/intstrata`, `/rgbstrata`, `/surfstats`, and `/exp`. The extra raster bands added by `/strataraster`, and `/rgbstrata`'s raster bands, are written in single-file mode only; batch mode reports those values in `/output-table`.
+The `elev_*` and `int_*` bands are the full statistic bundle (min, max, mean, standard deviation, variance, coefficient of variation, skewness, kurtosis, canopy relief ratio, mode, median, interquartile range, percentiles, mean and median absolute deviations, L-moments, quadratic and cubic means, plus `elev_profile_area`); @sec-metrics lists every column. Every run also writes `r1count` to `r9count` (counts by return number) and the cover variants `allcover`, `afcover`, `allabovemean`, `allabovemode`, `afabovemean`, and `afabovemode`, computed from the unfiltered returns. Single-file and batch mode compute the same metrics, including `/rgb`, `/strata`, `/intstrata`, `/rgbstrata`, `/surfstats`, and `/exp`. `/strataraster`'s height and intensity stratum bands are written in both modes. `/rgbstrata`'s raster bands are written in single-file mode only; batch mode reports those values in `/output-table`. In batch mode, `/strata` or `/intstrata` without `/strataraster` or `/output-table` writes no stratum values, and gridmetrics prints a warning saying so.
 
 ### Options & Flags (both modes, except where noted)
 - `/ground:<path>`: Path to ground surface DEM raster (GeoTIFF, ENVI, IMG).
@@ -59,7 +59,7 @@ The `elev_*` and `int_*` bands are the full statistic bundle (min, max, mean, st
 - `/output-mode:<mode>`: Single-file mode only. Output raster mode, `multiband` or `singleband` (default: `multiband`).
 - `/surfstats`: Single-file mode only. Compute `surface_area_ratio` and `roughness` bands from the per-cell elevation grid gridmetrics already holds in memory (no second raster round-trip). See `/surfstats-source` and @sec-metrics for the underlying math.
 - `/surfstats-source:<max|mean>`: With `/surfstats`. Which per-cell elevation to feed the surface-stats math -- `max` (default) suits typical CHM top-surface use, `mean` suits ground-DTM-style runs.
-- `/strataraster`: With `/strata`. Also append, per stratum bucket, a return-density band (`density_stratum_00`, ...), a count band (`stratum_00_count`, ...), a proportion band (`stratum_00_proportion`, ...), and the simplified mean/stddev/min/max band set (`stratum_00_mean`, `stratum_00_stddev`, `stratum_00_min`, `stratum_00_max`) to the multiband output -- the same values `/strata` already writes to CSV, just also as raster bands. With `/intstrata` (and `/nointensity` not set), also appends a matching `intstratum_00_count`/`proportion`/`mean`/`stddev`/`min`/`max` band set per bucket -- no density band, since return density is tied to the elevation bucketing above, not to intensity. With `/rgbstrata`, also appends that per-channel mean/stddev/min/max band set.
+- `/strataraster`: With `/strata`, in single-file and batch mode. Also append, per stratum bucket, a return-density band (`density_stratum_00`, ...), a count band (`stratum_00_count`, ...), a proportion band (`stratum_00_proportion`, ...), and the simplified mean/stddev/min/max band set (`stratum_00_mean`, `stratum_00_stddev`, `stratum_00_min`, `stratum_00_max`) to the multiband output -- the same values `/strata` already writes to CSV, just also as raster bands. With `/intstrata` (and `/nointensity` not set), also appends a matching `intstratum_00_count`/`proportion`/`mean`/`stddev`/`min`/`max` band set per bucket -- no density band, since return density is tied to the elevation bucketing above, not to intensity. With `/rgbstrata`, also appends that per-channel mean/stddev/min/max band set.
 - `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every band and, in the CSV export, every column including `TotalReturns`/`FirstReturns`.
 - `/noheight:<NA|number>`: Value for height-dependent bands (`elev_*`, `int_*`, and `/strataraster`'s/`/rgbstrata`'s mean/stddev/min/max bands) when a cell (or stratum bucket) has returns but none clear `/minht`/land in that bucket (default: `0`). Never applied to `canopy_cover`, `point_density`, or `/strataraster`'s own density/count/proportion bands -- those are well-defined directly from the unfiltered return count. If both `/nodata` and `/noheight` are explicitly set to different, non-`NA` values, gridmetrics prints a warning and uses `/nodata`'s value as the GeoTIFF's registered NoData value (GDAL supports only one per file); `/noheight`'s value is still written as an ordinary pixel, just not flagged as NoData by the file header.
 
@@ -74,7 +74,7 @@ cloudmetrics <input.las/laz or directory> [optional ground DTM file or directory
 
 ### Options & Flags
 - `/output:<path>`: Output CSV file path (default: `cloud_metrics.csv`).
-- `/ground:<path>`: Path to ground DEM raster for height normalization (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly via an in-memory VRT. May also be supplied as an unflagged second positional argument.
+- `/ground:<path>`: Path to ground DEM raster for height normalization (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly via an in-memory VRT. May also be supplied as an unflagged second positional argument, in single-file and batch mode alike. A ground raster that cannot be opened stops the run with an error.
 - `/minht:<val>`: Minimum height cutoff for canopy metrics (default: `2.0`).
 - `/cellsize:<val>`: Grid cell size for 2D area/volume metrics (default: `10.0`).
 - `/voxelsize:<val>`: 3D voxel resolution for voxel volume metrics (default: `20.0`).
@@ -281,7 +281,7 @@ pipeline /pipeline:<stage1,stage2,...> /input:<dir> /output:<dir> [other /option
 - `/tool:<name>`: Shorthand for a single-stage `/pipeline:<name>`.
 - `/input:<dir>`: Input directory containing LAS/LAZ files. **Required.**
 - `/output:<dir>`: Output directory for each stage's finalized (mosaicked/concatenated) result. **Required.**
-- `/extent:<LLX,LLY,URX,URY>`: Project extent (default: a `0,0,5000,5000` grid if omitted).
+- `/extent:<LLX,LLY,URX,URY>`: Project extent (default: the combined extent of the input files, snapped outward to `/cellsize`, or to whole units without `/cellsize`). The run stops with an error if no input file overlaps the extent.
 - `/tilesize:<w,h>`: Tile width,height in project units (default: `1000,1000`).
 - `/buffer:<val>`: Tile buffer distance (default: `50`).
 - `/threads:<N>`: Number of parallel worker threads -- each one runs one tile's stage chain at a time, so this is also how many child processes run concurrently (default: `4`).

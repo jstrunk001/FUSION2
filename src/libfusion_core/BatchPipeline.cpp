@@ -1,4 +1,6 @@
 #include "fusion/batch/BatchPipeline.h"
+#include "fusion/lidar/InputResolver.h"
+#include "fusion/lidar/LASPointCloud.h"
 #include "fusion/table/TableWriter.h"
 
 #include <thread>
@@ -7,6 +9,8 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace fusion::batch {
 
@@ -36,6 +40,89 @@ std::vector<TileInfo> TileGridManager::GenerateTiles(const TileGridSpec& spec) {
         }
     }
     return tiles;
+}
+
+bool TileCellForPoint(double x, double y, const TileInfo& tile, const TileGridSpec& spec,
+                      int cols, int rows, int& col, int& row) {
+    //1. keep only points inside the tile's own area, not its buffer
+    //  - left and top edges belong to this tile, right and bottom edges to
+    //    the neighbour, except on the project's outer right/bottom edges
+    bool onProjectRightEdge = tile.maxX >= spec.maxX;
+    bool onProjectBottomEdge = tile.minY <= spec.minY;
+    bool insideX = x >= tile.minX && (x < tile.maxX || (onProjectRightEdge && x == tile.maxX));
+    bool insideY = y <= tile.maxY && (y > tile.minY || (onProjectBottomEdge && y == tile.minY));
+    if (!insideX || !insideY) return false;
+
+    //2. find the cell, rounding down (not toward zero)
+    int colFound = static_cast<int>(std::floor((x - tile.minX) / spec.resolution));
+    int rowFound = static_cast<int>(std::floor((tile.maxY - y) / spec.resolution));
+
+    //3. a point exactly on the project's far right or bottom edge lands one
+    //   cell past the last one -- pull it back into the last cell
+    if (colFound >= cols) colFound = cols - 1;
+    if (rowFound >= rows) rowFound = rows - 1;
+
+    col = colFound;
+    row = rowFound;
+    return true;
+}
+
+bool ResolveProjectExtent(const std::filesystem::path& inputDir, bool hasExtent, double snapSize,
+                          TileGridSpec& spec, std::string& messageOut) {
+    //1. read every LAS/LAZ header: combined extent, and files overlapping spec
+    int numFiles = 0;
+    int numInExtent = 0;
+    double dataMinX = std::numeric_limits<double>::max();
+    double dataMinY = std::numeric_limits<double>::max();
+    double dataMaxX = std::numeric_limits<double>::lowest();
+    double dataMaxY = std::numeric_limits<double>::lowest();
+    //  - inputDir may also be a single LAS/LAZ file
+    for (const auto& path : fusion::lidar::ResolveInputFiles({inputDir.string()})) {
+        fusion::lidar::LASReader reader;
+        if (!reader.Open(path)) continue;
+        const auto& h = reader.GetHeader();
+        ++numFiles;
+        dataMinX = (std::min)(dataMinX, h.minX);
+        dataMinY = (std::min)(dataMinY, h.minY);
+        dataMaxX = (std::max)(dataMaxX, h.maxX);
+        dataMaxY = (std::max)(dataMaxY, h.maxY);
+        if (h.maxX >= spec.minX && h.minX <= spec.maxX && h.maxY >= spec.minY && h.minY <= spec.maxY) {
+            ++numInExtent;
+        }
+        reader.Close();
+    }
+
+    //2. stop when there is nothing to process
+    std::ostringstream msg;
+    msg << std::fixed << std::setprecision(2);
+    if (numFiles == 0) {
+        msg << "no readable .las or .laz files found in " << inputDir.string();
+        messageOut = msg.str();
+        return false;
+    }
+    if (hasExtent) {
+        if (numInExtent == 0) {
+            msg << "none of the " << numFiles << " point files in " << inputDir.string()
+                << " overlap /extent:" << spec.minX << "," << spec.minY << "," << spec.maxX << "," << spec.maxY
+                << " -- the files cover " << dataMinX << "," << dataMinY << "," << dataMaxX << "," << dataMaxY;
+            messageOut = msg.str();
+            return false;
+        }
+        messageOut.clear();
+        return true;
+    }
+
+    //3. no /extent: use the files' combined extent, snapped outward so cell
+    //   edges fall on multiples of snapSize
+    if (snapSize <= 0.0) snapSize = 1.0;
+    spec.minX = std::floor(dataMinX / snapSize) * snapSize;
+    spec.minY = std::floor(dataMinY / snapSize) * snapSize;
+    spec.maxX = std::ceil(dataMaxX / snapSize) * snapSize;
+    spec.maxY = std::ceil(dataMaxY / snapSize) * snapSize;
+    msg << "No /extent given -- using the extent of the " << numFiles << " point files, snapped to "
+        << snapSize << " units: " << spec.minX << "," << spec.minY << "," << spec.maxX << "," << spec.maxY;
+    messageOut = msg.str();
+    return true;
 }
 
 BatchPipeline::BatchPipeline(TileGridSpec gridSpec, PipelineJobOptions jobOptions)

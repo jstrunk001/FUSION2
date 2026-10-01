@@ -151,6 +151,93 @@ static const std::vector<std::vector<float>>* StrataSpectralValueBuckets(const C
 
 using fusion::cli::ParseFloatList;
 
+// The four stat fields every per-stratum band set reports, in band order.
+static const std::vector<std::string> kStrataSimpleStatNames = {"mean", "stddev", "min", "max"};
+
+// /strataraster's per-stratum bands for one grid, in output band order;
+// names[k] labels data[k]. Used by single-file and batch mode alike.
+struct StrataRasterBands {
+    std::vector<std::string> names;
+    std::vector<std::vector<float>> data;
+};
+
+// Builds /strataraster's bands from the per-cell stratum buckets the point
+// loop fills whenever /strata or /intstrata is given:
+//  - per height stratum: a return-density band (same as densitymetrics'
+//    own stratum bands), a count band, a proportion band, and
+//    mean/stddev/min/max (count and proportion are already their own
+//    bands, so StrataStatBundle's own copies aren't repeated)
+//  - per intensity stratum: the same, minus the density band, since return
+//    density belongs to the height bucketing, not to intensity
+// A stratum with zero points in an otherwise non-empty cell gets
+// noheightValue for its stat bands and a real 0 for its count/proportion
+// (and density); a cell with no returns at all gets nodataValue throughout.
+// Either bucket count may be 0, in which case that band group is skipped.
+static StrataRasterBands BuildStrataRasterBands(const std::vector<CellAccumulator>& grid, size_t numStrataBuckets,
+                                                size_t numIntStrataBuckets, double cellSize,
+                                                float nodataValue, float noheightValue) {
+    StrataRasterBands out;
+    size_t numCells = grid.size();
+    double cellArea = cellSize * cellSize;
+
+    //1. adds one stratum's band set, from either the height or intensity buckets
+    auto addStratum = [&](const std::string& prefix, bool withDensity, bool fromIntensity, size_t s,
+                          const std::string& densityName) {
+        size_t firstBand = out.data.size();
+        size_t numBands = (withDensity ? 1 : 0) + 2 + kStrataSimpleStatNames.size();
+        if (withDensity) out.names.push_back(densityName);
+        out.names.push_back(prefix + "count");
+        out.names.push_back(prefix + "proportion");
+        for (const auto& stat : kStrataSimpleStatNames) out.names.push_back(prefix + stat);
+        out.data.resize(firstBand + numBands, std::vector<float>(numCells, nodataValue));
+
+        for (size_t i = 0; i < numCells; ++i) {
+            const auto& cell = grid[i];
+            if (cell.totalReturns == 0) continue;
+            const std::vector<float>& bucket = fromIntensity ? StrataIntensityBucket(cell, s) : StrataElevationBucket(cell, s);
+            std::vector<double> bucketD(bucket.begin(), bucket.end());
+            fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketD, cell.totalReturns);
+            size_t band = firstBand;
+            if (withDensity) out.data[band++][i] = static_cast<float>(b.count / cellArea);
+            out.data[band++][i] = static_cast<float>(b.count);
+            out.data[band++][i] = static_cast<float>(b.proportion);
+            float stats[4] = {static_cast<float>(b.mean), static_cast<float>(b.stddev),
+                              static_cast<float>(b.min), static_cast<float>(b.max)};
+            for (size_t k = 0; k < kStrataSimpleStatNames.size(); ++k) {
+                out.data[band++][i] = (b.count > 0) ? stats[k] : noheightValue;
+            }
+        }
+    };
+
+    //2. height strata, then intensity strata
+    for (size_t s = 0; s < numStrataBuckets; ++s) {
+        std::ostringstream label;
+        label << std::setw(2) << std::setfill('0') << s;
+        addStratum("stratum_" + label.str() + "_", true, false, s, "density_stratum_" + label.str());
+    }
+    for (size_t s = 0; s < numIntStrataBuckets; ++s) {
+        std::ostringstream label;
+        label << std::setw(2) << std::setfill('0') << s;
+        addStratum("intstratum_" + label.str() + "_", false, true, s, "");
+    }
+    return out;
+}
+
+// Finds the ground raster for a run, in either mode: /ground if given,
+// otherwise the second positional argument, as in the usage line's
+// "[optional raster ground path]" -- but only when that argument is not
+// itself a LAS/LAZ file or a folder of them, since single-file mode also
+// accepts several point files as positional arguments. Returns an empty
+// string when no ground raster was given.
+static std::string ResolveGroundPath(const fusion::cli::ArgumentParser& parser, const std::vector<std::string>& posArgs) {
+    if (auto g = parser.GetOption("ground")) return *g;
+    if (posArgs.size() > 1 && std::filesystem::exists(posArgs[1]) &&
+        fusion::lidar::ResolveInputFiles({posArgs[1]}).empty()) {
+        return posArgs[1];
+    }
+    return "";
+}
+
 // Batch/tiled mode: tiles the input directory of LAS/LAZ files, buffers each
 // tile, computes the same full metric set single-file mode does (elevation
 // stat bundle, cover/density, return-number counts, intensity stats,
@@ -158,19 +245,21 @@ using fusion::cli::ParseFloatList;
 // experimental metrics) per tile in-process (multithreaded via
 // BatchPipeline), and mosaics the per-tile rasters into a VRT -- triggered
 // when the positional input argument is a directory rather than a single
-// file. /strataraster's optional extra per-stratum raster bands stay
-// single-file-only for now; batch/tiled mode's /strata and /rgbstrata
-// support instead surfaces through the per-cell metrics table
-// (/output-table), not additional raster bands.
+// file. /strata and /intstrata values are written as /strataraster bands
+// (same bands as single-file mode) and/or /output-table columns;
+// /rgbstrata values go to /output-table only.
 static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::filesystem::path& inputDir,
-                              const std::filesystem::path& outDir, const fusion::lidar::PointFilter& pointFilter) {
+                              const std::filesystem::path& outDir, const fusion::lidar::PointFilter& pointFilter,
+                              const std::string& groundPath) {
+    // Without /extent, the project extent comes from the LAS/LAZ headers
+    // (see ResolveProjectExtent), snapped outward to the cell size.
     fusion::batch::TileGridSpec gridSpec;
+    bool hasExtent = false;
     if (auto ext = parser.GetOption("extent")) {
         std::stringstream ss(*ext);
         char ch;
         ss >> gridSpec.minX >> ch >> gridSpec.minY >> ch >> gridSpec.maxX >> ch >> gridSpec.maxY;
-    } else {
-        gridSpec.minX = 0; gridSpec.minY = 0; gridSpec.maxX = 5000; gridSpec.maxY = 5000;
+        hasExtent = true;
     }
 
     if (auto ts = parser.GetOption("tilesize")) {
@@ -185,6 +274,13 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
     gridSpec.resolution = std::stod(parser.GetOption("cellsize").value_or("10.0"));
 
+    std::string extentMessage;
+    if (!fusion::batch::ResolveProjectExtent(inputDir, hasExtent, gridSpec.resolution, gridSpec, extentMessage)) {
+        std::cerr << "Error: " << extentMessage << "\n";
+        return 1;
+    }
+    if (!extentMessage.empty()) std::cout << "[GridMetrics] " << extentMessage << "\n";
+
     fusion::batch::PipelineJobOptions jobOpts;
     jobOpts.inputPointCloudDir = inputDir;
     jobOpts.outputDir = outDir;
@@ -193,7 +289,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     jobOpts.generateVRT = true;
     jobOpts.mergeGeoTIFF = parser.HasFlag("merge");
 
-    if (auto g = parser.GetOption("ground")) jobOpts.groundPath = *g;
+    jobOpts.groundPath = groundPath;
     jobOpts.minHt = std::stod(parser.GetOption("minht").value_or("2.0"));
     jobOpts.heightCut = parser.GetOption("heightcut") ? std::stod(*parser.GetOption("heightcut")) : jobOpts.minHt;
     if (auto o = parser.GetOption("outlier")) jobOpts.outlier = *o;
@@ -209,8 +305,22 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     jobOpts.voxelSize = std::stod(parser.GetOption("voxelsize").value_or("20.0"));
     jobOpts.enableRgbStrata = parser.HasFlag("rgbstrata");
     jobOpts.noRaster = parser.HasFlag("noraster");
+    jobOpts.enableStrataRaster = parser.HasFlag("strataraster") && !jobOpts.noRaster;
     if (parser.WasExplicit("output-table")) {
         jobOpts.outputTablePath = *parser.GetOption("output-table");
+    }
+
+    // stratum values reach the output only through /strataraster bands or
+    // the /output-table table -- say so rather than silently computing and
+    // discarding them
+    bool wantsStrata = !jobOpts.strata.empty() || !jobOpts.intStrata.empty();
+    if (wantsStrata && !jobOpts.enableStrataRaster && jobOpts.outputTablePath.empty()) {
+        std::cerr << "Warning: /strata and /intstrata values are written only with /strataraster (raster bands) "
+                     "or /output-table (table columns) -- neither was given, so no stratum output will be written.\n";
+    }
+    if (jobOpts.enableRgbStrata && jobOpts.outputTablePath.empty()) {
+        std::cerr << "Warning: in batch mode /rgbstrata values are written only to /output-table -- "
+                     "none was given, so no /rgbstrata output will be written.\n";
     }
 
     fusion::metrics::SentinelPolicy batchSentinel;
@@ -280,7 +390,10 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
         fusion::raster::GDALRaster groundRaster;
         bool hasGround = false;
-        if (!opts.groundPath.empty() && groundRaster.Open(opts.groundPath)) {
+        if (!opts.groundPath.empty()) {
+            // checked once before tiling, so a failure here fails the tile
+            // rather than computing it from raw elevations
+            if (!groundRaster.Open(opts.groundPath)) return false;
             hasGround = true;
         }
 
@@ -339,12 +452,11 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                             return;
                         }
 
-                        int col = static_cast<int>((pt.x - tile.minX) / res);
-                        int row = static_cast<int>((tile.maxY - pt.y) / res);
-                        if (col == cols && pt.x == tile.maxX) col = cols - 1;
-                        if (row == rows && pt.y == tile.minY) row = rows - 1;
-
-                        if (col >= 0 && col < cols && row >= 0 && row < rows) {
+                        // buffer points are read but never given a cell, so
+                        // a point near a tile seam is counted by one tile only
+                        int col = 0;
+                        int row = 0;
+                        if (fusion::batch::TileCellForPoint(pt.x, pt.y, tile, gridSpec, cols, rows, col, row)) {
                             double elevation = pt.z;
                             if (hasGround) {
                                 auto gz = groundRaster.GetElevation(pt.x, pt.y);
@@ -572,6 +684,14 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
             bandDefs.push_back({"surface_area_ratio", surfStatsAreaRatio});
             bandDefs.push_back({"roughness", surfStatsRoughness});
         }
+        StrataRasterBands strataRasterBands;
+        if (opts.enableStrataRaster) {
+            strataRasterBands = BuildStrataRasterBands(grid, numStrataBuckets, numIntStrataBuckets, res,
+                                                       ND, opts.noheightValue);
+        }
+        for (size_t k = 0; k < strataRasterBands.names.size(); ++k) {
+            bandDefs.push_back({strataRasterBands.names[k], strataRasterBands.data[k]});
+        }
         if (opts.enableExp) {
             for (const auto& name : expNames) bandDefs.push_back({"exp_" + name, expBands[name]});
         }
@@ -765,7 +885,7 @@ int main(int argc, char* argv[]) {
     parser.AddFlag("nointensity", "Skip computing intensity metrics");
     parser.AddOption("strata", "Comma-separated height strata thresholds (e.g. 0.5,2.0,5.0,10.0,20.0)");
     parser.AddOption("intstrata", "Comma-separated intensity strata height thresholds");
-    parser.AddFlag("strataraster", "With /strata, also append one return-density band per stratum bucket to the multiband output (density_stratum_NN)");
+    parser.AddFlag("strataraster", "With /strata or /intstrata, also append per-stratum bands (density_stratum_NN, stratum_NN_count/proportion/mean/stddev/min/max, intstratum_NN_...) to the multiband output, in single-file and batch mode");
     parser.AddFlag("rgbstrata", "With /rgb and /strata both set, also append a mean/stddev/min/max band set (and matching CSV columns) per selected spectral channel within each height-stratum bucket (<channel>_stratum_NN_*).");
     parser.AddOption("nodata", "Value for cells with zero returns at all: NA, or a number such as 0, -9999, or inf", "NA");
     parser.AddOption("noheight", "Value for height-dependent bands (elev_*, int_*) when a cell has returns but none clear the height cutoff: NA, or a number such as 0, -9999, or inf", "0");
@@ -782,7 +902,7 @@ int main(int argc, char* argv[]) {
 
     // Batch/tiled mode options (used only when the positional input is a directory --
     // see RunBatchTiledMode above). Ignored in single-file mode.
-    parser.AddOption("extent", "Batch/tiled mode: project extent LLX,LLY,URX,URY");
+    parser.AddOption("extent", "Batch/tiled mode: project extent LLX,LLY,URX,URY (default: the extent of the input files, snapped to the cell size)");
     parser.AddOption("tilesize", "Batch/tiled mode: tile width,height in project units", "1000,1000");
     parser.AddOption("buffer", "Batch/tiled mode: tile buffer distance", "50");
     parser.AddOption("threads", "Batch/tiled mode: number of parallel worker threads", "4");
@@ -809,9 +929,22 @@ int main(int argc, char* argv[]) {
     std::filesystem::path outDir = parser.GetOption("outdir").value_or(".");
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
 
+    // A ground raster that was given but cannot be opened stops the run --
+    // otherwise heights stay as raw elevations and, with /outlier, every
+    // point can be dropped while the run still reports success.
+    std::string groundPathStr = ResolveGroundPath(parser, posArgs);
+    if (!groundPathStr.empty()) {
+        fusion::raster::GDALRaster groundCheck;
+        if (!groundCheck.Open(groundPathStr)) {
+            std::cerr << "Error: could not open ground raster '" << groundPathStr << "'.\n";
+            return 1;
+        }
+        groundCheck.Close();
+    }
+
     if (std::filesystem::is_directory(inputPath)) {
         std::filesystem::create_directories(outDir);
-        return RunBatchTiledMode(parser, inputPath, outDir, pointFilter);
+        return RunBatchTiledMode(parser, inputPath, outDir, pointFilter, groundPathStr);
     }
 
     double cellSize = std::stod(parser.GetOption("cellsize").value_or("10.0"));
@@ -856,12 +989,6 @@ int main(int argc, char* argv[]) {
 
     fusion::raster::GDALRaster groundRaster;
     bool hasGround = false;
-    std::string groundPathStr;
-    if (auto groundPath = parser.GetOption("ground")) {
-        groundPathStr = *groundPath;
-    } else if (posArgs.size() > 1 && std::filesystem::exists(posArgs[1])) {
-        groundPathStr = posArgs[1];
-    }
     if (!groundPathStr.empty() && groundRaster.Open(groundPathStr)) {
         hasGround = true;
         std::cout << "[GridMetrics] Loaded ground surface DEM: " << groundPathStr << "\n";
@@ -1196,88 +1323,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // /strataraster: gridmetrics already buckets points' elevations into
-    // cell.strataElevations whenever /strata is given (see the point loop
-    // above) but only ever wrote counts to CSV -- append, per stratum
-    // bucket: a return-density band (item 3, same as densitymetrics' own
-    // stratum bands), a count band, a proportion band, and the simplified
-    // 4-field mean/stddev/min/max set (count and proportion are already
-    // their own bands, so StrataStatBundle's own copies of those two fields
-    // aren't repeated here). A stratum bucket with zero points in an
-    // otherwise non-empty cell gets /noheight for its stat columns and a
-    // real (not sentinel) 0 for its own count/proportion, consistent with
-    // the cover-metric precedent in Shared groundwork C; density bands
-    // follow the same rule as item 3. Only built when /strataraster is set.
-    static const std::vector<std::string> kStrataSimpleStatNames = {"mean", "stddev", "min", "max"};
-    std::vector<std::vector<float>> strataDensityBands, strataCountBands, strataPropBands;
-    std::vector<std::vector<std::vector<float>>> strataStatBands; // [bucket][statIdx(mean,stddev,min,max)][cell]
-    if (enableStrataRaster && !strata.empty()) {
-        double cellArea = cellSize * cellSize;
-        strataDensityBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
-        strataCountBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
-        strataPropBands.assign(numStrataBuckets, std::vector<float>(numCells, ND));
-        strataStatBands.assign(numStrataBuckets, std::vector<std::vector<float>>(
-            kStrataSimpleStatNames.size(), std::vector<float>(numCells, ND)));
-
-        for (size_t i = 0; i < numCells; ++i) {
-            const auto& cell = grid[i];
-            if (cell.totalReturns == 0) continue;
-            for (size_t s = 0; s < numStrataBuckets; ++s) {
-                const std::vector<float>& bucketElev = StrataElevationBucket(cell, s);
-                std::vector<double> bucketElevD(bucketElev.begin(), bucketElev.end());
-                fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketElevD, cell.totalReturns);
-                strataDensityBands[s][i] = static_cast<float>(b.count / cellArea);
-                strataCountBands[s][i] = static_cast<float>(b.count);
-                strataPropBands[s][i] = static_cast<float>(b.proportion);
-                if (b.count > 0) {
-                    strataStatBands[s][0][i] = b.mean;
-                    strataStatBands[s][1][i] = b.stddev;
-                    strataStatBands[s][2][i] = b.min;
-                    strataStatBands[s][3][i] = b.max;
-                } else {
-                    for (auto& statBand : strataStatBands[s]) {
-                        statBand[i] = sentinel.noheight.value;
-                    }
-                }
-            }
-        }
-    }
-
-    // /strataraster with /intstrata: same bucket/band shape as the elevation
-    // /strataraster block above, but built from cell.strataIntensities
-    // (intensity values) instead of cell.strataElevations, and reporting
-    // count/proportion/mean/stddev/min/max only -- no density band, since
-    // "return density" is a spatial-return concept tied to the elevation
-    // bucketing above, not to intensity.
-    std::vector<std::vector<float>> intStrataCountBands, intStrataPropBands;
-    std::vector<std::vector<std::vector<float>>> intStrataStatBands; // [bucket][statIdx(mean,stddev,min,max)][cell]
-    if (enableStrataRaster && !intStrata.empty() && !noIntensity) {
-        intStrataCountBands.assign(numIntStrataBuckets, std::vector<float>(numCells, ND));
-        intStrataPropBands.assign(numIntStrataBuckets, std::vector<float>(numCells, ND));
-        intStrataStatBands.assign(numIntStrataBuckets, std::vector<std::vector<float>>(
-            kStrataSimpleStatNames.size(), std::vector<float>(numCells, ND)));
-
-        for (size_t i = 0; i < numCells; ++i) {
-            const auto& cell = grid[i];
-            if (cell.totalReturns == 0) continue;
-            for (size_t s = 0; s < numIntStrataBuckets; ++s) {
-                const std::vector<float>& bucketInt = StrataIntensityBucket(cell, s);
-                std::vector<double> bucketIntD(bucketInt.begin(), bucketInt.end());
-                fusion::metrics::StrataStatBundle b = fusion::metrics::ComputeStrataStatBundle(bucketIntD, cell.totalReturns);
-                intStrataCountBands[s][i] = static_cast<float>(b.count);
-                intStrataPropBands[s][i] = static_cast<float>(b.proportion);
-                if (b.count > 0) {
-                    intStrataStatBands[s][0][i] = b.mean;
-                    intStrataStatBands[s][1][i] = b.stddev;
-                    intStrataStatBands[s][2][i] = b.min;
-                    intStrataStatBands[s][3][i] = b.max;
-                } else {
-                    for (auto& statBand : intStrataStatBands[s]) {
-                        statBand[i] = sentinel.noheight.value;
-                    }
-                }
-            }
-        }
+    // /strataraster: per-stratum bands, built the same way as in batch mode
+    // (see BuildStrataRasterBands). Only built when /strataraster is set.
+    StrataRasterBands strataRasterBands;
+    if (enableStrataRaster) {
+        strataRasterBands = BuildStrataRasterBands(grid, numStrataBuckets, numIntStrataBuckets, cellSize,
+                                                   ND, sentinel.noheight.value);
     }
 
     // /rgbstrata: mean/stddev/min/max per selected spectral channel within
@@ -1371,33 +1422,8 @@ int main(int argc, char* argv[]) {
         bandDefs.push_back({"roughness", surfStatsRoughness});
     }
 
-    if (enableStrataRaster && !strata.empty()) {
-        for (size_t s = 0; s < strataDensityBands.size(); ++s) {
-            std::ostringstream stratumLabel;
-            stratumLabel << std::setw(2) << std::setfill('0') << s;
-            std::string prefix = "stratum_" + stratumLabel.str() + "_";
-
-            bandDefs.push_back({"density_stratum_" + stratumLabel.str(), strataDensityBands[s]});
-            bandDefs.push_back({prefix + "count", strataCountBands[s]});
-            bandDefs.push_back({prefix + "proportion", strataPropBands[s]});
-            for (size_t k = 0; k < kStrataSimpleStatNames.size(); ++k) {
-                bandDefs.push_back({prefix + kStrataSimpleStatNames[k], strataStatBands[s][k]});
-            }
-        }
-    }
-
-    if (enableStrataRaster && !intStrata.empty() && !noIntensity) {
-        for (size_t s = 0; s < intStrataCountBands.size(); ++s) {
-            std::ostringstream stratumLabel;
-            stratumLabel << std::setw(2) << std::setfill('0') << s;
-            std::string prefix = "intstratum_" + stratumLabel.str() + "_";
-
-            bandDefs.push_back({prefix + "count", intStrataCountBands[s]});
-            bandDefs.push_back({prefix + "proportion", intStrataPropBands[s]});
-            for (size_t k = 0; k < kStrataSimpleStatNames.size(); ++k) {
-                bandDefs.push_back({prefix + kStrataSimpleStatNames[k], intStrataStatBands[s][k]});
-            }
-        }
+    for (size_t k = 0; k < strataRasterBands.names.size(); ++k) {
+        bandDefs.push_back({strataRasterBands.names[k], strataRasterBands.data[k]});
     }
 
     if (enableRgbStrata) {
