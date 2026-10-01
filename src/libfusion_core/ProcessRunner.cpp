@@ -72,12 +72,20 @@ ProcessResult RunProcess(
             FILE_ATTRIBUTE_NORMAL,
             nullptr);
 
+    // When the child's output goes to a log file it needs no console of its
+    // own. Without CREATE_NO_WINDOW, a parent that has no console (started
+    // hidden, from a scheduled task, or from a service) makes Windows open a
+    // new console window for every child -- one per tile and stage, each
+    // taking keyboard and mouse focus. Without a log file the child keeps
+    // sharing the parent's console, so its output still appears there.
     STARTUPINFOA startupInfo{};
     startupInfo.cb = sizeof(STARTUPINFOA);
+    DWORD creationFlags = 0;
     if (logHandle && logHandle != INVALID_HANDLE_VALUE) {
         startupInfo.dwFlags |= STARTF_USESTDHANDLES;
         startupInfo.hStdOutput = logHandle;
         startupInfo.hStdError = logHandle;
+        creationFlags |= CREATE_NO_WINDOW;
     }
 
     PROCESS_INFORMATION processInfo{};
@@ -93,7 +101,7 @@ ProcessResult RunProcess(
         nullptr,
         nullptr,
         /*bInheritHandles=*/TRUE,
-        0,
+        creationFlags,
         nullptr,
         nullptr,
         &startupInfo,
