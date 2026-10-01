@@ -23,7 +23,7 @@ Processes one point cloud file, writing its raster(s) and CSV summary directly i
 
 ### Batch/tiled mode
 ```bash
-gridmetrics <input_directory> /outdir:<dir> [/tilesize:...] [/buffer:...] [/threads:...] [other /options]
+gridmetrics <input_directory> [optional raster ground path] /outdir:<dir> [/tilesize:...] [/buffer:...] [/threads:...] [other /options]
 ```
 Tiles and buffers every LAS/LAZ file in the input directory, computes the same grid metrics per tile in parallel (multithreaded, in-process — no child processes), and mosaics the tile rasters into a `.vrt` in `/outdir`. Batch mode always writes one multiband raster per tile (`/output-mode` is ignored, since singleband mode would write many files per tile). With `/output-table`, each tile's table is written in parallel and the tiles are then joined, in tile order, into one project-level table.
 
@@ -74,7 +74,7 @@ cloudmetrics <input.las/laz or directory> [optional ground DTM file or directory
 
 ### Options & Flags
 - `/output:<path>`: Output CSV file path (default: `cloud_metrics.csv`).
-- `/ground:<path>`: Path to ground DEM raster for height normalization (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly via an in-memory VRT. May also be supplied as an unflagged second positional argument.
+- `/ground:<path>`: Path to ground DEM raster for height normalization (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly via an in-memory VRT. May also be supplied as an unflagged second positional argument, in single-file and batch mode alike. A ground raster that cannot be opened stops the run with an error.
 - `/minht:<val>`: Minimum height cutoff for canopy metrics (default: `2.0`).
 - `/cellsize:<val>`: Grid cell size for 2D area/volume metrics (default: `10.0`).
 - `/voxelsize:<val>`: 3D voxel resolution for voxel volume metrics (default: `20.0`).

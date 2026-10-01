@@ -151,6 +151,21 @@ static const std::vector<std::vector<float>>* StrataSpectralValueBuckets(const C
 
 using fusion::cli::ParseFloatList;
 
+// Finds the ground raster for a run, in either mode: /ground if given,
+// otherwise the second positional argument, as in the usage line's
+// "[optional raster ground path]" -- but only when that argument is not
+// itself a LAS/LAZ file or a folder of them, since single-file mode also
+// accepts several point files as positional arguments. Returns an empty
+// string when no ground raster was given.
+static std::string ResolveGroundPath(const fusion::cli::ArgumentParser& parser, const std::vector<std::string>& posArgs) {
+    if (auto g = parser.GetOption("ground")) return *g;
+    if (posArgs.size() > 1 && std::filesystem::exists(posArgs[1]) &&
+        fusion::lidar::ResolveInputFiles({posArgs[1]}).empty()) {
+        return posArgs[1];
+    }
+    return "";
+}
+
 // Batch/tiled mode: tiles the input directory of LAS/LAZ files, buffers each
 // tile, computes the same full metric set single-file mode does (elevation
 // stat bundle, cover/density, return-number counts, intensity stats,
@@ -163,7 +178,8 @@ using fusion::cli::ParseFloatList;
 // support instead surfaces through the per-cell metrics table
 // (/output-table), not additional raster bands.
 static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::filesystem::path& inputDir,
-                              const std::filesystem::path& outDir, const fusion::lidar::PointFilter& pointFilter) {
+                              const std::filesystem::path& outDir, const fusion::lidar::PointFilter& pointFilter,
+                              const std::string& groundPath) {
     // Without /extent, the project extent comes from the LAS/LAZ headers
     // (see ResolveProjectExtent), snapped outward to the cell size.
     fusion::batch::TileGridSpec gridSpec;
@@ -202,7 +218,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     jobOpts.generateVRT = true;
     jobOpts.mergeGeoTIFF = parser.HasFlag("merge");
 
-    if (auto g = parser.GetOption("ground")) jobOpts.groundPath = *g;
+    jobOpts.groundPath = groundPath;
     jobOpts.minHt = std::stod(parser.GetOption("minht").value_or("2.0"));
     jobOpts.heightCut = parser.GetOption("heightcut") ? std::stod(*parser.GetOption("heightcut")) : jobOpts.minHt;
     if (auto o = parser.GetOption("outlier")) jobOpts.outlier = *o;
@@ -289,7 +305,10 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
         fusion::raster::GDALRaster groundRaster;
         bool hasGround = false;
-        if (!opts.groundPath.empty() && groundRaster.Open(opts.groundPath)) {
+        if (!opts.groundPath.empty()) {
+            // checked once before tiling, so a failure here fails the tile
+            // rather than computing it from raw elevations
+            if (!groundRaster.Open(opts.groundPath)) return false;
             hasGround = true;
         }
 
@@ -817,9 +836,22 @@ int main(int argc, char* argv[]) {
     std::filesystem::path outDir = parser.GetOption("outdir").value_or(".");
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
 
+    // A ground raster that was given but cannot be opened stops the run --
+    // otherwise heights stay as raw elevations and, with /outlier, every
+    // point can be dropped while the run still reports success.
+    std::string groundPathStr = ResolveGroundPath(parser, posArgs);
+    if (!groundPathStr.empty()) {
+        fusion::raster::GDALRaster groundCheck;
+        if (!groundCheck.Open(groundPathStr)) {
+            std::cerr << "Error: could not open ground raster '" << groundPathStr << "'.\n";
+            return 1;
+        }
+        groundCheck.Close();
+    }
+
     if (std::filesystem::is_directory(inputPath)) {
         std::filesystem::create_directories(outDir);
-        return RunBatchTiledMode(parser, inputPath, outDir, pointFilter);
+        return RunBatchTiledMode(parser, inputPath, outDir, pointFilter, groundPathStr);
     }
 
     double cellSize = std::stod(parser.GetOption("cellsize").value_or("10.0"));
@@ -864,12 +896,6 @@ int main(int argc, char* argv[]) {
 
     fusion::raster::GDALRaster groundRaster;
     bool hasGround = false;
-    std::string groundPathStr;
-    if (auto groundPath = parser.GetOption("ground")) {
-        groundPathStr = *groundPath;
-    } else if (posArgs.size() > 1 && std::filesystem::exists(posArgs[1])) {
-        groundPathStr = posArgs[1];
-    }
     if (!groundPathStr.empty() && groundRaster.Open(groundPathStr)) {
         hasGround = true;
         std::cout << "[GridMetrics] Loaded ground surface DEM: " << groundPathStr << "\n";
