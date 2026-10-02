@@ -18,6 +18,16 @@ static std::string Key(const std::string& tile, const std::string& stage) {
     return tile + "|" + stage;
 }
 
+// The number at the end of a tile name ("tile_0012" -> 12), or -1 when the
+// name does not end in digits. Sorting on this number rather than the name
+// keeps tile_10000 after tile_9999, which a text sort would not.
+static long long TileNumber(const std::string& tile) {
+    size_t start = tile.find_last_not_of("0123456789");
+    start = (start == std::string::npos) ? 0 : start + 1;
+    if (start >= tile.size()) return -1;
+    return std::stoll(tile.substr(start));
+}
+
 static std::vector<std::string> SplitCsvLine(const std::string& line) {
     std::vector<std::string> fields;
     std::stringstream ss(line);
@@ -106,6 +116,15 @@ std::vector<StageResult> PipelineState::ResultsForStage(const std::string& stage
             results.push_back(result);
         }
     }
+
+    // tile order, not the order tiles happened to finish, so concatenated
+    // tables come out the same on every run
+    std::stable_sort(results.begin(), results.end(), [](const StageResult& a, const StageResult& b) {
+        long long numA = TileNumber(a.tile);
+        long long numB = TileNumber(b.tile);
+        if (numA != numB) return numA < numB;
+        return a.tile < b.tile;
+    });
     return results;
 }
 
