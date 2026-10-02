@@ -63,6 +63,8 @@ The `elev_*` and `int_*` bands are the full statistic bundle (min, max, mean, st
 - `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every band and, in the CSV export, every column including `TotalReturns`/`FirstReturns`.
 - `/noheight:<NA|number>`: Value for height-dependent bands (`elev_*`, `int_*`, and `/strataraster`'s/`/rgbstrata`'s mean/stddev/min/max bands) when a cell (or stratum bucket) has returns but none clear `/minht`/land in that bucket (default: `0`). Never applied to `canopy_cover`, `point_density`, or `/strataraster`'s own density/count/proportion bands -- those are well-defined directly from the unfiltered return count. If both `/nodata` and `/noheight` are explicitly set to different, non-`NA` values, gridmetrics prints a warning and uses `/nodata`'s value as the GeoTIFF's registered NoData value (GDAL supports only one per file); `/noheight`'s value is still written as an ordinary pixel, just not flagged as NoData by the file header.
 - `/profile`: Single-file mode only. After the run, print to the console how many seconds each part took: reading (and decompressing) the input, assigning points or pixels to cells and looking up the ground, computing the metrics, writing the GeoTIFF and table, and everything else, plus the total.
+- `/gpu`: Enable CUDA GPU acceleration for DSM surface raster zonal metric calculations (computes 33-band zonal metrics in GPU device memory, falling back automatically to multi-threaded CPU scanlines if no CUDA device is present).
+- `/nogpu`: Explicitly disable CUDA GPU acceleration and force CPU scanline execution.
 
 ---
 
@@ -298,7 +300,9 @@ pipeline /pipeline:<stage1,stage2,...> /input:<dir> /output:<dir> [other /option
 
 The following options are forwarded to whichever stage(s) in the chain accept them (see each stage's own section above for what it does):
 - `/cellsize`, `/minht`, `/heightcut`, `/outlier`, `/class`, `/strata`, `/intstrata`, `/ground`, `/window-a`, `/window-b`, `/smooth`, `/minz`, `/maxz`, `/return`
-- `/first`, `/nointensity`, `/slope`
+- `/first`, `/nointensity`, `/slope`, `/gpu`, `/nogpu`
+
+When `/gpu` is forwarded in `pipeline`, stages supporting GPU acceleration (`canopymodel`, `gridmetrics`) serialize GPU execution across worker threads to prevent device memory contention and thrashing, while CPU stages run in full multi-threaded parallel across `/threads`.
 
 If `groundfilter` runs earlier in the chain, its DEM output is passed automatically as `/ground` to any later stage that accepts it (`canopymodel`, `gridmetrics`, `densitymetrics`) -- an explicit `/ground:<path>` is only needed when no `groundfilter` stage precedes it.
 
