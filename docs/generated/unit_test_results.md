@@ -31,6 +31,8 @@ ResolveProjectExtent tests
   all passed
 PipelineState tests
   all passed
+Tile point source tests
+  all passed
 
 All fusion_tests passed.
 ```

@@ -5,7 +5,7 @@ Versions match the `VERSION` set in `CMakeLists.txt`'s `project()` call,
 which `build.ps1` reads to build each release's tag and title -- see the
 README's "Distributing built tools" section.
 
-## [Unreleased]
+## [0.0.3] - 2026-10-02
 
 - `gridmetrics` accepts a surface raster (a photogrammetric surface model
   or a canopy height model, as GeoTIFF or another GDAL raster) in place of
@@ -42,6 +42,13 @@ README's "Distributing built tools" section.
 - `pipeline` starts its child tools without a console window when their
   output goes to a log file, so a hidden or scheduled run no longer opens
   a window per tile and stage.
+- `gridmetrics` batch mode and `pipeline` read each plain LAS/LAZ input
+  file once per block of neighbouring processing tiles, instead of once
+  for every tile it overlaps. A 2,048 m file under 1,000 m tiles was
+  previously decompressed nine times. Each file's points are copied into
+  temporary per-tile files (`_tile_points` under the output folder, or
+  under `_processing` for `pipeline`), which are removed as each block
+  finishes. COPC files still seek to the parts each tile needs.
 - The user manual has worked examples, with automated checks, for
   `gridmetrics` on surface rasters, `gridmetrics` batch mode, and the
   `canopymodel,canopymaxima,treeseg` chain.
