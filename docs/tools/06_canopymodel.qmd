@@ -27,8 +27,19 @@ plain, smoothed, and slope-adjusted.
 | `/output` | `out/chm.tif` | The CHM (GeoTIFF). Required. |
 | `/smooth` | `3` | Smooth with a 3 x 3 cell moving average. Empty cells stay empty; they are not filled from their neighbours. |
 | `/slope` | | Measure each point's height perpendicular to the local slope of the ground surface rather than straight up. The two differ only where the ground is sloped. |
+| `/gpu` | | Enable CUDA GPU acceleration for point cloud rasterization and smoothing filter. Automatically falls back to multi-threaded CPU execution if no compatible CUDA GPU is available. |
+| `/nogpu` | | Explicitly disable CUDA GPU acceleration and run strictly on the CPU. |
 
 : Options used in the `canopymodel` examples. {#tbl-options-canopymodel}
+
+## GPU Acceleration
+
+When compiled with CUDA support and executed on a system with an NVIDIA GPU, `canopymodel` supports the `/gpu` switch:
+
+1. **Tile-origin normalization**: Point coordinates are normalized relative to $(x_{min}, y_{max})$ on the host using double precision before device upload, preserving millimeter precision in 32-bit GPU registers across large state plane coordinates.
+2. **Atomic integer reinterpretation**: Above-ground heights are updated in device memory using hardware-accelerated `atomicMax` on 32-bit reinterpreted float representations.
+3. **Device spatial smoothing**: When `/smooth:n` is specified, a 2D separable box convolution executes directly in GPU device memory prior to host download, avoiding intermediate host memory copies.
+4. **Resilient fallback**: If CUDA device allocation or initialization fails, the tool logs an informational message and automatically falls back to CPU multi-threaded execution.
 
 ## Outputs
 

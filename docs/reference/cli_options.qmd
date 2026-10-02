@@ -17,9 +17,9 @@ Calculates statistical elevation, canopy cover, percentile, and experimental met
 
 ### Single-file mode
 ```bash
-gridmetrics <input.las/laz> [optional raster ground path] [other /options]
+gridmetrics <input.las/laz/tif> [optional raster ground path] [other /options]
 ```
-Processes one point cloud file, writing its raster(s) and CSV summary directly into `/outdir`. The ground surface DEM can be given either as the second positional argument or via `/ground:<path>` — `/ground` takes precedence if both are given.
+Processes one point cloud file or high-resolution DSM raster (`.tif`, `.tiff`, `.vrt`, `.img`), writing its raster(s) and CSV summary directly into `/outdir`. When input is a raster DSM, `gridmetrics` streams scanlines in 512-row chunks, samples ground elevations with sub-pixel bilinear interpolation, and computes the cell metrics without loading the entire raster into memory. The ground surface DEM can be given either as the second positional argument or via `/ground:<path>` — `/ground` takes precedence if both are given.
 
 ### Batch/tiled mode
 ```bash
@@ -62,6 +62,7 @@ The `elev_*` and `int_*` bands are the full statistic bundle (min, max, mean, st
 - `/strataraster`: With `/strata`, in single-file and batch mode. Also append, per stratum bucket, a return-density band (`density_stratum_00`, ...), a count band (`stratum_00_count`, ...), a proportion band (`stratum_00_proportion`, ...), and the simplified mean/stddev/min/max band set (`stratum_00_mean`, `stratum_00_stddev`, `stratum_00_min`, `stratum_00_max`) to the multiband output -- the same values `/strata` already writes to CSV, just also as raster bands. With `/intstrata` (and `/nointensity` not set), also appends a matching `intstratum_00_count`/`proportion`/`mean`/`stddev`/`min`/`max` band set per bucket -- no density band, since return density is tied to the elevation bucketing above, not to intensity. With `/rgbstrata`, also appends that per-channel mean/stddev/min/max band set.
 - `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every band and, in the CSV export, every column including `TotalReturns`/`FirstReturns`.
 - `/noheight:<NA|number>`: Value for height-dependent bands (`elev_*`, `int_*`, and `/strataraster`'s/`/rgbstrata`'s mean/stddev/min/max bands) when a cell (or stratum bucket) has returns but none clear `/minht`/land in that bucket (default: `0`). Never applied to `canopy_cover`, `point_density`, or `/strataraster`'s own density/count/proportion bands -- those are well-defined directly from the unfiltered return count. If both `/nodata` and `/noheight` are explicitly set to different, non-`NA` values, gridmetrics prints a warning and uses `/nodata`'s value as the GeoTIFF's registered NoData value (GDAL supports only one per file); `/noheight`'s value is still written as an ordinary pixel, just not flagged as NoData by the file header.
+- `/profile`: Single-file mode only. Print a high-resolution execution timing breakdown (isolating data read & decompression, spatial binning & ground interpolation, metric computation, and GeoTIFF raster serialization) to standard error.
 
 ---
 
@@ -109,6 +110,8 @@ canopymodel <input.las/laz or directory> [other /options]
 - `/ground:<path>`: Path to ground DEM raster file for height normalization, or a directory of DTM tiles to mosaic on the fly.
 - `/slope`: Normalize heights perpendicular to the local terrain slope plane.
 - `/smooth:<n>`: Spatial smoothing window size (e.g. `/smooth:3` for a 3x3 filter).
+- `/gpu`: Enable CUDA GPU acceleration for point cloud rasterization and smoothing filter. Automatically falls back to multi-threaded CPU execution if no compatible CUDA GPU is available.
+- `/nogpu`: Explicitly disable CUDA GPU acceleration and run strictly on the CPU.
 - `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see @sec-point-filtering.
 
 ---

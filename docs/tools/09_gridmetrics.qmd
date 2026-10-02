@@ -29,12 +29,21 @@ a batch mode that tiles, buffers, and processes them in parallel
 | `/strataraster` | | Write the per-layer summaries as raster bands, not only as table columns. |
 | `/surfstats` | | Add `surface_area_ratio` and `roughness` bands computed from the highest return in each cell (@sec-gridsurfacestats). |
 | `/output-table` | `out/gridmetrics/gridmetrics_table.csv` | Also write every metric as a CSV table, one row per cell. |
+| `/profile` | | Print high-resolution execution timing breakdown (data read & decompression, spatial binning & ground interpolation, metric computation, and raster serialization) to stderr. |
 
 : Options used in the `gridmetrics` example. {#tbl-options-gridmetrics}
 
 Options left at their defaults include `/minht:2` (returns below 2 ft
 are left out of the height statistics), `/nodata:NA`, and `/noheight:0`
 (@sec-conventions).
+
+## Native Raster DSM Ingestion
+
+In addition to point cloud files (`.las`, `.laz`), `gridmetrics` natively ingests high-resolution Digital Surface Model (DSM) rasters (`.tif`, `.tiff`, `.vrt`, `.img`):
+
+- **Scanline Streaming**: Rasters are processed in 512-row scanline chunks using `GDALRaster::ReadBandWindow`, bounding host memory consumption under 250 MB regardless of raster tile size.
+- **Bilinear Ground Subtraction**: Ground elevations from the DTM are evaluated at continuous fine-pixel centers via bilinear interpolation, ensuring sub-pixel vertical accuracy.
+- **Metric Parity**: Normalized pixel heights feed into standard `CellAccumulator` bins and `ComputePointStatBundle`, producing identical multi-band GeoTIFF metric rasters and CSV tables.
 
 ## Outputs
 

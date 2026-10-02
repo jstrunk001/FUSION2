@@ -54,6 +54,35 @@ int RunArgumentParserTests() {
     auto upper = ParseLine({"tile.laz", "/OUTPUT:out.las"});
     CHECK(upper.GetOption("output") == std::optional<std::string>("out.las"), failures);
 
+    //4. flag parsing for /gpu and /nogpu
+    {
+        fusion::cli::ArgumentParser cmParser("canopymodel", "test");
+        cmParser.AddFlag("gpu", "enable GPU acceleration");
+        cmParser.AddFlag("nogpu", "disable GPU acceleration");
+        std::vector<std::string> args = {"canopymodel", "input.laz", "/gpu"};
+        std::vector<char*> argv;
+        for (auto& s : args) argv.push_back(s.data());
+        cmParser.Parse(static_cast<int>(argv.size()), argv.data());
+        CHECK(cmParser.HasFlag("gpu"), failures);
+        CHECK(!cmParser.HasFlag("nogpu"), failures);
+        CHECK(cmParser.GetPositionalArgs().size() == 1, failures);
+        CHECK(cmParser.GetPositionalArgs()[0] == "input.laz", failures);
+    }
+
+    //5. flag parsing for /profile and raster positional inputs
+    {
+        fusion::cli::ArgumentParser gmParser("gridmetrics", "test");
+        gmParser.AddFlag("profile", "execution profiling");
+        std::vector<std::string> args = {"gridmetrics", "dsm.tif", "ground.tif", "/profile"};
+        std::vector<char*> argv;
+        for (auto& s : args) argv.push_back(s.data());
+        gmParser.Parse(static_cast<int>(argv.size()), argv.data());
+        CHECK(gmParser.HasFlag("profile"), failures);
+        CHECK(gmParser.GetPositionalArgs().size() == 2, failures);
+        CHECK(gmParser.GetPositionalArgs()[0] == "dsm.tif", failures);
+        CHECK(gmParser.GetPositionalArgs()[1] == "ground.tif", failures);
+    }
+
     if (failures == 0) std::cout << "  all passed\n";
     return failures;
 }
