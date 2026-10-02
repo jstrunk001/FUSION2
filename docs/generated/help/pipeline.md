@@ -3,9 +3,11 @@ Usage: pipeline <arguments> [other /options]
 Multi-tool batch pipeline: tiles/buffers the input once and chains any of the FUSION2 tools per tile
 
 Options:
+  /nogpu	Forwarded to whichever stage(s) accept it
   /slope	Forwarded to whichever stage(s) accept it
   /nointensity	Forwarded to whichever stage(s) accept it
   /first	Forwarded to whichever stage(s) accept it
+  /gpu	Forwarded to whichever stage(s) accept it
   /cleanup	Delete the processing subfolder after a fully successful run
   /merge	Also merge each raster stage's VRT into a single global GeoTIFF
   /retryfailed	Process only tiles with a recorded failed stage

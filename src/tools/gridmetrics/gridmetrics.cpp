@@ -15,6 +15,7 @@
 #include "fusion/metrics/PointCloudStats.h"
 #include "fusion/metrics/SpectralChannels.h"
 #include "fusion/table/TableWriter.h"
+#include "fusion/cuda/GridMetricsCuda.h"
 
 #include <iostream>
 #include <fstream>
@@ -901,6 +902,8 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output-table", "Write the full per-cell metrics table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster(s) -- only valid together with /output-table, since a run must produce at least one output");
     parser.AddFlag("profile", "Report high-resolution wall-clock timing breakdown across decompression, binning, metric computation, and I/O");
+    parser.AddFlag("gpu", "Enable CUDA GPU acceleration for DSM raster zonal metric calculations");
+    parser.AddFlag("nogpu", "Disable CUDA GPU acceleration (force CPU scanline processing)");
 
     // Batch/tiled mode options (used only when the positional input is a directory --
     // see RunBatchTiledMode above). Ignored in single-file mode.
@@ -979,6 +982,9 @@ int main(int argc, char* argv[]) {
     std::string outputMode = parser.GetOption("output-mode").value_or("multiband");
     bool firstOnly = parser.HasFlag("first");
     bool noIntensity = parser.HasFlag("nointensity");
+    bool wantGpu = parser.HasFlag("gpu");
+    bool forceCpu = parser.HasFlag("nogpu");
+    bool enableGpu = (wantGpu && !forceCpu);
 
     double outlierMin = -99999.0, outlierMax = 99999.0;
     bool hasOutlier = false;
@@ -1064,6 +1070,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (wantGpu && !fusion::cuda::IsCudaAvailable()) {
+        std::cout << "[GridMetrics] Notice: /gpu requested but CUDA support is not compiled into this build. Falling back to CPU.\n";
+    }
+    if (wantGpu && !isRasterInput) {
+        std::cout << "[GridMetrics] Notice: /gpu is optimized for high-resolution DSM raster zonal metric calculation. Proceeding with CPU point cloud processing.\n";
+    }
+
     bool enableRgbStrata = parser.HasFlag("rgbstrata");
     if (enableRgbStrata && (strata.empty() || spectralSelection.channels.empty())) {
         std::cerr << "Warning: /rgbstrata requires both /strata and /rgb to be set -- ignored.\n";
@@ -1078,9 +1091,60 @@ int main(int argc, char* argv[]) {
     size_t numStrataBuckets = strata.empty() ? 0 : strata.size() + 1;
     size_t numIntStrataBuckets = (intStrata.empty() || noIntensity) ? 0 : intStrata.size() + 1;
 
-    std::vector<CellAccumulator> grid(cols * rows);
+    bool gpuExecuted = false;
+    fusion::cuda::CudaRasterMetricsBundle cudaBundle;
 
-    if (isRasterInput) {
+    if (isRasterInput && enableGpu && fusion::cuda::IsCudaAvailable()) {
+        const auto& dsmInfo = dsmRaster.GetInfo();
+        std::cout << "[GridMetrics] Ingesting DSM raster for GPU zonal metric calculation...\n";
+        auto tRead0 = std::chrono::steady_clock::now();
+        std::vector<float> dsmFull;
+        if (dsmRaster.ReadBandData(1, dsmFull)) {
+            auto tRead1 = std::chrono::steady_clock::now();
+            secReadDecomp += std::chrono::duration<double>(tRead1 - tRead0).count();
+
+            std::vector<float> dtmFull;
+            const float* dtmPtr = nullptr;
+            if (hasGround) {
+                dtmFull.resize(static_cast<size_t>(dsmInfo.width) * dsmInfo.height, 0.0f);
+                for (int r = 0; r < dsmInfo.height; ++r) {
+                    double y = dsmInfo.originY + (r + 0.5) * dsmInfo.pixelHeight;
+                    for (int c = 0; c < dsmInfo.width; ++c) {
+                        double x = dsmInfo.originX + (c + 0.5) * dsmInfo.pixelWidth;
+                        auto gz = groundRaster.GetElevation(x, y, fusion::raster::SampleMethod::Bilinear);
+                        dtmFull[static_cast<size_t>(r) * dsmInfo.width + c] = gz ? static_cast<float>(*gz) : 0.0f;
+                    }
+                }
+                dtmPtr = dtmFull.data();
+            }
+
+            fusion::cuda::CudaGridMetricsOptions cudaOpts;
+            cudaOpts.fineCols = dsmInfo.width;
+            cudaOpts.fineRows = dsmInfo.height;
+            cudaOpts.fineCellSize = static_cast<float>(dsmInfo.pixelWidth);
+            cudaOpts.coarseCellSize = static_cast<float>(cellSize);
+            cudaOpts.minHt = static_cast<float>(minHt);
+            cudaOpts.heightCut = static_cast<float>(heightCut);
+            cudaOpts.nodataValue = rasterNoData.value;
+
+            auto tCuda0 = std::chrono::steady_clock::now();
+            gpuExecuted = fusion::cuda::ComputeRasterGridMetrics(dsmFull.data(), dtmPtr, cudaOpts, cudaBundle);
+            auto tCuda1 = std::chrono::steady_clock::now();
+            if (gpuExecuted) {
+                secMetrics += std::chrono::duration<double>(tCuda1 - tCuda0).count();
+                cols = cudaBundle.outCols;
+                rows = cudaBundle.outRows;
+                std::cout << "[GridMetrics] GPU raster zonal metrics (33 bands) computed successfully.\n";
+            } else {
+                std::cout << "[GridMetrics] Notice: GPU raster zonal computation failed. Falling back to CPU scanlines.\n";
+            }
+        }
+    }
+
+    std::vector<CellAccumulator> grid;
+    if (!gpuExecuted) {
+        grid.resize(cols * rows);
+        if (isRasterInput) {
         const auto& dsmInfo = dsmRaster.GetInfo();
         int blockSizeRows = 512;
         std::vector<float> dsmBlock;
@@ -1335,6 +1399,11 @@ int main(int argc, char* argv[]) {
         }
         lasReader.Close();
     }
+    } else {
+        if (isRasterInput) {
+            dsmRaster.Close();
+        }
+    }
 
     auto tMetrics0 = std::chrono::steady_clock::now();
 
@@ -1401,7 +1470,12 @@ int main(int argc, char* argv[]) {
             expBands[name] = std::vector<float>(numCells, ND);
         }
     }
+    std::vector<float> surfStatsAreaRatio, surfStatsRoughness;
+    StrataRasterBands strataRasterBands;
+    std::vector<std::string> rgbStrataChannelPrefixes;
+    std::map<std::string, std::vector<std::vector<float>>> rgbStrataBands;
 
+    if (!gpuExecuted) {
     for (size_t i = 0; i < numCells; ++i) {
         auto& cell = grid[i];
         if (cell.totalReturns == 0) {
@@ -1578,8 +1652,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    auto tMetrics1 = std::chrono::steady_clock::now();
-    secMetrics = std::chrono::duration<double>(tMetrics1 - tMetrics0).count();
+        auto tMetrics1 = std::chrono::steady_clock::now();
+        secMetrics += std::chrono::duration<double>(tMetrics1 - tMetrics0).count();
+    }
 
     auto tIO0 = std::chrono::steady_clock::now();
 
@@ -1600,64 +1675,70 @@ int main(int argc, char* argv[]) {
     };
 
     std::vector<BandDef> bandDefs;
-    for (size_t k = 0; k < elevColNames.size(); ++k) {
-        bandDefs.push_back({elevColNames[k], elevBands[k]});
-    }
-    bandDefs.push_back({"elev_profile_area", elevProfileArea});
-    bandDefs.push_back({"canopy_cover", bandCover});
-    bandDefs.push_back({"point_density", bandDensity});
-    for (size_t rn = 0; rn < returnNumberBands.size(); ++rn) {
-        bandDefs.push_back({"r" + std::to_string(rn + 1) + "count", returnNumberBands[rn]});
-    }
-    bandDefs.push_back({"allcover", bandAllCover});
-    bandDefs.push_back({"afcover", bandAfCover});
-    bandDefs.push_back({"allabovemean", bandAllAboveMean});
-    bandDefs.push_back({"allabovemode", bandAllAboveMode});
-    bandDefs.push_back({"afabovemean", bandAfAboveMean});
-    bandDefs.push_back({"afabovemode", bandAfAboveMode});
-
-    if (!noIntensity) {
-        for (size_t k = 0; k < intColNames.size(); ++k) {
-            bandDefs.push_back({intColNames[k], intBands[k]});
+    if (gpuExecuted) {
+        for (size_t b = 0; b < cudaBundle.bandNames.size(); ++b) {
+            bandDefs.push_back({cudaBundle.bandNames[b], cudaBundle.bands[b]});
         }
-    }
-
-    for (const auto& prefix : spectralChannelPrefixes) {
-        const auto& colNames = spectralColNames[prefix];
-        const auto& bands = spectralBands[prefix];
-        for (size_t k = 0; k < colNames.size(); ++k) {
-            bandDefs.push_back({colNames[k], bands[k]});
+    } else {
+        for (size_t k = 0; k < elevColNames.size(); ++k) {
+            bandDefs.push_back({elevColNames[k], elevBands[k]});
         }
-    }
+        bandDefs.push_back({"elev_profile_area", elevProfileArea});
+        bandDefs.push_back({"canopy_cover", bandCover});
+        bandDefs.push_back({"point_density", bandDensity});
+        for (size_t rn = 0; rn < returnNumberBands.size(); ++rn) {
+            bandDefs.push_back({"r" + std::to_string(rn + 1) + "count", returnNumberBands[rn]});
+        }
+        bandDefs.push_back({"allcover", bandAllCover});
+        bandDefs.push_back({"afcover", bandAfCover});
+        bandDefs.push_back({"allabovemean", bandAllAboveMean});
+        bandDefs.push_back({"allabovemode", bandAllAboveMode});
+        bandDefs.push_back({"afabovemean", bandAfAboveMean});
+        bandDefs.push_back({"afabovemode", bandAfAboveMode});
 
-    if (enableSurfStats) {
-        bandDefs.push_back({"surface_area_ratio", surfStatsAreaRatio});
-        bandDefs.push_back({"roughness", surfStatsRoughness});
-    }
+        if (!noIntensity) {
+            for (size_t k = 0; k < intColNames.size(); ++k) {
+                bandDefs.push_back({intColNames[k], intBands[k]});
+            }
+        }
 
-    for (size_t k = 0; k < strataRasterBands.names.size(); ++k) {
-        bandDefs.push_back({strataRasterBands.names[k], strataRasterBands.data[k]});
-    }
+        for (const auto& prefix : spectralChannelPrefixes) {
+            const auto& colNames = spectralColNames[prefix];
+            const auto& bands = spectralBands[prefix];
+            for (size_t k = 0; k < colNames.size(); ++k) {
+                bandDefs.push_back({colNames[k], bands[k]});
+            }
+        }
 
-    if (enableRgbStrata) {
-        size_t numStrataBuckets = strata.size() + 1;
-        for (const auto& prefix : rgbStrataChannelPrefixes) {
-            const auto& bands = rgbStrataBands[prefix];
-            for (size_t s = 0; s < numStrataBuckets; ++s) {
-                std::ostringstream stratumLabel;
-                stratumLabel << std::setw(2) << std::setfill('0') << s;
-                std::string bandPrefix = prefix + "_stratum_" + stratumLabel.str() + "_";
-                size_t base = s * kStrataSimpleStatNames.size();
-                for (size_t k = 0; k < kStrataSimpleStatNames.size(); ++k) {
-                    bandDefs.push_back({bandPrefix + kStrataSimpleStatNames[k], bands[base + k]});
+        if (enableSurfStats) {
+            bandDefs.push_back({"surface_area_ratio", surfStatsAreaRatio});
+            bandDefs.push_back({"roughness", surfStatsRoughness});
+        }
+
+        for (size_t k = 0; k < strataRasterBands.names.size(); ++k) {
+            bandDefs.push_back({strataRasterBands.names[k], strataRasterBands.data[k]});
+        }
+
+        if (enableRgbStrata) {
+            size_t numStrataBuckets = strata.size() + 1;
+            for (const auto& prefix : rgbStrataChannelPrefixes) {
+                const auto& bands = rgbStrataBands[prefix];
+                for (size_t s = 0; s < numStrataBuckets; ++s) {
+                    std::ostringstream stratumLabel;
+                    stratumLabel << std::setw(2) << std::setfill('0') << s;
+                    std::string bandPrefix = prefix + "_stratum_" + stratumLabel.str() + "_";
+                    size_t base = s * kStrataSimpleStatNames.size();
+                    for (size_t k = 0; k < kStrataSimpleStatNames.size(); ++k) {
+                        bandDefs.push_back({bandPrefix + kStrataSimpleStatNames[k], bands[base + k]});
+                    }
                 }
             }
         }
-    }
 
-    if (enableExp) {
-        for (const auto& name : expNames) {
-            bandDefs.push_back({"exp_" + name, expBands[name]});
+        if (enableExp) {
+            for (const auto& name : expNames) {
+                bandDefs.push_back({"exp_" + name, expBands[name]});
+            }
         }
     }
 
@@ -1699,7 +1780,40 @@ int main(int argc, char* argv[]) {
         constexpr double kNA = std::numeric_limits<double>::quiet_NaN();
         std::filesystem::path tablePath = *parser.GetOption("output-table");
 
-        std::vector<std::string> columnNames = {"Col", "Row", "X", "Y", "TotalReturns", "FirstReturns"};
+        if (gpuExecuted) {
+            std::vector<std::string> columnNames = {"Col", "Row", "X", "Y"};
+            for (const auto& name : cudaBundle.bandNames) {
+                columnNames.push_back(name);
+            }
+            fusion::table::RowTableWriter tableWriter;
+            if (!tableWriter.Open(tablePath, columnNames)) {
+                std::cerr << "Error: failed to open table output '" << tablePath.string() << "'.\n";
+            } else {
+                std::cout << "[GridMetrics] Exporting per-cell metrics table to: " << tablePath.string() << "...\n";
+
+                for (int r = 0; r < rows; ++r) {
+                    for (int c = 0; c < cols; ++c) {
+                        size_t idx = static_cast<size_t>(r) * cols + c;
+                        double x = gridMinX + (c + 0.5) * cellSize;
+                        double y = gridMaxY - (r + 0.5) * cellSize;
+
+                        std::vector<double> row;
+                        row.push_back(c);
+                        row.push_back(r);
+                        row.push_back(x);
+                        row.push_back(y);
+
+                        for (size_t b = 0; b < cudaBundle.bands.size(); ++b) {
+                            float val = cudaBundle.bands[b][idx];
+                            row.push_back((val == rasterNoData.value) ? kNA : static_cast<double>(val));
+                        }
+                        tableWriter.WriteRow(row);
+                    }
+                }
+                tableWriter.Close();
+            }
+        } else {
+            std::vector<std::string> columnNames = {"Col", "Row", "X", "Y", "TotalReturns", "FirstReturns"};
         for (const auto& name : elevColNames) columnNames.push_back(name);
         columnNames.push_back("elev_profile_area");
         columnNames.push_back("CanopyCover");
@@ -1859,6 +1973,7 @@ int main(int argc, char* argv[]) {
                 }
             }
             tableWriter.Close();
+        }
         }
     }
     auto tIO1 = std::chrono::steady_clock::now();

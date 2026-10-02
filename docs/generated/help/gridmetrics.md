@@ -5,6 +5,8 @@ Computes comprehensive canopy elevation and intensity metrics grid from point cl
 Options:
   /merge	Batch/tiled mode: merge the VRT into a single global GeoTIFF file
   /vrt	Batch/tiled mode: generate a GDAL Virtual Raster (.vrt) across tile rasters (on by default)
+  /nogpu	Disable CUDA GPU acceleration (force CPU scanline processing)
+  /gpu	Enable CUDA GPU acceleration for DSM raster zonal metric calculations
   /profile	Report high-resolution wall-clock timing breakdown across decompression, binning, metric computation, and I/O
   /noraster	Skip writing the GeoTIFF raster(s) -- only valid together with /output-table, since a run must produce at least one output
   /exp	Compute additional experimental metrics from RSForTools

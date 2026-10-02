@@ -6,6 +6,9 @@
 
 namespace fusion::cuda {
 
+// Check whether CUDA device execution is compiled and available at runtime
+bool IsCudaAvailable();
+
 // Options for GPU-accelerated raster zonal metric calculation
 struct CudaGridMetricsOptions {
     int fineCols = 0;

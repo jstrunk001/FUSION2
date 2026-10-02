@@ -28,6 +28,7 @@
 #include <ctime>
 #include <optional>
 #include <filesystem>
+#include <mutex>
 
 using fusion::batch::ArtifactKind;
 using fusion::batch::StageSpec;
@@ -63,7 +64,7 @@ static const std::vector<std::string> kForwardableOptions = {
     "ground", "window-a", "window-b", "smooth", "minz", "maxz", "return"
 };
 static const std::vector<std::string> kForwardableFlags = {
-    "first", "nointensity", "slope"
+    "first", "nointensity", "slope", "gpu", "nogpu"
 };
 
 static std::unordered_map<std::string, std::string> BuildForwardedOptions(const fusion::cli::ArgumentParser& parser) {
@@ -419,6 +420,17 @@ int main(int argc, char* argv[]) {
                     (stage->acceptsGround ? groundDemBufferedPath : std::nullopt),
                     subprocessOutputPath,
                     forwardedOptions);
+
+                // If a stage requests GPU acceleration, throttle concurrent GPU stages
+                // to avoid device VRAM contention across worker threads.
+                static std::mutex s_gpuMutex;
+                bool isGpuStage = (stageName == "canopymodel" || stageName == "gridmetrics") &&
+                                  (forwardedOptions.find("gpu") != forwardedOptions.end() && forwardedOptions.at("gpu") == "true");
+
+                std::unique_lock<std::mutex> gpuLock(s_gpuMutex, std::defer_lock);
+                if (isGpuStage) {
+                    gpuLock.lock();
+                }
 
                 auto procResult = fusion::batch::RunProcess(toolsDir / stage->exeName, args, logPath);
                 bool ok = procResult.launched && procResult.exitCode == 0;
