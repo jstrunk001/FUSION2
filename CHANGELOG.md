@@ -6,7 +6,7 @@ Versions match the `VERSION` set in `CMakeLists.txt`'s `project()` call,
 which `build.ps1` reads to build each release's tag and title -- see the
 README's "Distributing built tools" section.
 
-## [Unreleased]
+## [0.0.3] - 2026-10-02
 
 - `gridmetrics` accepts a surface raster (a photogrammetric surface model
   or a canopy height model, as GeoTIFF or another GDAL raster) in place of
