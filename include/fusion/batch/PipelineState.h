@@ -48,8 +48,9 @@ public:
     // Tile names that have at least one stage recorded with the given status.
     std::vector<std::string> TilesWithStatus(StageStatus status) const;
 
-    // All recorded results for a given stage name, in the order they were
-    // recorded.
+    // All recorded results for a given stage name, in tile-number order
+    // (tile_0001, tile_0002, ...), so per-stage finalization concatenates
+    // tables in the same order on every run, whatever order tiles finished.
     std::vector<StageResult> ResultsForStage(const std::string& stage) const;
 
 private:
