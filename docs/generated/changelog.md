@@ -7,6 +7,44 @@ README's "Distributing built tools" section.
 
 ## [Unreleased]
 
+- `gridmetrics` accepts a surface raster (a photogrammetric surface model
+  or a canopy height model, as GeoTIFF or another GDAL raster) in place of
+  a point cloud. Each pixel counts as one return at its centre, with the
+  ground raster subtracted when one is given.
+- `gridmetrics /profile` prints how long each part of a single-file run
+  took: reading the input, assigning points to cells, computing metrics,
+  and writing outputs.
+- `gridmetrics` batch mode and `pipeline` no longer default to a fixed
+  (0,0)-(5000,5000) area when `/extent` is left out. They use the input
+  files' combined extent, snapped outward to the cell size, and stop with
+  an error when an `/extent` overlaps no input file. Data elsewhere
+  previously produced a mosaic of empty tiles and a success message.
+- `gridmetrics` batch mode applies a ground raster given as the second
+  positional argument. It previously read the ground only from
+  `/ground:`, so heights stayed raw elevations. A ground raster that
+  cannot be opened now stops the run.
+- `gridmetrics` batch mode counts each point in one tile only. Points in a
+  tile's buffer up to one cell left of or above it were also counted by
+  that tile, adding 3.8% of returns along every seam on a 17-million-point
+  test tile.
+- `gridmetrics` batch mode writes `/strataraster` bands, as single-file
+  mode does, and warns when `/strata` or `/intstrata` is given with no
+  raster or table output to hold them.
+- Virtual rasters built by `gridmetrics` batch mode and `pipeline`, and
+  GeoTIFFs merged from them, carry the tile rasters' band names instead
+  of `project_gridmetrics_1`, `_2`, and so on.
+- `pipeline` accepts a raster-reading stage after a table stage, as in
+  `canopymodel,canopymaxima,treeseg`, and feeds it the most recent
+  raster in the chain, so the canopy model is built once for both.
+- `pipeline` joins each table stage's per-tile tables in tile order
+  rather than the order tiles finished, so repeated runs and runs at
+  different `/threads` give identical tables.
+- `pipeline` starts its child tools without a console window when their
+  output goes to a log file, so a hidden or scheduled run no longer opens
+  a window per tile and stage.
+- The user manual has worked examples, with automated checks, for
+  `gridmetrics` on surface rasters, `gridmetrics` batch mode, and the
+  `canopymodel,canopymaxima,treeseg` chain.
 - `catalog /density` now writes its point-count GeoTIFF on the input's
   real coordinates, with the input's coordinate system attached. It
   previously read both from the point reader after closing it, which
