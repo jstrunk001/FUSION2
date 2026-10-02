@@ -40,6 +40,12 @@ struct RasterInfo {
     std::string projectionWKT;
 };
 
+// Map coordinates of the centre of pixel (col, row), counting rows down
+// from the top edge (originY). pixelHeight is stored as a positive size,
+// so Y decreases as the row number grows.
+double PixelCentreX(const RasterInfo& info, int col);
+double PixelCentreY(const RasterInfo& info, int row);
+
 class GDALRaster {
 public:
     GDALRaster();

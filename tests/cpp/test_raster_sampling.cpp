@@ -129,7 +129,27 @@ int RunRasterSamplingTests() {
     CHECK(!raster.ReadBandWindow(1, 0, 0, 1, kRows + 1, badWin), failures);
     CHECK(!raster.ReadBandWindow(2, 0, 0, 1, 1, badWin), failures); // band 2 doesn't exist
 
-    //13. Verify CUDA 33-band raster metrics metadata and execution container
+    //13. PixelCentreX/Y place each pixel where its value was written
+    //  - gridmetrics' surface-raster input reads pixels row by row and
+    //    bins each one at PixelCentreX/Y. Y must step down from the top
+    //    edge: stepping up put every row below the first above the
+    //    raster, so only the top row of grid cells received values
+    const auto& info = raster.GetInfo();
+    for (int r = 0; r < kRows; ++r) {
+        CHECK(std::abs(fusion::raster::PixelCentreY(info, r) - CellCentreY(r)) < kTolerance, failures);
+    }
+    for (int c = 0; c < kCols; ++c) {
+        CHECK(std::abs(fusion::raster::PixelCentreX(info, c) - CellCentreX(c)) < kTolerance, failures);
+    }
+    std::vector<float> lastRow;
+    CHECK(raster.ReadBandWindow(1, 0, kRows - 1, kCols, 1, lastRow), failures);
+    if (lastRow.size() == kCols) {
+        double xLast = fusion::raster::PixelCentreX(info, 0);
+        double yLast = fusion::raster::PixelCentreY(info, kRows - 1);
+        CHECK(std::abs(lastRow[0] - Plane(xLast, yLast)) < kTolerance, failures);
+    }
+
+    //14. Verify CUDA 33-band raster metrics metadata and execution container
     {
         auto bandNames = fusion::cuda::GetCudaRasterMetricBandNames();
         CHECK(bandNames.size() == 33, failures);

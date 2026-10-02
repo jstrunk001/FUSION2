@@ -1098,9 +1098,9 @@ int main(int argc, char* argv[]) {
 
             for (int br = 0; br < currentBlockRows; ++br) {
                 int rGlobal = rowStart + br;
-                double y = dsmInfo.originY + (rGlobal + 0.5) * dsmInfo.pixelHeight;
+                double y = fusion::raster::PixelCentreY(dsmInfo, rGlobal);
                 for (int cGlobal = 0; cGlobal < dsmInfo.width; ++cGlobal) {
-                    double x = dsmInfo.originX + (cGlobal + 0.5) * dsmInfo.pixelWidth;
+                    double x = fusion::raster::PixelCentreX(dsmInfo, cGlobal);
                     float val = dsmBlock[br * dsmInfo.width + cGlobal];
 
                     if (dsmInfo.hasNoData && val == static_cast<float>(dsmInfo.noDataValue)) {
