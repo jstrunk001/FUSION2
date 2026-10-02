@@ -14,6 +14,14 @@
 
 namespace fusion::raster {
 
+double PixelCentreX(const RasterInfo& info, int col) {
+    return info.originX + (col + 0.5) * info.pixelWidth;
+}
+
+double PixelCentreY(const RasterInfo& info, int row) {
+    return info.originY - (row + 0.5) * info.pixelHeight;
+}
+
 // Points PROJ at the proj.db vendored beside this executable (see
 // CMakeLists.txt's configure-time copy and build_gdal_minimal.ps1's
 // Install-ProjDb) instead of letting PROJ search its own default locations
