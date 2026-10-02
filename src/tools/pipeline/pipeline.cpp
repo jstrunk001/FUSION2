@@ -11,6 +11,7 @@
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"
 #include "fusion/batch/BatchPipeline.h"
+#include "fusion/batch/TilePointSource.h"
 #include "fusion/batch/StatusMessenger.h"
 #include "fusion/batch/ProcessRunner.h"
 #include "fusion/batch/StageRegistry.h"
@@ -82,70 +83,37 @@ static std::unordered_map<std::string, std::string> BuildForwardedOptions(const 
     return forwarded;
 }
 
-// Resolves /input into the concrete list of LAS/LAZ files to scan: every
-// .las/.laz file in inputPath if it's a directory, or just inputPath itself
-// if it's a single point cloud file.
-static std::vector<std::filesystem::path> CollectPointCloudFiles(const std::filesystem::path& inputPath) {
-    return fusion::lidar::ResolveInputFiles({inputPath.string()});
-}
-
 // Buffered spatial clip of every overlapping LAS/LAZ file under inputPath
 // (a directory of tiles, or a single point cloud file) into one per-tile
 // point cloud (Stage 0). Every point-cloud-input stage in the pipeline
 // reads from this file (or a later filterdata/thindata stage's output)
-// rather than re-scanning the whole input itself.
+// rather than re-scanning the whole input itself. The clip takes the
+// header of the first overlapping input file. Points come from
+// ForEachTilePoint, which reads an input file shared by several tiles once
+// for all of them instead of once per tile. Returns false when no input
+// file overlaps the tile or its points cannot be read or written.
 static bool MaterializeTileClip(const std::filesystem::path& inputPath,
                                  const fusion::batch::TileInfo& tile,
                                  const std::filesystem::path& outPath) {
-    fusion::lidar::LASHeaderInfo outHeader;
+    fusion::lidar::LASWriter writer;
     bool haveHeader = false;
-    std::vector<fusion::lidar::PointRecord> matched;
+    bool writerOk = true;
 
-    for (const auto& filePath : CollectPointCloudFiles(inputPath)) {
-        fusion::lidar::LASReader reader;
-        if (!reader.Open(filePath)) continue;
-
-        const auto& header = reader.GetHeader();
-        if (header.maxX < tile.bufferedMinX || header.minX > tile.bufferedMaxX ||
-            header.maxY < tile.bufferedMinY || header.minY > tile.bufferedMaxY) {
-            reader.Close();
-            continue;
-        }
-
-        if (!haveHeader) {
-            outHeader = header;
+    bool pointsRead = fusion::batch::ForEachTilePoint(tile, inputPath,
+        [&](const fusion::lidar::LASHeaderInfo& header) {
+            if (haveHeader) return;
             haveHeader = true;
-        }
-
-        // ReadPointsInExtent() seeks straight to the COPC chunks overlapping
-        // this tile's buffered extent when the file carries a COPC index
-        // (reader.IsCOPC()), instead of decoding every point in the file and
-        // filtering in memory -- with N output tiles, a plain sequential
-        // read-and-filter loop here re-reads and re-decodes the whole point
-        // cloud N times. A non-COPC file falls back to that same sequential
-        // read-and-filter internally, so this call is correct either way and
-        // the min/max bounds passed here are the identical buffered-tile
-        // extent the old manual filter compared each point against.
-        reader.ReadPointsInExtent(tile.bufferedMinX, tile.bufferedMinY, tile.bufferedMaxX, tile.bufferedMaxY,
-                                   [&](const fusion::lidar::PointRecord& pt) {
-            matched.push_back(pt);
+            writerOk = writer.Open(outPath, header);
+        },
+        [&](const fusion::lidar::PointRecord& pt) {
+            if (writerOk) writer.WritePoint(pt);
         });
-        reader.Close();
-    }
+    writer.Close();
 
     if (!haveHeader) {
         return false; // No source file overlapped this tile.
     }
-
-    fusion::lidar::LASWriter writer;
-    if (!writer.Open(outPath, outHeader)) {
-        return false;
-    }
-    for (const auto& pt : matched) {
-        writer.WritePoint(pt);
-    }
-    writer.Close();
-    return true;
+    return pointsRead && writerOk;
 }
 
 // Rewrites canopymaxima's tree-top CSV (TreeID,X,Y,Height,CrownDiameter) in
@@ -355,6 +323,7 @@ int main(int argc, char* argv[]) {
     jobOpts.outputDir = outputDir;
     jobOpts.numThreads = std::stoi(parser.GetOption("threads").value_or("4"));
     jobOpts.generateVRT = false;
+    jobOpts.splitDir = processingDir / "_tile_points";
 
     fusion::batch::StatusMessenger::Instance().SetLogFile(processingDir / "pipeline.log");
     fusion::batch::StatusMessenger::Instance().SendStatus("Starting pipeline: " + parser.GetOption("pipeline").value_or(parser.GetOption("tool").value_or("")));
@@ -362,8 +331,23 @@ int main(int argc, char* argv[]) {
     fusion::batch::BatchPipeline batch(gridSpec, jobOpts);
 
     // 4. Per-tile task: Stage 0 clip, then chain the requested stages.
+    //  - a tile reads input points only when it is in the requested subset
+    //    and its Stage 0 clip is not already done; BatchPipeline splits
+    //    shared input files only for those tiles
+    auto tileSelected = [&](const fusion::batch::TileInfo& tile) -> bool {
+        return tileFilter.empty() || std::find(tileFilter.begin(), tileFilter.end(), tile.name) != tileFilter.end();
+    };
+    auto clipDone = [&](const fusion::batch::TileInfo& tile) -> bool {
+        std::filesystem::path clipPath = processingDir / tile.name / "clip.laz";
+        const StageResult* clipState = state.Find(tile.name, "clip");
+        return resume && clipState && clipState->status == StageStatus::Done && std::filesystem::exists(clipPath);
+    };
+    auto needsPoints = [&](const fusion::batch::TileInfo& tile) -> bool {
+        return tileSelected(tile) && !clipDone(tile);
+    };
+
     auto tileTask = [&](const fusion::batch::TileInfo& tile, const fusion::batch::PipelineJobOptions&) -> bool {
-        if (!tileFilter.empty() && std::find(tileFilter.begin(), tileFilter.end(), tile.name) == tileFilter.end()) {
+        if (!tileSelected(tile)) {
             return true; // Not in the requested subset -- skip entirely.
         }
 
@@ -373,9 +357,7 @@ int main(int argc, char* argv[]) {
 
         // Stage 0: buffered clip, resumable exactly like every other stage.
         std::filesystem::path clipPath = tileDir / "clip.laz";
-        const StageResult* clipState = state.Find(tile.name, "clip");
-        bool clipReady = resume && clipState && clipState->status == StageStatus::Done && std::filesystem::exists(clipPath);
-        if (!clipReady) {
+        if (!clipDone(tile)) {
             std::string startedAt = NowTimestamp();
             bool ok = MaterializeTileClip(inputPath, tile, clipPath);
             StageResult result;
@@ -481,7 +463,7 @@ int main(int argc, char* argv[]) {
         return tileOk;
     };
 
-    batch.ExecutePipeline(tileTask);
+    batch.ExecutePipeline(tileTask, needsPoints);
 
     // 5. Finalize each stage: mosaic rasters, concatenate tables, leave
     //    point-cloud outputs where they are.

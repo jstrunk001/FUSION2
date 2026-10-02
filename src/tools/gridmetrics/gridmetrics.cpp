@@ -8,6 +8,7 @@
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/lidar/PointFilter.h"
 #include "fusion/batch/BatchPipeline.h"
+#include "fusion/batch/TilePointSource.h"
 #include "fusion/batch/StatusMessenger.h"
 #include "fusion/metrics/ExperimentalMetrics.h"
 #include "fusion/metrics/SurfaceStats.h"
@@ -421,112 +422,89 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
         // below (see the big comment on CellAccumulator::Extras).
         std::vector<CellAccumulator> grid(cols * rows);
 
-        // Process matching LAS/LAZ files in input directory
-        if (std::filesystem::exists(opts.inputPointCloudDir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(opts.inputPointCloudDir)) {
-                if (!entry.is_regular_file()) continue;
-                std::string ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext != ".las" && ext != ".laz") continue;
+        // Read the tile's points: every input file overlapping its buffered
+        // extent, read directly or from the split file BatchPipeline wrote
+        // when several tiles share one input file (see ForEachTilePoint)
+        bool pointsRead = fusion::batch::ForEachTilePoint(tile, opts.inputPointCloudDir, nullptr,
+                                                         [&](const fusion::lidar::PointRecord& pt) {
+            if (!pointFilter.Keep(pt)) {
+                return;
+            }
 
-                fusion::lidar::LASReader reader;
-                if (reader.Open(entry.path())) {
-                    const auto& header = reader.GetHeader();
-                    // Spatial bounding box overlap check
-                    if (header.maxX < tile.bufferedMinX || header.minX > tile.bufferedMaxX ||
-                        header.maxY < tile.bufferedMinY || header.minY > tile.bufferedMaxY) {
-                        reader.Close();
-                        continue;
+            if (opts.firstOnly && pt.returnNumber != 1) {
+                return;
+            }
+
+            // buffer points are read but never given a cell, so
+            // a point near a tile seam is counted by one tile only
+            int col = 0;
+            int row = 0;
+            if (fusion::batch::TileCellForPoint(pt.x, pt.y, tile, gridSpec, cols, rows, col, row)) {
+                double elevation = pt.z;
+                if (hasGround) {
+                    auto gz = groundRaster.GetElevation(pt.x, pt.y);
+                    if (!gz) {
+                        return;
                     }
+                    elevation -= *gz;
+                }
 
-                    // COPC files (see LASReader::IsCOPC) seek straight to
-                    // the chunks overlapping this tile's buffered extent
-                    // instead of reading every point sequentially -- a
-                    // plain LAS/LAZ file falls back to that same sequential
-                    // read internally, so this call is correct either way.
-                    reader.ReadPointsInExtent(tile.bufferedMinX, tile.bufferedMinY, tile.bufferedMaxX, tile.bufferedMaxY,
-                                               [&](const fusion::lidar::PointRecord& pt) {
-                        if (!pointFilter.Keep(pt)) {
-                            return;
+                auto& cell = grid[row * cols + col];
+                cell.totalReturns++;
+                if (pt.returnNumber == 1) cell.firstReturns++;
+                {
+                    int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
+                    cell.returnNumberCounts[rnIdx]++;
+                }
+
+                if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
+                    return;
+                }
+
+                if (opts.enableExp) {
+                    cell.cellPoints.push_back({pt.x, pt.y, elevation});
+                }
+
+                if (elevation >= 0.0) cell.returnsAboveGround++;
+                if (elevation >= opts.heightCut) cell.returnsAboveHeightCut++;
+
+                if (!strata.empty()) {
+                    size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
+                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                    extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
+                    if (opts.enableRgbStrata) {
+                        for (const auto& spec : spectralSelection.channels) {
+                            auto& perPrefix = extras.strataSpectralValues[spec.prefix];
+                            if (perPrefix.size() != numStrataBuckets) {
+                                perPrefix.resize(numStrataBuckets);
+                            }
+                            perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
                         }
+                    }
+                }
 
-                        if (opts.firstOnly && pt.returnNumber != 1) {
-                            return;
+                if (!opts.noIntensity && !intStrata.empty()) {
+                    size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
+                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                    extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
+                }
+
+                if (elevation >= opts.minHt) {
+                    cell.returnsAboveMinHt++;
+                    cell.elevations.push_back(static_cast<float>(elevation));
+                    if (!opts.noIntensity) {
+                        cell.intensities.push_back(static_cast<float>(pt.intensity));
+                    }
+                    if (!spectralSelection.channels.empty()) {
+                        auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
+                        for (const auto& spec : spectralSelection.channels) {
+                            extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
                         }
-
-                        // buffer points are read but never given a cell, so
-                        // a point near a tile seam is counted by one tile only
-                        int col = 0;
-                        int row = 0;
-                        if (fusion::batch::TileCellForPoint(pt.x, pt.y, tile, gridSpec, cols, rows, col, row)) {
-                            double elevation = pt.z;
-                            if (hasGround) {
-                                auto gz = groundRaster.GetElevation(pt.x, pt.y);
-                                if (!gz) {
-                                    return;
-                                }
-                                elevation -= *gz;
-                            }
-
-                            auto& cell = grid[row * cols + col];
-                            cell.totalReturns++;
-                            if (pt.returnNumber == 1) cell.firstReturns++;
-                            {
-                                int rnIdx = (pt.returnNumber >= 1 && pt.returnNumber <= 8) ? (pt.returnNumber - 1) : 8;
-                                cell.returnNumberCounts[rnIdx]++;
-                            }
-
-                            if (hasOutlier && (elevation < outlierMin || elevation > outlierMax)) {
-                                return;
-                            }
-
-                            if (opts.enableExp) {
-                                cell.cellPoints.push_back({pt.x, pt.y, elevation});
-                            }
-
-                            if (elevation >= 0.0) cell.returnsAboveGround++;
-                            if (elevation >= opts.heightCut) cell.returnsAboveHeightCut++;
-
-                            if (!strata.empty()) {
-                                size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, strata);
-                                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                                extras.strataElevations[sIdx].push_back(static_cast<float>(elevation));
-                                if (opts.enableRgbStrata) {
-                                    for (const auto& spec : spectralSelection.channels) {
-                                        auto& perPrefix = extras.strataSpectralValues[spec.prefix];
-                                        if (perPrefix.size() != numStrataBuckets) {
-                                            perPrefix.resize(numStrataBuckets);
-                                        }
-                                        perPrefix[sIdx].push_back(static_cast<float>(pt.*(spec.field)));
-                                    }
-                                }
-                            }
-
-                            if (!opts.noIntensity && !intStrata.empty()) {
-                                size_t sIdx = fusion::metrics::AssignStratumIndex(elevation, intStrata);
-                                auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                                extras.strataIntensities[sIdx].push_back(static_cast<float>(pt.intensity));
-                            }
-
-                            if (elevation >= opts.minHt) {
-                                cell.returnsAboveMinHt++;
-                                cell.elevations.push_back(static_cast<float>(elevation));
-                                if (!opts.noIntensity) {
-                                    cell.intensities.push_back(static_cast<float>(pt.intensity));
-                                }
-                                if (!spectralSelection.channels.empty()) {
-                                    auto& extras = cell.EnsureExtras(numStrataBuckets, numIntStrataBuckets);
-                                    for (const auto& spec : spectralSelection.channels) {
-                                        extras.spectralValues[spec.prefix].push_back(static_cast<float>(pt.*(spec.field)));
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    reader.Close();
+                    }
                 }
             }
-        }
+        });
+        if (!pointsRead) return false;
 
         size_t numCells = static_cast<size_t>(cols) * rows;
         float ND = opts.nodataValue;
