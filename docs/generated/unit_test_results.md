@@ -29,6 +29,8 @@ TileCellForPoint tests
   all passed
 ResolveProjectExtent tests
   all passed
+PipelineState tests
+  all passed
 
 All fusion_tests passed.
 ```
