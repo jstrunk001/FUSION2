@@ -103,6 +103,25 @@ int RunStageRegistryTests() {
     CHECK(!fusion::batch::ValidateStageChain({"canopymodel", "nosuchstage"}, chainError), failures);
     CHECK(!fusion::batch::ValidateStageChain({}, chainError), failures);
 
+    //7. /gpu and /nogpu forwarding for canopymodel and gridmetrics
+    const auto* cm = fusion::batch::FindStage("canopymodel");
+    const auto* gm = fusion::batch::FindStage("gridmetrics");
+    CHECK(cm != nullptr, failures);
+    CHECK(gm != nullptr, failures);
+    if (cm && gm) {
+        std::unordered_map<std::string, std::string> gpuOpts = {{"gpu", "true"}};
+        auto cmGpuArgs = cm->buildArgs(input, dem, outputPath, gpuOpts);
+        auto gmGpuArgs = gm->buildArgs(input, dem, outputPath, gpuOpts);
+        CHECK(HasArg(cmGpuArgs, "/gpu"), failures);
+        CHECK(HasArg(gmGpuArgs, "/gpu"), failures);
+
+        std::unordered_map<std::string, std::string> noGpuOpts = {{"nogpu", "true"}};
+        auto cmNoGpuArgs = cm->buildArgs(input, dem, outputPath, noGpuOpts);
+        auto gmNoGpuArgs = gm->buildArgs(input, dem, outputPath, noGpuOpts);
+        CHECK(HasArg(cmNoGpuArgs, "/nogpu"), failures);
+        CHECK(HasArg(gmNoGpuArgs, "/nogpu"), failures);
+    }
+
     if (failures == 0) std::cout << "  all passed\n";
     return failures;
 }
