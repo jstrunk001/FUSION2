@@ -24,6 +24,17 @@ struct TileGridSpec {
     double resolution{1.0};
 };
 
+// One input file a tile reads points from. splitPath is empty when the
+// tile reads the input file itself; otherwise it names a temporary file
+// holding the input file's points that fall in the tile's buffered extent,
+// written by SplitInputsForTiles (see TilePointSource.h) so that an input
+// file shared by several tiles is decompressed once rather than once per
+// tile.
+struct TileInputSource {
+    std::filesystem::path inputFile;
+    std::filesystem::path splitPath;
+};
+
 struct TileInfo {
     int tileID{0};
     std::string name;
@@ -35,6 +46,15 @@ struct TileInfo {
     double bufferedMaxX{0.0};
     double bufferedMinY{0.0};
     double bufferedMaxY{0.0};
+
+    // Set by BatchPipeline before the tile task runs (see ForEachTilePoint).
+    // inputs lists every input file whose header extent overlaps the
+    // buffered extent, in input-file order. inputsFailed is true when
+    // splitting a shared input file for this tile failed, so the tile's
+    // points are incomplete and the tile must fail.
+    bool inputsAssigned{false};
+    bool inputsFailed{false};
+    std::vector<TileInputSource> inputs;
 };
 
 class TileGridManager {
@@ -123,13 +143,29 @@ struct PipelineJobOptions {
     // tile task so individual tile GeoTIFFs, and downstream VRT / merged
     // rasters, carry the spatial reference.
     std::string projectionWKT;
+
+    // Folder for the temporary per-tile point files written when an input
+    // file is shared by several tiles (see ExecutePipeline). Empty means
+    // <outputDir>/_tile_points.
+    std::filesystem::path splitDir;
 };
 
 class BatchPipeline {
 public:
     BatchPipeline(TileGridSpec gridSpec, PipelineJobOptions jobOptions);
 
-    bool ExecutePipeline(const std::function<bool(const TileInfo& tile, const PipelineJobOptions& opts)>& tileTask);
+    // Runs tileTask on every tile with numThreads workers. Tiles are run in
+    // blocks of neighbouring tiles. Before each block runs, every plain
+    // LAS/LAZ input file that overlaps two or more of the block's tiles is
+    // read once and its points copied into one temporary file per tile, so
+    // a tile task reading its points with ForEachTilePoint never
+    // decompresses a file that another tile in the block already read.
+    // The block's temporary files are removed once its tiles finish.
+    // needsPoints, when given, says which tiles will read points at all
+    // (pipeline skips tiles that are filtered out or already clipped);
+    // other tiles are not given split files.
+    bool ExecutePipeline(const std::function<bool(const TileInfo& tile, const PipelineJobOptions& opts)>& tileTask,
+                         const std::function<bool(const TileInfo& tile)>& needsPoints = {});
 
     const std::vector<std::filesystem::path>& GetGeneratedTileRasters() const { return m_tileRasterPaths; }
     std::filesystem::path GetVRTPath() const { return m_vrtPath; }

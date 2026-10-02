@@ -15,6 +15,7 @@ int RunPointDensityTests();
 int RunTileCellTests();
 int RunProjectExtentTests();
 int RunPipelineStateTests();
+int RunTilePointSourceTests();
 
 int main() {
     int failures = 0;
@@ -33,6 +34,7 @@ int main() {
     failures += RunTileCellTests();
     failures += RunProjectExtentTests();
     failures += RunPipelineStateTests();
+    failures += RunTilePointSourceTests();
 
     if (failures == 0) {
         std::cout << "\nAll fusion_tests passed.\n";

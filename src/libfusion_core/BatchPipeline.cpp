@@ -1,4 +1,5 @@
 #include "fusion/batch/BatchPipeline.h"
+#include "fusion/batch/TilePointSource.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/table/TableWriter.h"
@@ -131,15 +132,13 @@ BatchPipeline::BatchPipeline(TileGridSpec gridSpec, PipelineJobOptions jobOption
     std::filesystem::create_directories(m_options.outputDir);
 }
 
-bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& tile, const PipelineJobOptions& opts)>& tileTask) {
+bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& tile, const PipelineJobOptions& opts)>& tileTask,
+                                    const std::function<bool(const TileInfo& tile)>& needsPoints) {
     std::cout << "[BatchPipeline] Starting batch processing for " << m_tiles.size()
               << " tiles with " << m_options.numThreads << " parallel workers...\n";
 
     std::atomic<size_t> completedTiles{0};
-    std::atomic<size_t> currentIdx{0};
     size_t totalTiles = m_tiles.size();
-
-    std::vector<std::thread> workers;
     int workerCount = std::max(1, m_options.numThreads);
 
     // (tileID, path) so the table concatenation below can sort into a
@@ -149,38 +148,73 @@ bool BatchPipeline::ExecutePipeline(const std::function<bool(const TileInfo& til
     std::vector<std::pair<int, std::filesystem::path>> tileTablesByID;
     std::string tableExt = m_options.outputTablePath.extension().string();
 
-    for (int w = 0; w < workerCount; ++w) {
-        workers.emplace_back([this, &tileTask, &currentIdx, &completedTiles, totalTiles, &tileTablesByID, &tableExt]() {
-            while (true) {
-                size_t idx = currentIdx.fetch_add(1);
-                if (idx >= totalTiles) break;
-
-                const auto& tile = m_tiles[idx];
-                bool success = tileTask(tile, m_options);
-
-                if (success) {
-                    std::lock_guard<std::mutex> lock(m_mutex);
-                    std::filesystem::path tileRaster = m_options.outputDir / (tile.name + ".tif");
-                    if (std::filesystem::exists(tileRaster)) {
-                        m_tileRasterPaths.push_back(tileRaster);
-                    }
-                    if (!tableExt.empty()) {
-                        std::filesystem::path tileTable = m_options.outputDir / (tile.name + tableExt);
-                        if (std::filesystem::exists(tileTable)) {
-                            tileTablesByID.emplace_back(tile.tileID, tileTable);
-                        }
-                    }
-                }
-
-                size_t comp = completedTiles.fetch_add(1) + 1;
-                std::cout << "[BatchPipeline] Progress: " << comp << "/" << totalTiles
-                          << " (" << (comp * 100 / totalTiles) << "%) completed.\n";
-            }
-        });
+    //1. group tiles into blocks of neighbours that share input files
+    std::vector<InputFileInfo> inputFiles = ScanInputFiles(m_options.inputPointCloudDir);
+    std::vector<std::vector<TileInfo>> blocks = GroupTilesIntoBlocks(m_tiles, m_gridSpec, inputFiles);
+    std::filesystem::path splitDir = m_options.splitDir.empty() ? (m_options.outputDir / "_tile_points") : m_options.splitDir;
+    if (blocks.size() > 1) {
+        std::cout << "[BatchPipeline] Running tiles in " << blocks.size() << " blocks; each input file shared by tiles in a block is read once per block.\n";
     }
 
-    for (auto& worker : workers) {
-        if (worker.joinable()) worker.join();
+    for (size_t b = 0; b < blocks.size(); ++b) {
+        std::vector<TileInfo>& blockTiles = blocks[b];
+
+        //2. read each shared input file once, into one split file per tile
+        std::vector<bool> tileNeedsPoints(blockTiles.size(), true);
+        if (needsPoints) {
+            for (size_t t = 0; t < blockTiles.size(); ++t) tileNeedsPoints[t] = needsPoints(blockTiles[t]);
+        }
+        std::string splitError;
+        if (!SplitInputsForTiles(blockTiles, inputFiles, tileNeedsPoints, splitDir, m_options.numThreads, splitError)) {
+            std::cerr << "Error: " << splitError << "\n";
+        }
+
+        //3. run the block's tiles on the worker threads
+        std::atomic<size_t> currentIdx{0};
+        size_t blockSize = blockTiles.size();
+        std::vector<std::thread> workers;
+        for (int w = 0; w < workerCount; ++w) {
+            workers.emplace_back([this, &tileTask, &blockTiles, &currentIdx, &completedTiles, blockSize, totalTiles, &tileTablesByID, &tableExt]() {
+                while (true) {
+                    size_t idx = currentIdx.fetch_add(1);
+                    if (idx >= blockSize) break;
+
+                    const auto& tile = blockTiles[idx];
+                    bool success = tileTask(tile, m_options);
+
+                    if (success) {
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        std::filesystem::path tileRaster = m_options.outputDir / (tile.name + ".tif");
+                        if (std::filesystem::exists(tileRaster)) {
+                            m_tileRasterPaths.push_back(tileRaster);
+                        }
+                        if (!tableExt.empty()) {
+                            std::filesystem::path tileTable = m_options.outputDir / (tile.name + tableExt);
+                            if (std::filesystem::exists(tileTable)) {
+                                tileTablesByID.emplace_back(tile.tileID, tileTable);
+                            }
+                        }
+                    }
+
+                    size_t comp = completedTiles.fetch_add(1) + 1;
+                    std::cout << "[BatchPipeline] Progress: " << comp << "/" << totalTiles
+                              << " (" << (comp * 100 / totalTiles) << "%) completed.\n";
+                }
+            });
+        }
+
+        for (auto& worker : workers) {
+            if (worker.joinable()) worker.join();
+        }
+
+        //4. remove the block's split files before the next block writes its own
+        RemoveSplitFiles(blockTiles);
+    }
+    {
+        std::error_code ec;
+        if (std::filesystem::is_directory(splitDir, ec) && std::filesystem::is_empty(splitDir, ec)) {
+            std::filesystem::remove(splitDir, ec);
+        }
     }
 
     std::cout << "[BatchPipeline] All tile tasks finished. Processed " << m_tileRasterPaths.size() << " rasters.\n";

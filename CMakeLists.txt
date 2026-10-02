@@ -68,6 +68,7 @@ add_library(fusion_core STATIC
     src/libfusion_core/SpectralChannels.cpp
     src/libfusion_core/COPCIndex.cpp
     src/libfusion_core/BatchPipeline.cpp
+    src/libfusion_core/TilePointSource.cpp
     src/libfusion_core/StatusMessenger.cpp
     src/libfusion_core/ExperimentalMetrics.cpp
     src/libfusion_core/ProcessRunner.cpp
@@ -227,6 +228,7 @@ add_executable(fusion_tests
     tests/cpp/test_point_density.cpp
     tests/cpp/test_argument_parser.cpp
     tests/cpp/test_tile_cell.cpp
+    tests/cpp/test_tile_point_source.cpp
     tests/cpp/test_pipeline_state.cpp
 )
 target_link_libraries(fusion_tests PRIVATE fusion_core)
