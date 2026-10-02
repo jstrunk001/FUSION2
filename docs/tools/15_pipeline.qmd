@@ -31,7 +31,7 @@ on each.
 | `/pipeline` | `groundfilter,canopymodel,canopymaxima` | The tools to run on each tile, in order. `/tool:<name>` runs a single tool. |
 | `/input` | `TC_1372_forest200ft.laz` | A LAS/LAZ file or a folder of them. |
 | `/output` | `out/pipeline` | Folder for the stitched results. |
-| `/extent` | the tile's bounds | The area to tile, as lower-left X, lower-left Y, upper-right X, upper-right Y. |
+| `/extent` | the tile's bounds | The area to tile, as lower-left X, lower-left Y, upper-right X, upper-right Y. Optional: without it, `pipeline` uses the input's extent snapped outward to `/cellsize` (@sec-pipeline-chain). It is given here so the tiles start at the example tile's own corner, on the same grid as the single-run outputs they are compared with. |
 | `/tilesize` | `100,100` | Tile width and height, 100 ft. |
 | `/buffer` | `20` | Extra points read around each tile, 20 ft. |
 | `/cellsize` | `3` | Passed on to every stage that accepts it. |
@@ -80,3 +80,58 @@ single-run canopy model within a median of 0.5 ft, and that no tree top
 is duplicated across tile seams.
 
 {{< include ../examples/fragments/pipeline_checks.md >}}
+
+## Tree tops and crowns from one canopy model {#sec-pipeline-chain}
+
+### What it does
+
+A stage that reads a raster uses the most recent raster produced earlier
+in the chain, not only one from the stage directly before it. In
+`canopymodel,canopymaxima,treeseg`, `canopymaxima` writes a table, so
+`treeseg` reads `canopymodel`'s canopy model. Each tile's canopy model is
+built once and feeds both tree-top detection and crown segmentation.
+
+The example gives the ground surface from `groundfilter`'s run
+(@sec-groundfilter) with `/ground:`, since no `groundfilter` stage runs
+in this chain, and leaves out `/extent`. The tiles then cover the input's
+extent snapped outward to the 3 ft cell size, which takes nine 100 ft
+tiles.
+
+`pipeline` joins each table stage's per-tile tables in tile order, not in
+the order the tiles finish. The chain is run twice, with 4 threads and
+with 1, and the two runs' tables come out identical byte for byte.
+
+### Example commands
+
+{{< include ../examples/fragments/pipeline_chain_commands.md >}}
+
+### Outputs
+
+- **`canopymodel.vrt`** and, with `/merge`, **`canopymodel_merged.tif`**:
+  the stitched canopy model.
+- **`canopymaxima_all.csv`**: every tile's tree tops, filtered to each
+  tile's own area.
+- **`treeseg.vrt`**, **`treeseg_merged.tif`**: the stitched crown
+  raster.
+- **`treeseg_table_all.csv`**: every tile's crown table. Unlike the tree
+  tops, it also lists crowns that lie in a tile's buffer, so a crown near
+  a tile boundary can appear in two tiles' rows (@sec-many-tiles).
+
+### Results
+
+@fig-pipeline-chain shows the stitched canopy model with the crown
+outlines and tree tops. Crown outlines surround the tree tops across the
+tile boundaries.
+
+{{< include ../examples/fragments/pipeline_chain_figures.md >}}
+
+### Checks
+
+@tbl-checks-pipeline-chain confirms that every tile ran each of the three
+stages once, so the canopy model was built once per tile. Every crown's
+maximum height is a height in its own tile's canopy model, which shows
+that `treeseg` read the canopy model. No tree top or crown exceeds the
+tallest point above ground. The joined tables list tiles in ascending
+order and are identical at 4 threads and at 1.
+
+{{< include ../examples/fragments/pipeline_chain_checks.md >}}

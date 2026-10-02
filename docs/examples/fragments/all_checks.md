@@ -157,10 +157,66 @@
 | pipeline | four tiles processed | hard | pass | 4 | 4 |
 | pipeline | mosaicked canopy model written | hard | pass | canopymodel_​merged.tif | a canopymodel .tif or .vrt |
 | pipeline | mosaicked CHM: raster sits on the tile's real coordinates | hard | pass | 1023755.00,​ 1023956.00,​  59... | 1023755.00,​ 1023954.98,​  59... |
-| pipeline | mosaicked CHM matches single-run CHM (median diff < 0.5 ft) | hard | pass | 0.217 | < 0.5 ft |
+| pipeline | mosaicked CHM matches single-run CHM (median diff < 0.5 ft) | hard | pass | 0.204 | < 0.5 ft |
 | pipeline | no mosaicked CHM cell exceeds the tallest point above ground | hard | pass | 0 | 0 |
 | pipeline | combined tree tops table written | hard | pass | 1 | >= 1 |
 | pipeline | no duplicate tree tops across tile seams | hard | pass | 0 | 0 |
+| gridmetrics | gridmetrics DSM raster: exits with status 0 | hard | pass | 0 | 0 |
+| gridmetrics | gridmetrics CHM raster: exits with status 0 | hard | pass | 0 | 0 |
+| gridmetrics | DSM raster: metrics raster written | hard | pass | naip3d_​dsm_​gridmetrics.tif | naip3d_​dsm_​gridmetrics.tif |
+| gridmetrics | DSM raster: metrics table written | hard | pass | naip3d_​dsm_​table.csv | naip3d_​dsm_​table.csv |
+| gridmetrics | DSM raster: grid covers the raster's extent | hard | pass | 425750,​  426250,​ 5180750,​ 5... | 425750,​  426250,​ 5180750,​ 5... |
+| gridmetrics | DSM raster: grid has the expected rows x columns | hard | pass | 25x25 | 25x25 |
+| gridmetrics | DSM raster metrics raster: coordinate system attached | soft | pass | present | present |
+| gridmetrics | DSM raster: no intensity bands (a raster has no intensity) | hard | pass | 0 | 0 |
+| gridmetrics | DSM raster: per-cell pixel counts match R | hard | pass | 0 | 0 mismatched cells |
+| gridmetrics | DSM raster: elev_​max matches R in every cell (within 0.01 m) | hard | pass | 0.0001 | < 0.01 |
+| gridmetrics | DSM raster: elev_​mean matches R in every cell (within 0.0... | hard | pass | 0.0001 | < 0.01 |
+| gridmetrics | CHM raster: metrics raster written | hard | pass | meta_​chm_​gridmetrics.tif | meta_​chm_​gridmetrics.tif |
+| gridmetrics | CHM raster: metrics table written | hard | pass | meta_​chm_​table.csv | meta_​chm_​table.csv |
+| gridmetrics | CHM raster: grid covers the raster's extent | hard | pass | 425750,​  426250,​ 5180750,​ 5... | 425750,​  426250,​ 5180750,​ 5... |
+| gridmetrics | CHM raster: grid has the expected rows x columns | hard | pass | 25x25 | 25x25 |
+| gridmetrics | CHM raster metrics raster: coordinate system attached | soft | pass | present | present |
+| gridmetrics | CHM raster: no intensity bands (a raster has no intensity) | hard | pass | 0 | 0 |
+| gridmetrics | CHM raster: per-cell pixel counts match R | hard | pass | 0 | 0 mismatched cells |
+| gridmetrics | CHM raster: elev_​max matches R in every cell (within 0.00... | hard | pass | 0 | < 0.001 |
+| gridmetrics | CHM raster: elev_​mean matches R in every cell (within 0.0... | hard | pass | 0 | < 0.001 |
+| gridmetrics | /​profile: timing table lists every section | hard | pass | 6 | 6 |
+| gridmetrics | /​profile: sections add up to the total (within 0.003 s) | hard | pass | 0.353 | 0.352 |
+| gridmetrics | gridmetrics batch: exits with status 0 | hard | pass | 0 | 0 |
+| gridmetrics | gridmetrics batch,​ /​extent off the data: stops with a non... | hard | pass | 1 | > 0 |
+| gridmetrics | /​extent off the data: error message names the files' extent | hard | pass | message given | message given |
+| gridmetrics | batch virtual raster written | hard | pass | project_​gridmetrics.vrt | project_​gridmetrics.vrt |
+| gridmetrics | no /​extent: grid is the input's extent snapped to the cel... | hard | pass | 1023750,​ 1023960,​  598870,​ ... | 1023750,​ 1023960,​  598870,​ ... |
+| gridmetrics | batch virtual raster: coordinate system attached | soft | pass | present | present |
+| gridmetrics | virtual raster band names match the tile rasters' | hard | pass | elev_​min,​elev_​max,​elev_​mean | elev_​min,​elev_​max,​elev_​mean |
+| gridmetrics | /​merge GeoTIFF written | hard | pass | project_​gridmetrics_​merged.tif | project_​gridmetrics_​merged.tif |
+| gridmetrics | /​merge GeoTIFF band names match the tile rasters' | hard | pass | elev_​min,​elev_​max,​elev_​mean | elev_​min,​elev_​max,​elev_​mean |
+| gridmetrics | returns summed over all cells equal the point count | hard | pass | 70286 | 70286 |
+| gridmetrics | per-cell return counts match R,​ including along tile seams | hard | pass | 0 | 0 mismatched cells |
+| gridmetrics | positional ground applied: no elev_​max cell above the tal... | hard | pass | 0 cells; max 177.83 | 0 cells above 181.06 ft |
+| gridmetrics | elev_​max matches R's tallest height per cell (median unde... | hard | pass | 0 | < 0.1 ft |
+| gridmetrics | /​strataraster: one count band per height layer | hard | pass | 6 | 6 |
+| gridmetrics | /​strataraster: layer counts add to each cell's returns | hard | pass | 0 | 0 mismatched cells |
+| gridmetrics | batch table written | hard | pass | gridmetrics_​batch_​table.csv | gridmetrics_​batch_​table.csv |
+| gridmetrics | batch table has one row per cell | hard | pass | 441 | 441 |
+| gridmetrics | batch table's TotalReturns sum to the point count | hard | pass | 70286 | 70286 |
+| pipeline | pipeline chain,​ 4 threads: exits with status 0 | hard | pass | 0 | 0 |
+| pipeline | pipeline chain,​ 1 thread: exits with status 0 | hard | pass | 0 | 0 |
+| pipeline | chain run state table written | hard | pass | pipeline_​state.csv | pipeline_​state.csv |
+| pipeline | chain accepted: every tile ran canopymodel,​ canopymaxima,​... | hard | pass | 27 | 27 |
+| pipeline | canopy model built once per tile | hard | pass | 1 | 1 |
+| pipeline | no tile x stage failed | hard | pass | done | done |
+| pipeline | stitched canopy model written | hard | pass | canopymodel_​merged.tif | canopymodel_​merged.tif |
+| pipeline | joined tree tops table written | hard | pass | canopymaxima_​all.csv | canopymaxima_​all.csv |
+| pipeline | joined crown table written | hard | pass | treeseg_​table_​all.csv | treeseg_​table_​all.csv |
+| pipeline | every crown's MaxHeight is a height in its tile's canopy ... | hard | pass | 0 | 0 crowns |
+| pipeline | no crown exceeds the tallest point above ground | hard | pass | 177.83 | <= 181.06 ft |
+| pipeline | no tree top exceeds the tallest point above ground | hard | pass | 177.83 | <= 181.06 ft |
+| pipeline | tree tops table rows are in tile order | hard | pass | 1,​2,​4,​5,​7,​8 | ascending |
+| pipeline | crown table rows are in tile order | hard | pass | 1,​2,​3,​4,​5,​6,​7,​8,​9 | ascending |
+| pipeline | canopymaxima_​all.csv: identical at 4 and 1 threads | hard | pass | e74940ea | e74940ea |
+| pipeline | treeseg_​table_​all.csv: identical at 4 and 1 threads | hard | pass | 62bc0fd7 | 62bc0fd7 |
 
 : Every automated check on the example run, in the order it ran. {#tbl-all-checks}
 

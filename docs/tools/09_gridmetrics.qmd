@@ -12,7 +12,10 @@ to map those attributes across a whole project area.
 
 `gridmetrics` runs on one file, as here, or on a whole folder of tiles in
 a batch mode that tiles, buffers, and processes them in parallel
-(@sec-many-tiles). @sec-metrics defines every metric.
+(@sec-gridmetrics-batch). It also accepts a surface raster, such as a
+photogrammetric surface model or a canopy height model, in place of a
+point cloud (@sec-gridmetrics-surface). @sec-metrics defines every
+metric.
 
 ## Example commands
 
@@ -29,21 +32,12 @@ a batch mode that tiles, buffers, and processes them in parallel
 | `/strataraster` | | Write the per-layer summaries as raster bands, not only as table columns. |
 | `/surfstats` | | Add `surface_area_ratio` and `roughness` bands computed from the highest return in each cell (@sec-gridsurfacestats). |
 | `/output-table` | `out/gridmetrics/gridmetrics_table.csv` | Also write every metric as a CSV table, one row per cell. |
-| `/profile` | | Print high-resolution execution timing breakdown (data read & decompression, spatial binning & ground interpolation, metric computation, and raster serialization) to stderr. |
 
 : Options used in the `gridmetrics` example. {#tbl-options-gridmetrics}
 
 Options left at their defaults include `/minht:2` (returns below 2 ft
 are left out of the height statistics), `/nodata:NA`, and `/noheight:0`
 (@sec-conventions).
-
-## Native Raster DSM Ingestion
-
-In addition to point cloud files (`.las`, `.laz`), `gridmetrics` natively ingests high-resolution Digital Surface Model (DSM) rasters (`.tif`, `.tiff`, `.vrt`, `.img`):
-
-- **Scanline Streaming**: Rasters are processed in 512-row scanline chunks using `GDALRaster::ReadBandWindow`, bounding host memory consumption under 250 MB regardless of raster tile size.
-- **Bilinear Ground Subtraction**: Ground elevations from the DTM are evaluated at continuous fine-pixel centers via bilinear interpolation, ensuring sub-pixel vertical accuracy.
-- **Metric Parity**: Normalized pixel heights feed into standard `CellAccumulator` bins and `ComputePointStatBundle`, producing identical multi-band GeoTIFF metric rasters and CSV tables.
 
 ## Outputs
 
@@ -84,3 +78,176 @@ tallest point, and that the table has one row per cell and agrees with
 the raster.
 
 {{< include ../examples/fragments/gridmetrics_checks.md >}}
+
+## Surface rasters as input {#sec-gridmetrics-surface}
+
+### What it does
+
+`gridmetrics` also accepts a surface raster in place of a point cloud:
+a photogrammetric digital surface model (DSM) built from aerial imagery,
+or a canopy height model from any source. This puts image-based and
+model-based height sources through the same metrics as lidar, so they
+can be compared cell for cell or used in the same plot models.
+
+Each valid pixel counts as one return, placed at the pixel's centre.
+Pixels holding the raster's nodata value are skipped. Given a ground
+raster, a pixel's height is its surface value minus the ground elevation
+at the pixel centre, interpolated from the four nearest ground cells;
+pixels with no ground value underneath are skipped. Without a ground
+raster, the pixel values are used as heights directly, which is right
+for a canopy height model. The raster is read 512 rows at a time, so a
+large raster is never held in memory all at once.
+
+The example uses a different site from the rest of this manual: a
+500 x 500 m area of a western Washington forest (the Grays Harbor site
+in FUSION2-examples), in metres. The first run reads a 1 m surface model
+built from WA State NAIP3D imagery and subtracts a 1 m USGS lidar ground
+model. The second reads a 1 m canopy height model of the same area
+predicted from imagery by Meta, with no ground raster.
+
+### Example commands
+
+{{< include ../examples/fragments/gridmetrics_surface_commands.md >}}
+
+### Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (first input) | `naip3d_dsm.tif` | The surface raster. Band 1 is read. |
+| (second input) | `usgs_lidar_dtm.tif` | Ground raster to subtract. Leave it out when the raster already holds heights above ground. |
+| `/cellsize` | `20` | Cell size, 20 m. A whole multiple of the pixel size gives every cell the same number of pixels (400 here). |
+| `/minht` | `2` | Pixels below 2 m are left out of the height statistics. |
+| `/profile` | | After the run, print how long each part of it took (@tbl-gridmetrics-profile). |
+
+: Options used in the surface-raster example. {#tbl-options-gridmetrics-surface}
+
+Every other single-file option works as it does for points, with three
+differences. A raster has no intensity, so the `int_*` bands are left
+out. Every pixel counts as a first return, so `FirstReturns` equals
+`TotalReturns` and all pixels fall in `r1count`. `point_density` is
+pixels per square unit, which reflects only the pixel size. Batch mode
+(@sec-gridmetrics-batch) reads point files only, so surface rasters are
+processed one file at a time.
+
+### Outputs
+
+- **`naip3d_dsm_gridmetrics.tif`** and **`meta_chm_gridmetrics.tif`**:
+  one multiband GeoTIFF per run, named after the input raster, with 57
+  bands. The grid starts at the raster's top-left corner and carries the
+  raster's coordinate system.
+- **`naip3d_dsm_table.csv`** and **`meta_chm_table.csv`**: the per-cell
+  tables requested with `/output-table`.
+- With `/profile`, a timing table printed to the console after the run.
+
+### Results
+
+@fig-gridmetrics-surface compares the 95th-percentile height from the
+two sources. Both show the same tall stands. The Meta model reads lower
+than the NAIP3D surface across most of the area, and close to zero in
+the band of short vegetation across the middle, where the NAIP3D surface
+shows several metres of height.
+
+{{< include ../examples/fragments/gridmetrics_surface_figures.md >}}
+
+@tbl-gridmetrics-profile shows the `/profile` timings for the NAIP3D
+run. On a raster this small, writing the GeoTIFF and table takes most of
+the time. On large inputs, the timings show whether reading the input,
+assigning pixels or points to cells, computing metrics, or writing the
+outputs is the step to speed up.
+
+{{< include ../examples/fragments/gridmetrics_surface_profile.md >}}
+
+### Checks
+
+The reference values for these checks come from the `terra` R package:
+the same pixel centres, the same ground raster sampled at each one, and
+the heights grouped into the same 20 m cells. @tbl-checks-gridmetrics-surface
+confirms that both grids cover the input raster with 25 x 25 cells, that
+every cell holds the same number of pixels as in R, and that maximum and
+mean height match R in every cell. They match within 0.01 m when the
+ground is interpolated, and exactly for the canopy height model. The
+check also confirms that the `/profile` table lists every part of the
+run and that the parts add up to the total.
+
+{{< include ../examples/fragments/gridmetrics_surface_checks.md >}}
+
+## Batch mode on a folder of tiles {#sec-gridmetrics-batch}
+
+### What it does
+
+Given a folder instead of a file, `gridmetrics` treats every LAS/LAZ
+file in it as one project. It divides the project area into processing
+tiles, reads each tile's points plus a buffer of its neighbours' points,
+computes the metrics for several tiles at once, and joins the tile
+rasters into one virtual raster (`.vrt`). Each point is counted by
+exactly one tile, so the buffer never doubles the returns along tile
+edges. @sec-many-tiles compares batch mode with `pipeline`.
+
+Without `/extent`, the project area is the input files' combined extent,
+snapped outward to whole cells. With an `/extent` that no input file
+overlaps, the run stops with an error that names where the files
+actually are. The ground raster can be given as the second argument, as
+in single-file mode, or with `/ground:`. A ground raster that cannot be
+opened stops the run before any tile is processed.
+
+The example runs batch mode on a folder holding the example tile, cut
+into 100 ft tiles. Snapped outward to 10 ft cells, the tile's
+200 x 200 ft area becomes 210 x 210 ft, so the run uses nine tiles. A
+second command gives an `/extent` that misses the data.
+
+### Example commands
+
+{{< include ../examples/fragments/gridmetrics_batch_commands.md >}}
+
+### Options used
+
+| Option | Value | What it does |
+|:--------|:--------------------|:-------------------------|
+| (first input) | `out/gridmetrics_batch_input` | A folder of LAS/LAZ files. A folder, rather than a file, selects batch mode. |
+| (second input) | `out/ground_dem.tif` | Ground raster. `/ground:` works too. |
+| `/outdir` | `out/gridmetrics_batch` | Folder for the tile rasters, the virtual raster, and the log. |
+| `/tilesize` | `100,100` | Processing tile width and height, 100 ft. |
+| `/buffer` | `20` | Extra points read around each tile, 20 ft. |
+| `/threads` | `2` | Number of tiles processed at once. |
+| `/strata`, `/strataraster` | `0.5,2,5,10,20` | Per-layer summaries, written as raster bands as well as table columns. |
+| `/output-table` | `.../gridmetrics_batch_table.csv` | Write each tile's table, then join them in tile order into this one table. |
+| `/merge` | | Also copy the virtual raster into one GeoTIFF. |
+| `/extent` | `0,0,1000,1000` | Second command only: an area that misses the data, which stops the run. |
+
+: Options used in the batch-mode example. {#tbl-options-gridmetrics-batch}
+
+### Outputs
+
+- **`tile_0001.tif`** to **`tile_0009.tif`**, with a matching
+  `tile_NNNN.csv` for each when `/output-table` is given: one multiband
+  GeoTIFF per processing tile.
+- **`project_gridmetrics.vrt`**: a virtual raster joining the tiles,
+  with the same band names as the tile rasters (`elev_min`, `elev_max`,
+  ...).
+- **`project_gridmetrics_merged.tif`**: with `/merge`, the virtual raster
+  copied into one GeoTIFF, with the same band names.
+- **`gridmetrics_batch_table.csv`**: the joined table, one row per cell.
+- **`gridmetrics_batch.log`**: the run's log.
+
+### Results
+
+@fig-gridmetrics-batch maps maximum height and the returns per cell from
+the joined tiles. The return counts show no stripe along the tile
+boundaries, which would appear if points in a tile's buffer were also
+counted by that tile.
+
+{{< include ../examples/fragments/gridmetrics_batch_figures.md >}}
+
+### Checks
+
+@tbl-checks-gridmetrics-batch confirms that the grid is the tile's
+extent snapped to 10 ft cells, that the virtual raster and merged GeoTIFF
+carry the tiles' band names, and that the returns summed over all cells
+equal the tile's point count, cell by cell against R. It also confirms
+that no maximum height exceeds the tallest point above ground, which
+shows that the ground raster given as the second argument was
+subtracted, and that the per-layer count bands add up to each cell's
+returns. The second command must stop with a non-zero exit status and an
+error message.
+
+{{< include ../examples/fragments/gridmetrics_batch_checks.md >}}

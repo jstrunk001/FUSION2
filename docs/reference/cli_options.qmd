@@ -19,13 +19,13 @@ Calculates statistical elevation, canopy cover, percentile, and experimental met
 ```bash
 gridmetrics <input.las/laz/tif> [optional raster ground path] [other /options]
 ```
-Processes one point cloud file or high-resolution DSM raster (`.tif`, `.tiff`, `.vrt`, `.img`), writing its raster(s) and CSV summary directly into `/outdir`. When input is a raster DSM, `gridmetrics` streams scanlines in 512-row chunks, samples ground elevations with sub-pixel bilinear interpolation, and computes the cell metrics without loading the entire raster into memory. The ground surface DEM can be given either as the second positional argument or via `/ground:<path>` — `/ground` takes precedence if both are given.
+Processes one point cloud file, or one surface raster such as a photogrammetric surface model or a canopy height model, writing its raster(s) into `/outdir`. A file ending in `.tif`, `.tiff`, `.vrt`, `.img`, `.asc`, or `.dem` (or any other non-LAS file the tools' GDAL build can open) is read as a surface raster: each valid pixel of band 1 counts as one return at the pixel's centre, its height is its value minus the ground raster interpolated at that centre (or its value as is, with no ground raster), and the raster is read 512 rows at a time. Raster input writes no intensity bands and counts every pixel as a first return. @sec-gridmetrics-surface has a worked example. The ground surface can be given either as the second positional argument or via `/ground:<path>` — `/ground` takes precedence if both are given.
 
 ### Batch/tiled mode
 ```bash
 gridmetrics <input_directory> [optional raster ground path] /outdir:<dir> [/tilesize:...] [/buffer:...] [/threads:...] [other /options]
 ```
-Tiles and buffers every LAS/LAZ file in the input directory, computes the same grid metrics per tile in parallel (multithreaded, in-process — no child processes), and mosaics the tile rasters into a `.vrt` in `/outdir`. Batch mode always writes one multiband raster per tile (`/output-mode` is ignored, since singleband mode would write many files per tile). With `/output-table`, each tile's table is written in parallel and the tiles are then joined, in tile order, into one project-level table.
+Tiles and buffers every LAS/LAZ file in the input directory, computes the same grid metrics per tile in parallel (multithreaded, in-process — no child processes), and mosaics the tile rasters into `project_gridmetrics.vrt` in `/outdir`, whose bands carry the tile rasters' band names. Each point is counted by exactly one tile, including points in another tile's buffer. Batch mode always writes one multiband raster per tile (`/output-mode` is ignored, since singleband mode would write many files per tile). With `/output-table`, each tile's table is written in parallel and the tiles are then joined, in tile order, into one project-level table.
 
 A COPC (Cloud Optimized Point Cloud) file in the input directory is detected automatically (no separate flag) -- its own chunk index is used to seek directly to the chunks overlapping each tile's buffered extent, instead of reading the whole file sequentially per tile. A plain (non-indexed) LAS/LAZ file is read sequentially. This mainly pays off when the input directory holds one very large regional COPC file rather than pre-tiled LAS/LAZ -- pre-tiled input is already read efficiently without it.
 
@@ -62,7 +62,7 @@ The `elev_*` and `int_*` bands are the full statistic bundle (min, max, mean, st
 - `/strataraster`: With `/strata`, in single-file and batch mode. Also append, per stratum bucket, a return-density band (`density_stratum_00`, ...), a count band (`stratum_00_count`, ...), a proportion band (`stratum_00_proportion`, ...), and the simplified mean/stddev/min/max band set (`stratum_00_mean`, `stratum_00_stddev`, `stratum_00_min`, `stratum_00_max`) to the multiband output -- the same values `/strata` already writes to CSV, just also as raster bands. With `/intstrata` (and `/nointensity` not set), also appends a matching `intstratum_00_count`/`proportion`/`mean`/`stddev`/`min`/`max` band set per bucket -- no density band, since return density is tied to the elevation bucketing above, not to intensity. With `/rgbstrata`, also appends that per-channel mean/stddev/min/max band set.
 - `/nodata:<NA|number>`: Value for cells with zero returns at all (default: `NA`). Applies to every band and, in the CSV export, every column including `TotalReturns`/`FirstReturns`.
 - `/noheight:<NA|number>`: Value for height-dependent bands (`elev_*`, `int_*`, and `/strataraster`'s/`/rgbstrata`'s mean/stddev/min/max bands) when a cell (or stratum bucket) has returns but none clear `/minht`/land in that bucket (default: `0`). Never applied to `canopy_cover`, `point_density`, or `/strataraster`'s own density/count/proportion bands -- those are well-defined directly from the unfiltered return count. If both `/nodata` and `/noheight` are explicitly set to different, non-`NA` values, gridmetrics prints a warning and uses `/nodata`'s value as the GeoTIFF's registered NoData value (GDAL supports only one per file); `/noheight`'s value is still written as an ordinary pixel, just not flagged as NoData by the file header.
-- `/profile`: Single-file mode only. Print a high-resolution execution timing breakdown (isolating data read & decompression, spatial binning & ground interpolation, metric computation, and GeoTIFF raster serialization) to standard error.
+- `/profile`: Single-file mode only. After the run, print to the console how many seconds each part took: reading (and decompressing) the input, assigning points or pixels to cells and looking up the ground, computing the metrics, writing the GeoTIFF and table, and everything else, plus the total.
 
 ---
 
@@ -301,6 +301,8 @@ The following options are forwarded to whichever stage(s) in the chain accept th
 - `/first`, `/nointensity`, `/slope`
 
 If `groundfilter` runs earlier in the chain, its DEM output is passed automatically as `/ground` to any later stage that accepts it (`canopymodel`, `gridmetrics`, `densitymetrics`) -- an explicit `/ground:<path>` is only needed when no `groundfilter` stage precedes it.
+
+A stage that reads a raster uses the most recent raster produced earlier in the chain, so `/pipeline:canopymodel,canopymaxima,treeseg` builds the canopy model once for both later stages (@sec-pipeline-chain). Each table stage's per-tile tables are joined in tile-number order, so the joined tables are the same at any `/threads` setting.
 
 ---
 

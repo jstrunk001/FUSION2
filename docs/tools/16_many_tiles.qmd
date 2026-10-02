@@ -14,7 +14,9 @@ If your workflow is "run gridmetrics across a large area," you don't need `pipel
 gridmetrics D:\project\las_tiles /outdir:D:\project\output\gridmetrics /tilesize:1000,1000 /buffer:50 /threads:8 /cellsize:10 /minht:2
 ```
 
-This tiles and buffers every LAS/LAZ file in `las_tiles`, computes grid metrics per tile in-process (no child processes, no `_processing` subfolder), and mosaics the results into `D:\project\output\gridmetrics\project_gridmetrics.vrt`.
+This tiles and buffers every LAS/LAZ file in `las_tiles`, computes grid metrics per tile in-process (no child processes, no `_processing` subfolder), and mosaics the results into `D:\project\output\gridmetrics\project_gridmetrics.vrt`, whose bands carry the same names as the tile rasters (`elev_max`, `elev_p95`, ...). `/merge` also writes `project_gridmetrics_merged.tif`.
+
+No `/extent` is needed: the project area defaults to the files' combined extent, snapped outward to whole cells, and an `/extent` that misses every file stops the run with an error naming where the files are. Give the ground surface as the second argument (`gridmetrics D:\project\las_tiles D:\project\dtm.tif ...`) or with `/ground:`. Each point is counted by exactly one tile, so the buffer does not double the returns along tile edges. @sec-gridmetrics-batch is a worked example with checks.
 
 ## Single-stage runs of any other tool: `pipeline.exe /tool:<name>`
 
@@ -44,6 +46,8 @@ Output: `groundfilter.vrt`, `canopymodel.vrt`, and `canopymaxima_all.csv` (every
 ```bash
 pipeline /pipeline:groundfilter,canopymodel,treeseg /input:D:\project\las_tiles /output:D:\project\output /minht:2
 ```
+
+To get tree tops and crowns from the same canopy model, put both stages after `canopymodel`: `/pipeline:groundfilter,canopymodel,canopymaxima,treeseg`. `treeseg` reads the canopy model even though `canopymaxima` sits between them, so the canopy model is built once per tile (see the valid-chaining rules below, and @sec-pipeline-chain for a worked example).
 
 Output: `groundfilter.vrt`, `canopymodel.vrt`, `treeseg.vrt` (mosaicked crown-segment rasters), and `treeseg_table_all.csv`. Unlike `canopymaxima`'s table, `treeseg`'s crown-summary table has no per-crown X/Y coordinates, so its rows can't be filtered to each tile's core extent the way `canopymaxima`'s can -- a crown centered in a tile's buffer zone may show up in more than one tile's rows. The `treeseg.vrt` raster itself has no such overlap (it's cropped to core extent before mosaicking); only the table carries this limitation.
 
@@ -92,6 +96,8 @@ tile_0001,canopymodel,failed,_processing/tile_0001/canopymodel.tif,1,2026-09-02T
 ```
 
 This file is both the resume cache and the answer to "what actually happened."
+
+Tiles finish in whatever order the worker threads reach them, but each table stage's joined table (`canopymaxima_all.csv`, `treeseg_table_all.csv`) lists the tiles in tile-number order. Two runs of the same job give identical tables, whatever `/threads` is set to.
 
 ## Resuming and retrying
 

@@ -1,9 +1,12 @@
 # Checks on the example tile {#sec-example-checks}
 
 The worked examples in this manual come from a scripted run of all 15
-tools on the example tile (@sec-example-tile). After running each tool,
-the script checks the tool's output against an independent calculation
-made in R from the same points, using the `lidR`, `terra`, and `sf`
+tools on the example tile (@sec-example-tile). The same run also covers
+`gridmetrics` batch mode and a three-stage `pipeline` chain on the
+example tile, and `gridmetrics` on two surface rasters from a second
+site (@sec-gridmetrics-surface). After running each tool, the script
+checks the tool's output against an independent calculation made in R
+from the same points or pixels, using the `lidR`, `terra`, and `sf`
 packages. Each check asks one of three questions:
 
 1. Was the output written, and does it sit on the tile's real
