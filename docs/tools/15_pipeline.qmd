@@ -43,8 +43,15 @@ on each.
 : Options used in the `pipeline` example. {#tbl-options-pipeline}
 
 Options that belong to individual tools (`/cellsize`, `/minht`, `/class`,
-`/strata`, `/gpu`, and others) are forwarded to whichever stages accept them.
-@sec-cli-options lists every forwarded option.
+`/strata`, `/zmult`, `/zshift`, `/zmult_ground`, `/zshift_ground`, `/gpu`,
+and others) are forwarded to whichever stages accept them. When `/zmult` or
+`/zshift` is supplied, `pipeline` prevents double-scaling across chained
+stages: raster-input stages (`canopymaxima`, `topometrics`, `treeseg`) do
+not re-scale rasters produced earlier in the chain, point-cloud outputs
+from `filterdata`/`thindata` strip `/zmult`/`/zshift` from later stages,
+and stages consuming a `groundfilter` DEM invert its transform via
+`/zmult_ground`/`/zshift_ground` before subtracting. @sec-cli-options
+lists every forwarded option.
 
 ## Outputs
 

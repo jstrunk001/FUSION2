@@ -36,8 +36,11 @@ metric.
 : Options used in the `gridmetrics` example. {#tbl-options-gridmetrics}
 
 Options left at their defaults include `/minht:2` (returns below 2 ft
-are left out of the height statistics), `/nodata:NA`, and `/noheight:0`
-(@sec-conventions).
+are left out of the height statistics), `/nodata:NA`, `/noheight:0`, and
+vertical scaling/offset `/zmult:1.0`, `/zshift:0.0`, `/zmult_ground:1.0`,
+`/zshift_ground:0.0` (@sec-conventions). When `/zmult` or `/zshift` is
+given, `/minht`, `/heightcut`, `/outlier`, and `/strata` thresholds are
+compared in output vertical units after the transform.
 
 ## Outputs
 

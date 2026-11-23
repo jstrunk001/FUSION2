@@ -9,8 +9,9 @@ missing values (`/nodata`, `/noheight`), and table output
 text differ, the help text comes from the tools themselves and is
 current.
 
-Distances, heights, and cell sizes are in the input's own units
-(@sec-conventions).
+Horizontal distances and cell sizes are in the input's own units; vertical
+elevations/heights can be scaled or shifted on the fly with `/zmult`, `/zshift`,
+`/zmult_ground`, and `/zshift_ground` (@sec-conventions).
 
 ## `gridmetrics`
 Calculates statistical elevation, canopy cover, percentile, and experimental metrics across a 2D spatial grid, outputting single-band or multi-band GeoTIFF rasters. Has two modes, chosen by whether the positional input is a file or a directory.
@@ -40,10 +41,14 @@ The `elev_*` and `int_*` bands are the full statistic bundle (min, max, mean, st
 
 ### Options & Flags (both modes, except where noted)
 - `/ground:<path>`: Path to ground surface DEM raster (GeoTIFF, ENVI, IMG).
+- `/zmult:<val>`: Multiply final elevation/height values by this factor (default: `1.0`). Height/elevation thresholds (`/minht`, `/heightcut`, `/outlier`, `/strata`) apply after this transform.
+- `/zshift:<val>`: Add this offset to final elevation/height values after `/zmult` (default: `0.0`). Height/elevation thresholds apply after this transform.
+- `/zmult_ground:<val>`: Multiply `/ground` raster elevation values by this factor before subtracting from point Z (default: `1.0`).
+- `/zshift_ground:<val>`: Add this offset to `/ground` raster elevation values after `/zmult_ground`, before subtracting from point Z (default: `0.0`).
 - `/cellsize:<val>`: Output grid cell size in project units (default: `10.0`).
-- `/minht:<val>`: Minimum height above ground for canopy metrics calculation (default: `2.0`).
-- `/heightcut:<val>`: Height cutoff threshold for canopy cover calculations (defaults to `/minht`).
-- `/outlier:<min,max>`: Trim elevation outliers outside `min,max` values (e.g. `/outlier:-5,150`).
+- `/minht:<val>`: Minimum height above ground for canopy metrics calculation, in output vertical units after `/zmult` and `/zshift` (default: `2.0`).
+- `/heightcut:<val>`: Height cutoff threshold for canopy cover calculations, in output vertical units (defaults to `/minht`).
+- `/outlier:<min,max>`: Trim elevation outliers outside `min,max` values in output vertical units (e.g. `/outlier:-5,150`).
 - `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see @sec-point-filtering.
 - `/first`: Use only first returns for metric calculations.
 - `/all`: Single-file mode only. Use all returns for canopy cover and metric calculations.
@@ -78,7 +83,9 @@ cloudmetrics <input.las/laz or directory> [optional ground DTM file or directory
 ### Options & Flags
 - `/output:<path>`: Output CSV file path (default: `cloud_metrics.csv`).
 - `/ground:<path>`: Path to ground DEM raster for height normalization (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly via an in-memory VRT. May also be supplied as an unflagged second positional argument, in single-file and batch mode alike. A ground raster that cannot be opened stops the run with an error.
-- `/minht:<val>`: Minimum height cutoff for canopy metrics (default: `2.0`).
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to final height/elevation values after `/ground` subtraction (defaults: `1.0`, `0.0`).
+- `/zmult_ground:<val>` / `/zshift_ground:<val>`: Scale and offset applied to `/ground` raster elevations before subtraction (defaults: `1.0`, `0.0`).
+- `/minht:<val>`: Minimum height cutoff for canopy metrics, in output vertical units after `/zmult` and `/zshift` (default: `2.0`).
 - `/cellsize:<val>`: Grid cell size for 2D area/volume metrics (default: `10.0`).
 - `/voxelsize:<val>`: 3D voxel resolution for voxel volume metrics (default: `20.0`).
 - `/exp`: Compute additional experimental metrics from RSForTools.
@@ -110,6 +117,8 @@ canopymodel <input.las/laz or directory> [other /options]
 - `/output:<path>`: Output GeoTIFF CHM file path. **Required.**
 - `/cellsize:<val>`: Output CHM cell size (default: `1.0`).
 - `/ground:<path>`: Path to ground DEM raster file for height normalization, or a directory of DTM tiles to mosaic on the fly.
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to final CHM heights after `/ground` subtraction (defaults: `1.0`, `0.0`).
+- `/zmult_ground:<val>` / `/zshift_ground:<val>`: Scale and offset applied to `/ground` raster elevations before subtraction (defaults: `1.0`, `0.0`).
 - `/slope`: Normalize heights perpendicular to the local terrain slope plane.
 - `/smooth:<n>`: Spatial smoothing window size (e.g. `/smooth:3` for a 3x3 filter).
 - `/gpu`: Enable CUDA GPU acceleration for point cloud rasterization and smoothing filter. Automatically falls back to multi-threaded CPU execution if no compatible CUDA GPU is available.
@@ -129,9 +138,10 @@ The search window's radius at height `H` is `window-a + window-b * H`, in the ca
 
 ### Options & Flags
 - `/output:<path>`: Output CSV file path for tree tops (default: `tree_tops.csv`).
-- `/minht:<val>`: Minimum tree height threshold (default: `2.0`).
+- `/minht:<val>`: Minimum tree height threshold in output vertical units after `/zmult` and `/zshift` (default: `2.0`).
 - `/window-a:<val>`: Window polynomial coefficient A, the constant term (default: `0.5`).
 - `/window-b:<val>`: Window polynomial coefficient B, the linear term (default: `0.05`).
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to CHM raster values before tree-top detection (defaults: `1.0`, `0.0`).
 
 ---
 
@@ -145,7 +155,8 @@ treeseg <input_chm.tif> [other /options]
 ### Options & Flags
 - `/output-raster:<path>`: Output GeoTIFF raster path for tree segments (default: `crown_segments.tif`).
 - `/output-table:<path>`: Output CSV summary table path (default: `crown_summary.csv`).
-- `/minht:<val>`: Minimum height cutoff for segmentation (default: `2.0`).
+- `/minht:<val>`: Minimum height cutoff for segmentation in output vertical units after `/zmult` and `/zshift` (default: `2.0`).
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to CHM raster values before segmentation (defaults: `1.0`, `0.0`).
 
 ---
 
@@ -161,7 +172,7 @@ How it works, in brief:
 2. The fine stage repeats `/iterations` passes on `/filtercell` cells. Each pass fits, per cell, a weighted least-squares plane through the points in that cell and its 8 neighbours. Each point then gets a weight from its residual *v* (elevation minus surface): 1 for *v* ≤ g, 0 for *v* > g + w, and 1 / (1 + (a (*v* − g))^b) in between. Points above the surface lose weight, so the surface sinks through the canopy to the ground.
 3. Points with *v* ≤ g + w against the final surface (or within `/tolerance` of it) are ground. The DEM is each `/cellsize` cell's mean ground elevation. Cells without a ground point are filled outward from their neighbours, so the DEM has no empty cells.
 
-g, w, `/coarsecut`, and `/tolerance` are in the point cloud's vertical units. The defaults follow legacy FUSION.
+g, w, `/coarsecut`, and `/tolerance` are in output vertical units (after `/zmult` and `/zshift`, which default to `1.0` and `0.0`). The defaults follow legacy FUSION.
 
 All points passing `/class`/`/return` are held in memory (about 24 bytes each). For very large inputs, run it per tile through `pipeline`.
 
@@ -178,6 +189,7 @@ All points passing `/class`/`/return` are held in memory (about 24 bytes each). 
 - `/tolerance:<val>`: Classify as ground every point within this distance of the final surface, instead of every point with residual ≤ g + w.
 - `/output-raster:<path>`: Output GeoTIFF ground DEM file path.
 - `/output-points:<path>`: Output LAS/LAZ of the points classified as ground, written with classification 2.
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to point elevations before filtering and output (defaults: `1.0`, `0.0`).
 - `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see @sec-point-filtering. Applied before filtering, so noise (classes 7/18) and withheld returns never shape the ground surface.
 
 ---
@@ -195,8 +207,10 @@ clipdata <input.las/laz or directory> [other /options]
 - `/output:<path>`: Output LAS/LAZ file path. **Required.**
 - `/extent:<LLX,LLY,URX,URY>`: Bounding box to clip to.
 - `/ground:<path>`: Path to ground surface raster (GeoTIFF, ENVI, IMG) or directory of DTM tiles for height normalization.
-- `/minz:<val>`: Minimum height above ground (or elevation, if no `/ground` given).
-- `/maxz:<val>`: Maximum height above ground (or elevation, if no `/ground` given).
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to output point Z and (after `/ground` subtraction) to the `/minz`/`/maxz` height check (defaults: `1.0`, `0.0`).
+- `/zmult_ground:<val>` / `/zshift_ground:<val>`: Scale and offset applied to `/ground` raster elevations before subtraction (defaults: `1.0`, `0.0`).
+- `/minz:<val>`: Minimum height above ground (or elevation, if no `/ground` given), in output vertical units after `/zmult` and `/zshift`.
+- `/maxz:<val>`: Maximum height above ground (or elevation, if no `/ground` given), in output vertical units after `/zmult` and `/zshift`.
 - `/shape:<path.shp>`: Polygon shapefile to clip against, in addition to (not instead of) `/extent` -- both apply if both are given.
 - `/multifile`: With `/shape`. Write one output LAS/LAZ per polygon feature instead of one merged output, into the directory given by `/output`. Each feature's writer is opened lazily on its first matched point, so polygons with no returns don't create empty files.
 - `/field:<name>`: With `/multifile`. Attribute field used to name each output file (`<field-value>.laz`); falls back to a zero-padded feature index when omitted or missing on a feature.
@@ -214,8 +228,9 @@ filterdata <input.las/laz or directory> [other /options]
 
 ### Options & Flags
 - `/output:<path>`: Output filtered LAS/LAZ file path (default: `filtered_output.laz`).
-- `/minz:<val>`: Minimum Z elevation threshold.
-- `/maxz:<val>`: Maximum Z elevation threshold.
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to point Z before `/minz`/`/maxz` filtering and output (defaults: `1.0`, `0.0`).
+- `/minz:<val>`: Minimum Z elevation threshold in output vertical units after `/zmult` and `/zshift`.
+- `/maxz:<val>`: Maximum Z elevation threshold in output vertical units after `/zmult` and `/zshift`.
 - `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see @sec-point-filtering.
 
 ---
@@ -230,6 +245,7 @@ thindata <input.las/laz or directory> [other /options]
 ### Options & Flags
 - `/output:<path>`: Output thinned LAS/LAZ file path (default: `thinned_output.laz`).
 - `/cellsize:<val>`: Grid cell size for 2D spatial thinning (default: `1.0`).
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to retained point Z elevations (defaults: `1.0`, `0.0`).
 - `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering, applied before thinning -- see @sec-point-filtering.
 
 ---
@@ -256,6 +272,7 @@ topometrics <input_dem.tif> [other /options]
 
 ### Options & Flags
 - `/output:<path>`: Output multi-band GeoTIFF raster path (default: `topo_metrics.tif`).
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to DEM elevation values before slope/aspect calculation (defaults: `1.0`, `0.0`). Use `/zmult:0.3048` or `/zmult:3.28084` when vertical and horizontal DEM units differ.
 
 ---
 
@@ -299,8 +316,10 @@ pipeline /pipeline:<stage1,stage2,...> /input:<dir> /output:<dir> [other /option
 - `/merge`: Also merge each raster stage's VRT into a single global GeoTIFF.
 
 The following options are forwarded to whichever stage(s) in the chain accept them (see each stage's own section above for what it does):
-- `/cellsize`, `/minht`, `/heightcut`, `/outlier`, `/class`, `/strata`, `/intstrata`, `/ground`, `/window-a`, `/window-b`, `/smooth`, `/minz`, `/maxz`, `/return`
+- `/cellsize`, `/minht`, `/heightcut`, `/outlier`, `/class`, `/strata`, `/intstrata`, `/ground`, `/window-a`, `/window-b`, `/smooth`, `/minz`, `/maxz`, `/return`, `/zmult`, `/zshift`, `/zmult_ground`, `/zshift_ground`
 - `/first`, `/nointensity`, `/slope`, `/gpu`, `/nogpu`
+
+When `/zmult` or `/zshift` is given, `pipeline` prevents double-scaling across chained stages: raster-input stages (`canopymaxima`, `topometrics`, `treeseg`) do not receive `/zmult`/`/zshift`, a `filterdata` or `thindata` stage clears `/zmult`/`/zshift` for later stages on that tile, and stages consuming an earlier `groundfilter` DEM invert that DEM's transform via `/zmult_ground`/`/zshift_ground` before subtracting.
 
 When `/gpu` is forwarded in `pipeline`, stages supporting GPU acceleration (`canopymodel`, `gridmetrics`) serialize GPU execution across worker threads to prevent device memory contention and thrashing, while CPU stages run in full multi-threaded parallel across `/threads`.
 
@@ -320,6 +339,7 @@ gridsurfacestats <input_surface.tif> [other /options]
 ### Options & Flags
 - `/output:<path>`: Output multi-band GeoTIFF raster path (default: `surface_stats.tif`).
 - `/reference:<path>`: A second surface GeoTIFF, the same cols x rows as the input, to diff against for cut/fill `volume_diff`. Omit to skip cut/fill entirely (2-band output instead of 3).
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to surface (and `/reference`) elevation values (defaults: `1.0`, `0.0`).
 
 The output raster inherits its NoData value directly from the input surface's own registered NoData -- there is no separate `/nodata` option, since a cell already flagged NoData in the source DEM/CHM has no basis for a surface-stats value either.
 
@@ -336,6 +356,8 @@ densitymetrics <input.las/laz or directory> [optional raster ground path] [other
 - `/strata:<h1,h2,...>`: Comma-separated height strata thresholds, same syntax as `gridmetrics`' `/strata` (default: `0.5,2.0,5.0,10.0,20.0`).
 - `/cellsize:<val>`: Output grid cell size in project units (default: `10.0`).
 - `/ground:<path>`: Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly. May also be supplied as an unflagged second positional argument.
+- `/zmult:<val>` / `/zshift:<val>`: Scale and offset applied to heights after `/ground` subtraction before `/strata` bucketing (defaults: `1.0`, `0.0`).
+- `/zmult_ground:<val>` / `/zshift_ground:<val>`: Scale and offset applied to `/ground` raster elevations before subtraction (defaults: `1.0`, `0.0`).
 - `/class:<spec>` / `/return:<spec>`: Point classification and return-number filtering -- see @sec-point-filtering.
 - `/output:<name>`: Base output name (stem) for the raster/CSV files (default: derived from the input filename).
 - `/outdir:<path>`: Output directory for the raster and CSV report (default: `.`).

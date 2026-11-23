@@ -28,6 +28,7 @@ Built bundles are published as **GitHub Release assets**:
    - Reads any GDAL-supported ground surface DEM (GeoTIFF `.tif`, ERDAS Imagine `.img`, ENVI, AAIGrid, etc.).
    - Automatically mosaics directories of ground DTM raster tiles into in-memory virtual rasters (`.vrt`) on the fly across tools accepting ground DEM inputs (`cloudmetrics`, `canopymodel`, `gridmetrics`, `clipdata`, `pipeline`).
    - Outputs single-band or multi-band GeoTIFF rasters with GDAL band descriptions (e.g. `elev_mean`, `elev_p95`, `canopy_cover`, `point_density`).
+   - Supports on-the-fly vertical unit scaling and datum shifting (`/zmult`, `/zshift`) and independent ground DEM scaling/shifting (`/zmult_ground`, `/zshift_ground`) without rewriting source files.
    - Every raster-producing tool (`gridmetrics`, `densitymetrics`, `canopymodel`, `groundfilter`, `returndensity`, `topometrics`, `gridsurfacestats`) can also write its per-cell values as a CSV or SQLite table via `/output-table:<path.csv|.sqlite>`; `/noraster` skips the GeoTIFF entirely and must be paired with `/output-table`, since a run needs at least one output.
 2. **Direct `.las` and `.laz` Point Cloud I/O with Directory Streaming**:
    - Built-in reading and writing of standard `.las` (versions 1.0 - 1.4) and compressed `.laz` point cloud formats using static `LASzip`.

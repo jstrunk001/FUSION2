@@ -113,15 +113,30 @@ Points flagged as withheld in the LAS file are always dropped, whatever
 
 ## Units
 
-The tools do no unit conversion. Every distance, height, and cell size is
-in the input's own units: feet for a point cloud in a feet-based
-projection, meters for one in a meter-based projection. The example tile
-in this manual is in US survey feet, so `/cellsize:10` means 10 ft cells
-and `/minht:2` means 2 ft above ground. On a meter-based tile the same
-commands would mean 10 m cells and 2 m.
+Horizontal distances and cell sizes are always in the input's own units:
+feet for a point cloud in a feet-based projection, meters for one in a
+meter-based projection. The example tile in this manual is in US survey
+feet, so `/cellsize:10` means 10 ft cells and (by default) `/minht:2`
+means 2 ft above ground. On a meter-based tile the same commands would
+mean 10 m cells and 2 m.
 
 Density outputs are points per square unit of the input: points per
 square foot for the example tile.
+
+Vertical elevations and heights default to the input's own units, and
+tools that read elevations or heights accept `/zmult:<factor>` (default
+`1.0`) and `/zshift:<offset>` (default `0.0`). Tools that also accept a
+`/ground` DEM add `/zmult_ground:<factor>` (default `1.0`) and
+`/zshift_ground:<offset>` (default `0.0`), applied to the ground raster
+before subtracting it from point elevations:
+
+$$\text{height}_{\text{out}} = \big(z - (g_z \cdot \text{zmult\_ground} + \text{zshift\_ground})\big) \cdot \text{zmult} + \text{zshift}$$
+
+Vertical thresholds (`/minht`, `/heightcut`, `/outlier`, `/minz`, `/maxz`,
+`/strata`, `/intstrata`, and `groundfilter`'s vertical parameters) are
+evaluated in output vertical units after this transform. For example, on
+a feet-based point cloud, `/zmult:0.3048 /minht:2` converts heights to
+meters and applies a 2 m canopy cutoff.
 
 ## Heights above ground
 
