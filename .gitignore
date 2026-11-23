@@ -58,3 +58,6 @@ _tracking.lock
 
 # Typst source Quarto keeps when rendering the manual with keep-typ
 docs/index.typ
+
+# exploratory logo drafts -- kept local only
+docs/draft_logos/
