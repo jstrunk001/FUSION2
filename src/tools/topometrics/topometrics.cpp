@@ -1,6 +1,7 @@
 // topometrics.cpp : Modernized TopoMetrics Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/table/TableWriter.h"
 
@@ -15,6 +16,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output", "Output multi-band GeoTIFF raster path", "topo_metrics.tif");
     parser.AddOption("output-table", "Also write a multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
+    fusion::cli::ZTransform::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -54,6 +56,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Failed to read DEM band data.\n";
         return 1;
     }
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    zTransform.ApplyToRaster(demData, noData);
 
     std::cout << "[TopoMetrics] Computing slope and aspect surfaces (" << cols << "x" << rows << ")... Cell size: " << cellSize << "\n";
 

@@ -1,6 +1,7 @@
 // thindata.cpp : Modernized ThinData Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
@@ -17,6 +18,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output", "Output thinned LAS/LAZ file path", "thinned_output.laz");
     parser.AddOption("cellsize", "Grid cell size for 2D spatial thinning (same units as the input)", "1.0");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -58,6 +60,7 @@ int main(int argc, char* argv[]) {
 
     std::unordered_set<uint64_t> occupiedCells;
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
 
     while (reader.ReadNextPoint(pt)) {
         if (!pointFilter.Keep(pt)) continue;
@@ -71,6 +74,7 @@ int main(int argc, char* argv[]) {
 
         if (occupiedCells.find(key) == occupiedCells.end()) {
             occupiedCells.insert(key);
+            if (!zTransform.IsIdentity()) pt.z = zTransform.Apply(pt.z);
             writer.WritePoint(pt);
             outCount++;
         }

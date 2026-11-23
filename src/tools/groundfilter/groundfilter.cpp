@@ -1,6 +1,7 @@
 // groundfilter.cpp : Modernized GroundFilter Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
@@ -21,17 +22,18 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("cellsize", "Output DEM cell size", "1.0");
     parser.AddOption("filtercell", "Cell size of the filter's intermediate surfaces (horizontal units); each surface cell averages its 3 x 3 neighbourhood", "10.0");
-    parser.AddOption("gparam", "Kraus & Pfeifer g: residual at or below which a point gets full weight (vertical units)", "-2.0");
-    parser.AddOption("wparam", "Kraus & Pfeifer w: width above g over which a point's weight falls to 0 (vertical units)", "2.5");
+    parser.AddOption("gparam", "Kraus & Pfeifer g: residual at or below which a point gets full weight (output vertical units, after /zmult)", "-2.0");
+    parser.AddOption("wparam", "Kraus & Pfeifer w: width above g over which a point's weight falls to 0 (output vertical units, after /zmult)", "2.5");
     parser.AddOption("aparam", "Kraus & Pfeifer a: steepness of the weight function", "1.0");
     parser.AddOption("bparam", "Kraus & Pfeifer b: exponent of the weight function", "4.0");
     parser.AddOption("iterations", "Number of surface/weight passes", "5");
     parser.AddOption("coarsecell", "Cell size of a first, coarse filter stage; points more than /coarsecut above its surface are dropped before the fine passes (default 3 x /filtercell; 0 disables)");
-    parser.AddOption("coarsecut", "Height above the coarse surface beyond which a point cannot be ground (vertical units; default 4 x /wparam)");
-    parser.AddOption("tolerance", "Classify as ground every point within this distance of the final surface (default: every point with residual <= g + w)");
+    parser.AddOption("coarsecut", "Height above the coarse surface beyond which a point cannot be ground (output vertical units, after /zmult; default 4 x /wparam)");
+    parser.AddOption("tolerance", "Classify as ground every point within this distance of the final surface (output vertical units, after /zmult; default: every point with residual <= g + w)");
     parser.AddOption("output-raster", "Output GeoTIFF ground DEM file path");
     parser.AddOption("output-points", "Output LAS/LAZ of the points classified as ground (written with classification 2)");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
     parser.AddOption("output-table", "Also write a one-band multicolumn table alongside the ground DEM raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the ground DEM GeoTIFF -- only valid together with /output-table, since a run must produce at least one output");
 
@@ -94,6 +96,7 @@ int main(int argc, char* argv[]) {
     //  - noise classes 7/18 and withheld points are already excluded by
     //    PointFilter's defaults, so low noise cannot drag the surface down
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
     std::vector<double> xs, ys, zs;
     xs.reserve(header.pointCount);
     ys.reserve(header.pointCount);
@@ -103,7 +106,7 @@ int main(int argc, char* argv[]) {
         if (!pointFilter.Keep(pt)) continue;
         xs.push_back(pt.x);
         ys.push_back(pt.y);
-        zs.push_back(pt.z);
+        zs.push_back(zTransform.Apply(pt.z));
     }
 
     //3. classify ground with the Kraus & Pfeifer filter
@@ -162,6 +165,7 @@ int main(int argc, char* argv[]) {
             if (!pointFilter.Keep(pt)) continue;
             if (keptIndex < isGround.size() && isGround[keptIndex]) {
                 pt.classification = 2;
+                if (!zTransform.IsIdentity()) pt.z = zTransform.Apply(pt.z);
                 pointWriter.WritePoint(pt);
             }
             keptIndex++;

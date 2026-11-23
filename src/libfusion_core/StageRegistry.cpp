@@ -1,5 +1,8 @@
 #include "fusion/batch/StageRegistry.h"
 
+#include <iomanip>
+#include <sstream>
+
 namespace fusion::batch {
 
 // Forwards /name:<forwardedOptions[name]> into args, if the user passed it.
@@ -20,6 +23,45 @@ static void ForwardFlag(std::vector<std::string>& args,
     auto it = forwardedOptions.find(name);
     if (it != forwardedOptions.end() && it->second == "true") {
         args.push_back("/" + name);
+    }
+}
+
+static void ForwardZOptionsWithGround(
+    std::vector<std::string>& args,
+    const std::unordered_map<std::string, std::string>& forwardedOptions,
+    bool hasPipelineGroundDem) {
+    ForwardOption(args, forwardedOptions, "zmult");
+    ForwardOption(args, forwardedOptions, "zshift");
+    if (!hasPipelineGroundDem) {
+        ForwardOption(args, forwardedOptions, "zmult_ground");
+        ForwardOption(args, forwardedOptions, "zshift_ground");
+    } else {
+        // groundDemPath was produced by an earlier groundfilter stage in this
+        // pipeline, which already applied zmult and zshift to the DEM while
+        // the tile's clip.laz is still in raw units (unless a filterdata or
+        // thindata stage already transformed clip.laz, in which case pipeline
+        // strips zmult/zshift from forwardedOptions). Invert the DEM's
+        // transform via /zmult_ground and /zshift_ground so (pt.z - gz) is
+        // computed in raw units before this stage applies zmult and zshift.
+        double zm = 1.0;
+        double zs = 0.0;
+        bool hasZm = false;
+        bool hasZs = false;
+        if (auto it = forwardedOptions.find("zmult"); it != forwardedOptions.end() && !it->second.empty()) {
+            zm = std::stod(it->second);
+            hasZm = true;
+        }
+        if (auto it = forwardedOptions.find("zshift"); it != forwardedOptions.end() && !it->second.empty()) {
+            zs = std::stod(it->second);
+            hasZs = true;
+        }
+        if ((hasZm || hasZs) && zm != 0.0) {
+            std::ostringstream mg, sg;
+            mg << std::setprecision(17) << (1.0 / zm);
+            sg << std::setprecision(17) << (-zs / zm);
+            if (hasZm) args.push_back("/zmult_ground:" + mg.str());
+            if (hasZs) args.push_back("/zshift_ground:" + sg.str());
+        }
     }
 }
 
@@ -68,6 +110,7 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardFlag(args, forwardedOptions, "nogpu");
                 ForwardOption(args, forwardedOptions, "strata");
                 ForwardOption(args, forwardedOptions, "intstrata");
+                ForwardZOptionsWithGround(args, forwardedOptions, groundDemPath.has_value());
                 return args;
             };
             s.resolveOutputPath = [](const std::filesystem::path& primaryInput, const std::filesystem::path& outputPath) {
@@ -101,6 +144,7 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "class");
                 ForwardOption(args, forwardedOptions, "return");
                 ForwardOption(args, forwardedOptions, "nodata");
+                ForwardZOptionsWithGround(args, forwardedOptions, groundDemPath.has_value());
                 return args;
             };
             s.resolveOutputPath = [](const std::filesystem::path& primaryInput, const std::filesystem::path& outputPath) {
@@ -134,6 +178,7 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "smooth");
                 ForwardOption(args, forwardedOptions, "class");
                 ForwardOption(args, forwardedOptions, "return");
+                ForwardZOptionsWithGround(args, forwardedOptions, groundDemPath.has_value());
                 return args;
             };
             s.resolveOutputPath = IdentityOutputPath;
@@ -159,6 +204,8 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "cellsize");
                 ForwardOption(args, forwardedOptions, "class");
                 ForwardOption(args, forwardedOptions, "return");
+                ForwardOption(args, forwardedOptions, "zmult");
+                ForwardOption(args, forwardedOptions, "zshift");
                 return args;
             };
             s.resolveOutputPath = IdentityOutputPath;
@@ -206,6 +253,8 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "maxz");
                 ForwardOption(args, forwardedOptions, "return");
                 ForwardOption(args, forwardedOptions, "class");
+                ForwardOption(args, forwardedOptions, "zmult");
+                ForwardOption(args, forwardedOptions, "zshift");
                 return args;
             };
             s.resolveOutputPath = IdentityOutputPath;
@@ -230,6 +279,8 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "cellsize");
                 ForwardOption(args, forwardedOptions, "class");
                 ForwardOption(args, forwardedOptions, "return");
+                ForwardOption(args, forwardedOptions, "zmult");
+                ForwardOption(args, forwardedOptions, "zshift");
                 return args;
             };
             s.resolveOutputPath = IdentityOutputPath;

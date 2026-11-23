@@ -9,6 +9,7 @@
 #include <mutex>
 #include <limits>
 #include <cstdint>
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 
 namespace fusion::batch {
@@ -96,6 +97,8 @@ struct PipelineJobOptions {
     std::string groundPath;
     double minHt{2.0};
     double heightCut{2.0};
+    fusion::cli::ZTransform zTransform;
+    fusion::cli::ZTransform groundTransform;
     std::string outlier;
     std::string pointClass;
     bool firstOnly{false};

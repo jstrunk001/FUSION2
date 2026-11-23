@@ -1,6 +1,7 @@
 // canopymodel.cpp : Modernized CanopyModel Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/raster/ChmSmoothing.h"
 #include "fusion/cuda/CanopyModelCuda.h"
@@ -27,6 +28,8 @@ int main(int argc, char* argv[]) {
     parser.AddFlag("gpu", "Enable CUDA GPU acceleration for CHM rasterization");
     parser.AddFlag("nogpu", "Disable CUDA GPU acceleration (force CPU rasterization)");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterGroundOptions(parser);
     parser.AddOption("output-table", "Also write a one-band multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
 
@@ -100,6 +103,8 @@ int main(int argc, char* argv[]) {
     if (groundPixelSize <= 0) groundPixelSize = 1.0;
 
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    fusion::cli::ZTransform groundTransform = fusion::cli::ZTransform::FromGroundParser(parser);
 
     bool wantGpu = parser.HasFlag("gpu");
     bool forceCpu = parser.HasFlag("nogpu");
@@ -132,7 +137,8 @@ int main(int argc, char* argv[]) {
                 for (int c = 0; c < cols; ++c) {
                     double cellX = header.minX + (c + 0.5) * cellSize;
                     double cellY = header.maxY - (r + 0.5) * cellSize;
-                    dtmGrid[r * cols + c] = static_cast<float>(groundRaster.GetElevation(cellX, cellY).value_or(0.0));
+                    auto gz = groundRaster.GetElevation(cellX, cellY);
+                    dtmGrid[r * cols + c] = gz ? static_cast<float>(groundTransform.Apply(*gz)) : 0.0f;
                 }
             }
         }
@@ -147,6 +153,7 @@ int main(int argc, char* argv[]) {
         std::cout << "[CanopyModel] Launching CUDA atomicMax CHM kernel (" << xRel.size() << " points)...\n";
         gpuExecuted = fusion::cuda::RasterizeChmPoints(xRel, yRel, zPts, dtmGrid, gpuOpts, maxElevGrid);
         if (gpuExecuted) {
+            zTransform.ApplyToRaster(maxElevGrid, -9999.0);
             std::cout << "[CanopyModel] GPU CHM rasterization and smoothing completed successfully.\n";
         } else {
             std::cerr << "[CanopyModel] Warning: CUDA kernel execution failed -- falling back to CPU.\n";
@@ -171,12 +178,13 @@ int main(int argc, char* argv[]) {
                     if (!gz) {
                         continue;
                     }
-                    double normHt = pt.z - *gz;
+                    double gzVal = groundTransform.Apply(*gz);
+                    double normHt = pt.z - gzVal;
                     if (useSlope) {
-                        double gzE = groundRaster.GetElevation(pt.x + groundPixelSize, pt.y).value_or(*gz);
-                        double gzW = groundRaster.GetElevation(pt.x - groundPixelSize, pt.y).value_or(*gz);
-                        double gzN = groundRaster.GetElevation(pt.x, pt.y + groundPixelSize).value_or(*gz);
-                        double gzS = groundRaster.GetElevation(pt.x, pt.y - groundPixelSize).value_or(*gz);
+                        double gzE = groundTransform.Apply(groundRaster.GetElevation(pt.x + groundPixelSize, pt.y).value_or(*gz));
+                        double gzW = groundTransform.Apply(groundRaster.GetElevation(pt.x - groundPixelSize, pt.y).value_or(*gz));
+                        double gzN = groundTransform.Apply(groundRaster.GetElevation(pt.x, pt.y + groundPixelSize).value_or(*gz));
+                        double gzS = groundTransform.Apply(groundRaster.GetElevation(pt.x, pt.y - groundPixelSize).value_or(*gz));
                         double dzdx = (gzE - gzW) / (2.0 * groundPixelSize);
                         double dzdy = (gzN - gzS) / (2.0 * groundPixelSize);
                         double slopeFactor = std::sqrt(1.0 + dzdx * dzdx + dzdy * dzdy);
@@ -184,6 +192,7 @@ int main(int argc, char* argv[]) {
                     }
                     chmZ = normHt;
                 }
+                chmZ = zTransform.Apply(chmZ);
 
                 size_t idx = row * cols + col;
                 if (static_cast<float>(chmZ) > maxElevGrid[idx]) {

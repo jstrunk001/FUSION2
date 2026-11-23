@@ -2,6 +2,7 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
@@ -109,6 +110,8 @@ int main(int argc, char* argv[]) {
     parser.AddOption("cellsize", "Output grid cell size in project units", "10.0");
     parser.AddOption("ground", "Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterGroundOptions(parser);
     parser.AddOption("output", "Base output name (stem) for the raster/CSV files");
     parser.AddOption("outdir", "Output directory for the raster and CSV report", ".");
     parser.AddOption("nodata", "Value for cells with zero returns at all: NA, or a number such as 0, -9999, or inf. A non-empty cell's stratum bands are always real computed counts, never this sentinel.", "NA");
@@ -140,6 +143,8 @@ int main(int argc, char* argv[]) {
     float noDataValue = fusion::metrics::ParseSentinelOption(parser.GetOption("nodata").value_or("NA")).value;
 
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    fusion::cli::ZTransform groundTransform = fusion::cli::ZTransform::FromGroundParser(parser);
 
     fusion::raster::GDALRaster groundRaster;
     bool hasGround = false;
@@ -202,8 +207,9 @@ int main(int argc, char* argv[]) {
                 if (!gz) {
                     continue;
                 }
-                elevation -= *gz;
+                elevation -= groundTransform.Apply(*gz);
             }
+            elevation = zTransform.Apply(elevation);
 
             auto& cell = grid[row * cols + col];
             cell.totalReturns++;

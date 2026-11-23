@@ -2,6 +2,7 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
@@ -271,7 +272,7 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input.las/laz or directory> [optional ground DTM path]");
     parser.AddOption("output", "Output CSV file path", "cloud_metrics.csv");
     parser.AddOption("ground", "Path to ground DEM raster for height normalization, or a directory of DTM tiles to mosaic on the fly");
-    parser.AddOption("minht", "Minimum height cutoff for canopy metrics (same units as the input)", "2.0");
+    parser.AddOption("minht", "Minimum height cutoff for canopy metrics (in output vertical units, after /zmult and /zshift)", "2.0");
     parser.AddOption("cellsize", "Grid cell size for 2D area/volume metrics (same units as the input)", "10.0");
     parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (same units as the input)", "20.0");
     parser.AddFlag("exp", "Compute additional experimental metrics from RSForTools");
@@ -285,6 +286,8 @@ int main(int argc, char* argv[]) {
     parser.AddOption("rgb", "Comma-separated spectral channels to compute a statistic bundle for: R, G, B, N, or all (every channel the input file's LAS point format actually carries)");
     parser.AddFlag("rgbstrata", "With /rgb and /strata both set, also report a mean/stddev/min/max bundle per selected spectral channel within each height-stratum bucket (<channel>_stratum_NN_*).");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterGroundOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -321,6 +324,8 @@ int main(int argc, char* argv[]) {
     size_t fullBundleColCount = fusion::metrics::PointStatBundleColumnNames("").size();
 
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    fusion::cli::ZTransform groundTransform = fusion::cli::ZTransform::FromGroundParser(parser);
 
     // 1. Resolve ground surface DTM (single file or directory of tiles)
     fusion::raster::GDALRaster groundRaster;
@@ -435,8 +440,9 @@ int main(int argc, char* argv[]) {
                 if (!gz) {
                     continue;
                 }
-                h -= *gz;
+                h -= groundTransform.Apply(*gz);
             }
+            h = zTransform.Apply(h);
 
             totalPtsByFeature[featureIdx]++;
             if (enableExp) {
@@ -555,8 +561,9 @@ int main(int argc, char* argv[]) {
             if (!gz) {
                 continue;
             }
-            h -= *gz;
+            h -= groundTransform.Apply(*gz);
         }
+        h = zTransform.Apply(h);
         if (enableExp) {
             allPoints.push_back({pt.x, pt.y, h});
         }

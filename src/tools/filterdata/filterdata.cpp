@@ -1,6 +1,7 @@
 // filterdata.cpp : Modernized FilterData Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
@@ -15,9 +16,10 @@ int main(int argc, char* argv[]) {
     fusion::cli::ArgumentParser parser("filterdata", "Point Cloud Filtering Tool (Elevation, Return Type, Classification, Scan Angle)");
     parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("output", "Output filtered LAS/LAZ file path", "filtered_output.laz");
-    parser.AddOption("minz", "Minimum Z elevation threshold");
-    parser.AddOption("maxz", "Maximum Z elevation threshold");
+    parser.AddOption("minz", "Minimum Z elevation threshold (in output vertical units, after /zmult and /zshift)");
+    parser.AddOption("maxz", "Maximum Z elevation threshold (in output vertical units, after /zmult and /zshift)");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -45,6 +47,7 @@ int main(int argc, char* argv[]) {
     if (auto opt = parser.GetOption("maxz")) maxZ = std::stod(*opt);
 
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
 
     fusion::lidar::MergedPointCloudReader reader;
     if (!reader.Open(inputFiles)) {
@@ -67,6 +70,7 @@ int main(int argc, char* argv[]) {
     while (reader.ReadNextPoint(pt)) {
         inCount++;
 
+        if (!zTransform.IsIdentity()) pt.z = zTransform.Apply(pt.z);
         if (minZ && pt.z < *minZ) continue;
         if (maxZ && pt.z > *maxZ) continue;
         if (!pointFilter.Keep(pt)) continue;

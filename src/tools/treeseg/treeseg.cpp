@@ -1,6 +1,7 @@
 // treeseg.cpp : Modernized TreeSeg Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/LASPointCloud.h"
 
@@ -27,7 +28,8 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input_chm.tif>");
     parser.AddOption("output-raster", "Output GeoTIFF raster path for tree segments", "crown_segments.tif");
     parser.AddOption("output-table", "Output CSV summary table path", "crown_summary.csv");
-    parser.AddOption("minht", "Minimum height cutoff for segmentation (same units as the input)", "2.0");
+    parser.AddOption("minht", "Minimum height cutoff for segmentation (in output vertical units, after /zmult and /zshift)", "2.0");
+    fusion::cli::ZTransform::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -62,6 +64,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Failed to read CHM band data.\n";
         return 1;
     }
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    zTransform.ApplyToRaster(chmData, noData);
 
     std::cout << "[TreeSeg] Performing watershed segmentation on CHM (" << cols << "x" << rows << ")... Height cutoff: " << minHt << "\n";
 

@@ -62,7 +62,8 @@ static std::string NowTimestamp() {
 // BuildArgs for which subset each tool actually reads.
 static const std::vector<std::string> kForwardableOptions = {
     "cellsize", "minht", "heightcut", "outlier", "class", "strata", "intstrata",
-    "ground", "window-a", "window-b", "smooth", "minz", "maxz", "return"
+    "ground", "window-a", "window-b", "smooth", "minz", "maxz", "return",
+    "zmult", "zshift", "zmult_ground", "zshift_ground"
 };
 static const std::vector<std::string> kForwardableFlags = {
     "first", "nointensity", "slope", "gpu", "nogpu"
@@ -378,6 +379,7 @@ int main(int argc, char* argv[]) {
         std::filesystem::path currentPointCloudPath = clipPath;
         std::optional<std::filesystem::path> lastRasterBufferedPath;
         std::optional<std::filesystem::path> groundDemBufferedPath;
+        auto tileForwardedOptions = forwardedOptions;
         bool tileOk = true;
 
         for (const auto& stageName : stageNames) {
@@ -401,13 +403,13 @@ int main(int argc, char* argv[]) {
                     primaryInput,
                     (stage->acceptsGround ? groundDemBufferedPath : std::nullopt),
                     subprocessOutputPath,
-                    forwardedOptions);
+                    tileForwardedOptions);
 
                 // If a stage requests GPU acceleration, throttle concurrent GPU stages
                 // to avoid device VRAM contention across worker threads.
                 static std::mutex s_gpuMutex;
                 bool isGpuStage = (stageName == "canopymodel" || stageName == "gridmetrics") &&
-                                  (forwardedOptions.find("gpu") != forwardedOptions.end() && forwardedOptions.at("gpu") == "true");
+                                  (tileForwardedOptions.find("gpu") != tileForwardedOptions.end() && tileForwardedOptions.at("gpu") == "true");
 
                 std::unique_lock<std::mutex> gpuLock(s_gpuMutex, std::defer_lock);
                 if (isGpuStage) {
@@ -423,6 +425,8 @@ int main(int argc, char* argv[]) {
                     if (ok) lastRasterBufferedPath = actualWritten;
                 } else if (ok && stage->outputKind == ArtifactKind::PointCloud) {
                     currentPointCloudPath = canonicalOutputPath;
+                    tileForwardedOptions.erase("zmult");
+                    tileForwardedOptions.erase("zshift");
                 } else if (ok && stage->outputKind == ArtifactKind::Table) {
                     FilterAndPrefixTreeTopTable(canonicalOutputPath, tile);
                 }
@@ -456,6 +460,8 @@ int main(int argc, char* argv[]) {
                     if (stageName == "groundfilter") groundDemBufferedPath = lastRasterBufferedPath;
                 } else if (stage->outputKind == ArtifactKind::PointCloud) {
                     currentPointCloudPath = canonicalOutputPath;
+                    tileForwardedOptions.erase("zmult");
+                    tileForwardedOptions.erase("zshift");
                 }
             }
         }

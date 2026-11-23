@@ -1,6 +1,7 @@
 // gridsurfacestats.cpp : Surface Area Ratio / Roughness / Cut-Fill Volume Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/metrics/SurfaceStats.h"
 #include "fusion/table/TableWriter.h"
@@ -17,6 +18,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("reference", "Second surface GeoTIFF (same cols x rows) to diff against for cut/fill volume_diff");
     parser.AddOption("output-table", "Also write a multicolumn table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output");
+    fusion::cli::ZTransform::RegisterOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -56,6 +58,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Failed to read surface raster band data.\n";
         return 1;
     }
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    zTransform.ApplyToRaster(elevation, noData);
 
     std::vector<float> reference;
     bool hasReference = false;
@@ -75,6 +79,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: Failed to read reference raster band data.\n";
             return 1;
         }
+        zTransform.ApplyToRaster(reference, refInfo.noDataValue);
         hasReference = true;
     }
 

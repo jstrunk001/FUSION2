@@ -2,6 +2,7 @@
 //
 #include "fusion/cli/ArgumentParser.h"
 #include "fusion/cli/ParseUtil.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
@@ -295,6 +296,10 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     jobOpts.groundPath = groundPath;
     jobOpts.minHt = std::stod(parser.GetOption("minht").value_or("2.0"));
     jobOpts.heightCut = parser.GetOption("heightcut") ? std::stod(*parser.GetOption("heightcut")) : jobOpts.minHt;
+    {
+        jobOpts.zTransform = fusion::cli::ZTransform::FromParser(parser);
+        jobOpts.groundTransform = fusion::cli::ZTransform::FromGroundParser(parser);
+    }
     if (auto o = parser.GetOption("outlier")) jobOpts.outlier = *o;
     if (auto c = parser.GetOption("class")) jobOpts.pointClass = *c;
     jobOpts.firstOnly = parser.HasFlag("first");
@@ -446,8 +451,9 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                     if (!gz) {
                         return;
                     }
-                    elevation -= *gz;
+                    elevation -= opts.groundTransform.Apply(*gz);
                 }
+                elevation = opts.zTransform.Apply(elevation);
 
                 auto& cell = grid[row * cols + col];
                 cell.totalReturns++;
@@ -856,10 +862,12 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input.las/laz/raster or directory> [optional raster ground path]");
     parser.AddOption("ground", "Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly");
     parser.AddOption("cellsize", "Output grid cell size in project units", "10.0");
-    parser.AddOption("minht", "Minimum height above ground for canopy metrics calculation", "2.0");
-    parser.AddOption("heightcut", "Height cutoff threshold for canopy cover calculations (defaults to minht)");
-    parser.AddOption("outlier", "Trim elevation outliers outside min,max values (e.g. -5,150)");
+    parser.AddOption("minht", "Minimum height above ground for canopy metrics calculation (in output vertical units, after /zmult and /zshift)", "2.0");
+    parser.AddOption("heightcut", "Height cutoff threshold for canopy cover calculations (defaults to minht; in output vertical units)");
+    parser.AddOption("outlier", "Trim elevation outliers outside min,max values in output vertical units (e.g. -5,150)");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterGroundOptions(parser);
     parser.AddFlag("first", "Use only first returns for metric calculations");
     parser.AddFlag("all", "Use all returns for canopy cover and metric calculations");
     parser.AddFlag("nointensity", "Skip computing intensity metrics");
@@ -911,6 +919,8 @@ int main(int argc, char* argv[]) {
     std::filesystem::path inputPath = posArgs[0];
     std::filesystem::path outDir = parser.GetOption("outdir").value_or(".");
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    fusion::cli::ZTransform groundTransform = fusion::cli::ZTransform::FromGroundParser(parser);
 
     // A ground raster that was given but cannot be opened stops the run --
     // otherwise heights stay as raw elevations and, with /outlier, every
@@ -1090,10 +1100,21 @@ int main(int argc, char* argv[]) {
                     for (int c = 0; c < dsmInfo.width; ++c) {
                         double x = dsmInfo.originX + (c + 0.5) * dsmInfo.pixelWidth;
                         auto gz = groundRaster.GetElevation(x, y, fusion::raster::SampleMethod::Bilinear);
-                        dtmFull[static_cast<size_t>(r) * dsmInfo.width + c] = gz ? static_cast<float>(*gz) : 0.0f;
+                        dtmFull[static_cast<size_t>(r) * dsmInfo.width + c] = gz ? static_cast<float>(groundTransform.Apply(*gz)) : 0.0f;
                     }
                 }
                 dtmPtr = dtmFull.data();
+            }
+
+            if (!zTransform.IsIdentity()) {
+                const float dsmNoDataF = static_cast<float>(dsmInfo.noDataValue);
+                for (size_t i = 0; i < dsmFull.size(); ++i) {
+                    float val = dsmFull[i];
+                    if ((dsmInfo.hasNoData && val == dsmNoDataF) || std::isnan(val)) continue;
+                    double h = static_cast<double>(val) - (dtmPtr ? static_cast<double>(dtmFull[i]) : 0.0);
+                    dsmFull[i] = static_cast<float>(zTransform.Apply(h));
+                }
+                dtmPtr = nullptr;
             }
 
             fusion::cuda::CudaGridMetricsOptions cudaOpts;
@@ -1164,8 +1185,9 @@ int main(int argc, char* argv[]) {
                             if (!gz) {
                                 continue;
                             }
-                            elevation -= *gz;
+                            elevation -= groundTransform.Apply(*gz);
                         }
+                        elevation = zTransform.Apply(elevation);
 
                         auto& cell = grid[row * cols + col];
                         cell.totalReturns++;
@@ -1237,8 +1259,9 @@ int main(int argc, char* argv[]) {
                         if (hasGround) {
                             auto gz = groundRaster.GetElevation(p.x, p.y);
                             if (!gz) continue;
-                            elevation -= *gz;
+                            elevation -= groundTransform.Apply(*gz);
                         }
+                        elevation = zTransform.Apply(elevation);
 
                         auto& cell = grid[row * cols + col];
                         cell.totalReturns++;
@@ -1311,8 +1334,9 @@ int main(int argc, char* argv[]) {
                         if (!gz) {
                             continue;
                         }
-                        elevation -= *gz;
+                        elevation -= groundTransform.Apply(*gz);
                     }
+                    elevation = zTransform.Apply(elevation);
 
                     auto& cell = grid[row * cols + col];
                     cell.totalReturns++;

@@ -1,6 +1,7 @@
 // clipdata.cpp : Modernized ClipData Executable for FUSION2
 //
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
@@ -27,7 +28,9 @@ static int RunMultiFileClip(
         double minX, double minY, double maxX, double maxY,
         double zMin, double zMax,
         bool hasGround, fusion::raster::GDALRaster& groundRaster,
-        const fusion::lidar::PointFilter& pointFilter) {
+        const fusion::lidar::PointFilter& pointFilter,
+        const fusion::cli::ZTransform& zTransform,
+        const fusion::cli::ZTransform& groundTransform) {
     std::filesystem::create_directories(outDir);
 
     const auto& header = reader.GetHeader();
@@ -69,11 +72,15 @@ static int RunMultiFileClip(
             double elevation = pt.z;
             if (hasGround) {
                 if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                    elevation -= *gz;
+                    elevation -= groundTransform.Apply(*gz);
                 }
             }
+            elevation = zTransform.Apply(elevation);
             if (elevation < zMin || elevation > zMax) {
                 continue;
+            }
+            if (!zTransform.IsIdentity()) {
+                pt.z = zTransform.Apply(pt.z);
             }
 
             size_t featureIdx = featureSet.FindContaining(pt.x, pt.y);
@@ -119,14 +126,16 @@ int main(int argc, char* argv[]) {
     parser.SetPositionalArgsUsage("<input.las/laz or directory>");
     parser.AddOption("extent", "Bounding box LLX,LLY,URX,URY");
     parser.AddOption("ground", "Path to ground surface raster (GeoTIFF, ENVI, IMG) for height normalization, or a directory of DTM tiles to mosaic on the fly");
-    parser.AddOption("minz", "Minimum height above ground or elevation");
-    parser.AddOption("maxz", "Maximum height above ground or elevation");
+    parser.AddOption("minz", "Minimum height above ground or elevation (in output vertical units, after /zmult and /zshift)");
+    parser.AddOption("maxz", "Maximum height above ground or elevation (in output vertical units, after /zmult and /zshift)");
     parser.AddOption("output", "Output LAS/LAZ file path (single-clip mode), or output directory (/multifile mode)");
     parser.AddOption("shape", "Polygon shapefile to clip against, in addition to (not instead of) /extent");
     parser.AddFlag("multifile", "With /shape, write one output LAS/LAZ per polygon feature instead of one merged output");
     parser.AddOption("field", "Attribute field used to name each /multifile output (<field-value>.laz); falls back to a zero-padded feature index when omitted or missing on a feature");
     parser.AddFlag("outside", "Keep points outside every polygon instead of inside (single-clip mode only)");
     fusion::lidar::PointFilter::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterOptions(parser);
+    fusion::cli::ZTransform::RegisterGroundOptions(parser);
 
     if (!parser.Parse(argc, argv)) {
         return 0;
@@ -203,11 +212,13 @@ int main(int argc, char* argv[]) {
     }
 
     fusion::lidar::PointFilter pointFilter = fusion::lidar::PointFilter::FromParser(parser);
+    fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
+    fusion::cli::ZTransform groundTransform = fusion::cli::ZTransform::FromGroundParser(parser);
 
     if (multiFile) {
         std::cout << "[ClipData] Clipping " << inputFiles.size() << " point cloud file(s) against "
                   << featureSet.FeatureCount() << " polygon feature(s) -> " << outputPath << "...\n";
-        int rc = RunMultiFileClip(reader, featureSet, outputPath, minX, minY, maxX, maxY, zMin, zMax, hasGround, groundRaster, pointFilter);
+        int rc = RunMultiFileClip(reader, featureSet, outputPath, minX, minY, maxX, maxY, zMin, zMax, hasGround, groundRaster, pointFilter, zTransform, groundTransform);
         reader.Close();
         return rc;
     }
@@ -233,11 +244,15 @@ int main(int argc, char* argv[]) {
             double elevation = pt.z;
             if (hasGround) {
                 if (auto gz = groundRaster.GetElevation(pt.x, pt.y)) {
-                    elevation -= *gz;
+                    elevation -= groundTransform.Apply(*gz);
                 }
             }
+            elevation = zTransform.Apply(elevation);
 
             if (elevation >= zMin && elevation <= zMax) {
+                if (!zTransform.IsIdentity()) {
+                    pt.z = zTransform.Apply(pt.z);
+                }
                 writer.WritePoint(pt);
                 clippedCount++;
             }
