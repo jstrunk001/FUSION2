@@ -1,3 +1,4 @@
+#include "fusion/batch/ProcessRunner.h"
 #include "fusion/lidar/LASPointCloud.h"
 #include "fusion/raster/GDALRaster.h"
 #include "test_assert.h"
@@ -7,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <vector>
 
 // Round-trips small point sets through LASWriter/LASReader. This exercises
@@ -369,6 +371,132 @@ int RunLASWriterTests() {
             reader.Close();
         }
         std::filesystem::remove(path);
+    }
+
+    // End-to-end tool and pipeline checks for /zmult, /zshift, /zmult_ground,
+    // and /zshift_ground (verifying both single-tool output scaling and no
+    // double-transform in chained pipeline runs).
+    {
+        std::filesystem::path exeDir = fusion::batch::GetExecutableDir();
+        std::filesystem::path workDir = ScratchPath("ztransform_e2e");
+        std::filesystem::remove_all(workDir);
+        std::filesystem::create_directories(workDir / "input");
+
+        auto header = MakeHeader(1, 2);
+        header.minX = 500000.0;
+        header.maxX = 500040.0;
+        header.minY = 4000000.0;
+        header.maxY = 4000040.0;
+        header.minZ = 100.0;
+        header.maxZ = 140.0;
+
+        std::filesystem::path rawLasPath = workDir / "input" / "tile_01.las";
+        {
+            fusion::lidar::LASWriter writer;
+            CHECK(writer.Open(rawLasPath, header), failures);
+            for (int ix = 1; ix < 40; ix += 2) {
+                for (int iy = 1; iy < 40; iy += 2) {
+                    writer.WritePoint(MakePoint(500000.0 + ix, 4000000.0 + iy, 100.0, 10.0, 0, 0, 0, 0));
+                }
+            }
+            // Canopy points 40 ft above the 100 ft ground in the center cell.
+            writer.WritePoint(MakePoint(500015.0, 4000015.0, 140.0, 11.0, 0, 0, 0, 0));
+            writer.Close();
+        }
+
+        // 1. filterdata with /zmult:0.3048 /zshift:1.0 /minz:40.0:
+        //    100 * 0.3048 + 1.0 = 31.48 (dropped); 140 * 0.3048 + 1.0 = 43.672 (kept).
+        std::filesystem::path filteredPath = workDir / "filtered.laz";
+        std::filesystem::path filterLog = workDir / "filterdata.log";
+        auto filterRes = fusion::batch::RunProcess(
+            exeDir / "filterdata.exe",
+            {rawLasPath.string(), "/output:" + filteredPath.string(), "/zmult:0.3048", "/zshift:1.0", "/minz:40.0"},
+            filterLog);
+        CHECK(filterRes.launched && filterRes.exitCode == 0, failures);
+        if (filterRes.launched && filterRes.exitCode == 0) {
+            fusion::lidar::LASReader filteredReader;
+            CHECK(filteredReader.Open(filteredPath), failures);
+            if (filteredReader.IsOpen()) {
+                CHECK(filteredReader.GetPointCount() == 1, failures);
+                fusion::lidar::PointRecord pt;
+                if (filteredReader.ReadNextPoint(pt)) {
+                    CHECK(std::abs(pt.z - 43.672) < 0.01, failures);
+                }
+                filteredReader.Close();
+            }
+        }
+
+        // 2. canopymodel with /ground (in meters: 30.48 m) + /zmult_ground + /zmult:
+        //    (140 - 30.48 * 3.280839895) * 0.3048 = 12.192 m.
+        std::filesystem::path meterDemPath = workDir / "ground_m.tif";
+        {
+            double gt[6] = {500000.0, 10.0, 0.0, 4000040.0, 0.0, -10.0};
+            std::vector<float> demVals(16, 30.48f);
+            fusion::raster::GDALRaster demRaster;
+            CHECK(demRaster.Create(meterDemPath, 4, 4, 1, "Float32", "GTiff", "", gt, -9999.0), failures);
+            demRaster.WriteBandData(1, demVals);
+            demRaster.Close();
+        }
+        std::filesystem::path chmPath = workDir / "chm_m.tif";
+        std::filesystem::path cmLog = workDir / "canopymodel.log";
+        auto cmRes = fusion::batch::RunProcess(
+            exeDir / "canopymodel.exe",
+            {rawLasPath.string(), "/ground:" + meterDemPath.string(), "/output:" + chmPath.string(),
+             "/cellsize:10", "/zmult_ground:3.280839895013123", "/zmult:0.3048"},
+            cmLog);
+        CHECK(cmRes.launched && cmRes.exitCode == 0, failures);
+        if (cmRes.launched && cmRes.exitCode == 0) {
+            fusion::raster::GDALRaster chmRaster;
+            CHECK(chmRaster.Open(chmPath), failures);
+            if (chmRaster.IsOpen()) {
+                auto val = chmRaster.GetElevation(500015.0, 4000015.0, fusion::raster::SampleMethod::Nearest);
+                CHECK(val.has_value() && std::abs(*val - 12.192) < 0.01, failures);
+                chmRaster.Close();
+            }
+        }
+
+        // 3. pipeline groundfilter,canopymodel,canopymaxima with /zmult:0.3048:
+        //    verifies CHM and tree-top CSV report ~12.19 m (transformed once, not twice).
+        std::filesystem::path pipeOut = workDir / "pipe_out";
+        std::filesystem::path pipeLog = workDir / "pipeline.log";
+        auto pipeRes = fusion::batch::RunProcess(
+            exeDir / "pipeline.exe",
+            {"/pipeline:groundfilter,canopymodel,canopymaxima",
+             "/input:" + (workDir / "input").string(),
+             "/output:" + pipeOut.string(),
+             "/extent:500000,4000000,500040,4000040",
+             "/tilesize:40,40",
+             "/buffer:0",
+             "/cellsize:10",
+             "/minht:2",
+             "/zmult:0.3048",
+             "/threads:1",
+             "/toolsdir:" + exeDir.string()},
+            pipeLog);
+        CHECK(pipeRes.launched && pipeRes.exitCode == 0, failures);
+        if (pipeRes.launched && pipeRes.exitCode == 0) {
+            std::filesystem::path csvPath = pipeOut / "canopymaxima_all.csv";
+            std::ifstream csvIn(csvPath);
+            CHECK(csvIn.is_open(), failures);
+            std::string line;
+            std::getline(csvIn, line); // header
+            bool foundHeight = false;
+            while (std::getline(csvIn, line)) {
+                if (line.empty()) continue;
+                std::stringstream ss(line);
+                std::string col;
+                for (int i = 0; i < 4 && std::getline(ss, col, ','); ++i) {
+                    if (i == 3) {
+                        double h = std::stod(col);
+                        CHECK(std::abs(h - 12.19) < 0.25, failures);
+                        foundHeight = true;
+                    }
+                }
+            }
+            CHECK(foundHeight, failures);
+        }
+
+        std::filesystem::remove_all(workDir);
     }
 
 

@@ -1,7 +1,10 @@
 #include "fusion/cli/ArgumentParser.h"
+#include "fusion/cli/ZTransform.h"
 #include "test_assert.h"
 
+#include <cmath>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -81,6 +84,46 @@ int RunArgumentParserTests() {
         CHECK(gmParser.GetPositionalArgs().size() == 2, failures);
         CHECK(gmParser.GetPositionalArgs()[0] == "dsm.tif", failures);
         CHECK(gmParser.GetPositionalArgs()[1] == "ground.tif", failures);
+    }
+
+    //6. ZTransform defaults, parsing, and raster application
+    {
+        fusion::cli::ArgumentParser ztDefaultParser("tool", "test");
+        fusion::cli::ZTransform::RegisterOptions(ztDefaultParser);
+        std::vector<std::string> args0 = {"tool", "in.laz"};
+        std::vector<char*> argv0;
+        for (auto& s : args0) argv0.push_back(s.data());
+        ztDefaultParser.Parse(static_cast<int>(argv0.size()), argv0.data());
+        auto zt0 = fusion::cli::ZTransform::FromParser(ztDefaultParser);
+        CHECK(zt0.IsIdentity(), failures);
+        CHECK(zt0.Apply(10.0) == 10.0, failures);
+
+        fusion::cli::ArgumentParser ztParser("tool", "test");
+        fusion::cli::ZTransform::RegisterOptions(ztParser);
+        std::vector<std::string> args1 = {"tool", "in.laz", "/zmult:0.5", "/zshift:2.0"};
+        std::vector<char*> argv1;
+        for (auto& s : args1) argv1.push_back(s.data());
+        ztParser.Parse(static_cast<int>(argv1.size()), argv1.data());
+        auto zt1 = fusion::cli::ZTransform::FromParser(ztParser);
+        CHECK(!zt1.IsIdentity(), failures);
+        CHECK(zt1.Apply(10.0) == 7.0, failures);
+
+        std::vector<float> raster = {10.0f, -9999.0f, std::numeric_limits<float>::quiet_NaN(), 20.0f};
+        zt1.ApplyToRaster(raster, -9999.0);
+        CHECK(raster[0] == 7.0f, failures);
+        CHECK(raster[1] == -9999.0f, failures);
+        CHECK(std::isnan(raster[2]), failures);
+        CHECK(raster[3] == 12.0f, failures);
+
+        fusion::cli::ArgumentParser ztgParser("tool", "test");
+        fusion::cli::ZTransform::RegisterGroundOptions(ztgParser);
+        std::vector<std::string> args2 = {"tool", "in.laz", "/zmult_ground:3.28084", "/zshift_ground:1.5"};
+        std::vector<char*> argv2;
+        for (auto& s : args2) argv2.push_back(s.data());
+        ztgParser.Parse(static_cast<int>(argv2.size()), argv2.data());
+        auto ztg = fusion::cli::ZTransform::FromGroundParser(ztgParser);
+        CHECK(!ztg.IsIdentity(), failures);
+        CHECK(std::abs(ztg.Apply(10.0) - 34.3084) < 1e-6, failures);
     }
 
     if (failures == 0) std::cout << "  all passed\n";

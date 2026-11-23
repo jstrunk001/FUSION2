@@ -122,6 +122,62 @@ int RunStageRegistryTests() {
         CHECK(HasArg(gmNoGpuArgs, "/nogpu"), failures);
     }
 
+    //8. /zmult, /zshift, /zmult_ground, /zshift_ground forwarding and double-transform prevention
+    {
+        std::unordered_map<std::string, std::string> zOpts = {
+            {"zmult", "0.3048"}
+          , {"zshift", "1.5"}
+          , {"zmult_ground", "3.28084"}
+          , {"zshift_ground", "-0.5"}
+        };
+
+        // Raster-input stages read outputs already produced by earlier stages,
+        // so they must never receive /zmult or /zshift.
+        for (const char* rasterStageName : {"canopymaxima", "topometrics", "treeseg"}) {
+            const auto* spec = fusion::batch::FindStage(rasterStageName);
+            CHECK(spec != nullptr, failures);
+            if (spec) {
+                auto stageArgs = spec->buildArgs(input, std::nullopt, outputPath, zOpts);
+                CHECK(!HasArgStartingWith(stageArgs, "/zmult:"), failures);
+                CHECK(!HasArgStartingWith(stageArgs, "/zshift:"), failures);
+            }
+        }
+
+        // Point-cloud stages without /ground forward /zmult and /zshift.
+        for (const char* pcStageName : {"filterdata", "thindata", "groundfilter"}) {
+            const auto* spec = fusion::batch::FindStage(pcStageName);
+            CHECK(spec != nullptr, failures);
+            if (spec) {
+                auto stageArgs = spec->buildArgs(input, std::nullopt, outputPath, zOpts);
+                CHECK(HasArg(stageArgs, "/zmult:0.3048"), failures);
+                CHECK(HasArg(stageArgs, "/zshift:1.5"), failures);
+            }
+        }
+
+        // Stages accepting /ground forward user /zmult_ground and /zshift_ground
+        // when no pipeline groundfilter DEM is supplied, and invert the DEM's
+        // transform when fed a pipeline groundfilter DEM.
+        for (const char* groundStageName : {"canopymodel", "gridmetrics", "densitymetrics"}) {
+            const auto* spec = fusion::batch::FindStage(groundStageName);
+            CHECK(spec != nullptr, failures);
+            if (spec) {
+                auto noDemArgs = spec->buildArgs(input, std::nullopt, outputPath, zOpts);
+                CHECK(HasArg(noDemArgs, "/zmult:0.3048"), failures);
+                CHECK(HasArg(noDemArgs, "/zshift:1.5"), failures);
+                CHECK(HasArg(noDemArgs, "/zmult_ground:3.28084"), failures);
+                CHECK(HasArg(noDemArgs, "/zshift_ground:-0.5"), failures);
+
+                auto withDemArgs = spec->buildArgs(input, dem, outputPath, zOpts);
+                CHECK(HasArg(withDemArgs, "/zmult:0.3048"), failures);
+                CHECK(HasArg(withDemArgs, "/zshift:1.5"), failures);
+                CHECK(!HasArg(withDemArgs, "/zmult_ground:3.28084"), failures);
+                CHECK(!HasArg(withDemArgs, "/zshift_ground:-0.5"), failures);
+                CHECK(HasArgStartingWith(withDemArgs, "/zmult_ground:"), failures);
+                CHECK(HasArgStartingWith(withDemArgs, "/zshift_ground:"), failures);
+            }
+        }
+    }
+
     if (failures == 0) std::cout << "  all passed\n";
     return failures;
 }
