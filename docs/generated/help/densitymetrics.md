@@ -4,10 +4,14 @@ Computes a return-density raster stack across vertical height slices (one band p
 
 Options:
   /noraster	Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output
-  /output-table:<value>	Write a multicolumn table of per-cell stratum counts (path ending in .csv or .sqlite) -- omit to skip table output entirely (default: )
   /nodata:<value>	Value for cells with zero returns at all: NA, or a number such as 0, -9999, or inf. A non-empty cell's stratum bands are always real computed counts, never this sentinel. (default: NA)
+  /zshift_ground:<value>	Add this offset to /ground raster elevation values after /zmult_ground, before subtracting from point Z (default: 0.0)
   /output:<value>	Base output name (stem) for the raster/CSV files (default: )
+  /zmult_ground:<value>	Multiply /ground raster elevation values by this factor before subtracting from point Z (e.g. 3.28084 for meters to feet) (default: 1.0)
+  /output-table:<value>	Write a multicolumn table of per-cell stratum counts (path ending in .csv or .sqlite) -- omit to skip table output entirely (default: )
+  /zmult:<value>	Multiply final elevation/height values by this factor (e.g. 0.3048 for feet to meters); height/elevation thresholds apply after this transform (default: 1.0)
   /return:<value>	Return numbers to keep: /return:1 or /return:1,2 for an explicit list (ranges like /return:1-2 also work), or the mnemonics /return:first, /return:last, /return:only, /return:intermediate. Omit to keep every return. (default: )
+  /zshift:<value>	Add this offset to final elevation/height values after /zmult; height/elevation thresholds apply after this transform (default: 0.0)
   /class:<value>	Point classifications to keep. Omit for the default (excludes ASPRS noise classes 7 and 18); /class:all or /class:* keeps every class; /class:2,3,4,5 or /class:1-5 whitelists the listed classes; /class:~7,9,18 blacklists them (keeps every other class). (default: )
   /ground:<value>	Path to ground surface DEM raster (GeoTIFF, ENVI, IMG), or a directory of DTM tiles to mosaic on the fly (default: )
   /outdir:<value>	Output directory for the raster and CSV report (default: .)

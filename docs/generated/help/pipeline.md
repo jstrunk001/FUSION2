@@ -12,6 +12,7 @@ Options:
   /merge	Also merge each raster stage's VRT into a single global GeoTIFF
   /retryfailed	Process only tiles with a recorded failed stage
   /rebuild	Ignore recorded state and redo every tile/stage
+  /zshift:<value>	Forwarded to whichever stage(s) accept it (default: )
   /minz:<value>	Forwarded to whichever stage(s) accept it (default: )
   /maxz:<value>	Forwarded to whichever stage(s) accept it (default: )
   /window-a:<value>	Forwarded to whichever stage(s) accept it (default: )
@@ -20,11 +21,14 @@ Options:
   /window-b:<value>	Forwarded to whichever stage(s) accept it (default: )
   /intstrata:<value>	Forwarded to whichever stage(s) accept it (default: )
   /strata:<value>	Forwarded to whichever stage(s) accept it (default: )
+  /zshift_ground:<value>	Forwarded to whichever stage(s) accept it (default: )
   /outlier:<value>	Forwarded to whichever stage(s) accept it (default: )
   /tool:<value>	Shorthand for a single-stage /pipeline:<name> (default: )
+  /zmult_ground:<value>	Forwarded to whichever stage(s) accept it (default: )
   /tilesize:<value>	Tile width,height in project units (default: 1000,1000)
   /class:<value>	Forwarded to whichever stage(s) accept it (default: )
   /input:<value>	Input directory of LAS/LAZ files, or a single LAS/LAZ file (default: )
+  /zmult:<value>	Forwarded to whichever stage(s) accept it (default: )
   /smooth:<value>	Forwarded to whichever stage(s) accept it (default: )
   /toolsdir:<value>	Directory containing the sibling tool .exe files (default: this executable's own directory) (default: )
   /output:<value>	Output directory for finalized rasters/tables (default: )
