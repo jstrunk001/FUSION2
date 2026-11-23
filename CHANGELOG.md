@@ -6,6 +6,33 @@ Versions match the `VERSION` set in `CMakeLists.txt`'s `project()` call,
 which `build.ps1` reads to build each release's tag and title -- see the
 README's "Distributing built tools" section.
 
+## [0.0.4] - 2026-11-23
+
+- New `/zmult` and `/zshift` options convert vertical units or move the
+  vertical datum on the fly: each final elevation or height is computed as
+  `z * zmult + zshift`, so `/zmult:0.3048` converts feet to meters. The
+  source files are not rewritten. The options are accepted by
+  `gridmetrics`, `cloudmetrics`, `densitymetrics`, `canopymodel`,
+  `clipdata`, `filterdata`, `thindata`, `groundfilter`,
+  `canopymaxima`, `treeseg`, `topometrics`, `gridsurfacestats`, and
+  `pipeline`.
+- New `/zmult_ground` and `/zshift_ground` options scale and shift the
+  `/ground` raster before it is subtracted from point elevations, for a
+  ground raster stored in different units than the point cloud. They are
+  accepted by the tools that take `/ground`: `gridmetrics`,
+  `cloudmetrics`, `densitymetrics`, `canopymodel`, and `clipdata`.
+- Height and elevation thresholds (`/minht`, `/heightcut`, `/outlier`,
+  `/minz`, `/maxz`, `/strata`, `/intstrata`, and the `groundfilter`
+  vertical parameters) are compared after the transform, so they are in
+  output vertical units.
+- `filterdata`, `thindata`, `groundfilter`, and `clipdata` write the
+  transformed elevations to their output point clouds.
+- `pipeline` passes the options to each stage and applies each
+  transform once. A stage that reads a raster made earlier in the same
+  pipeline does not scale it again, and a stage that reads the ground
+  raster from a `groundfilter` stage undoes that stage's transform before
+  subtracting it from raw point elevations.
+
 ## [0.0.3] - 2026-10-02
 
 - `gridmetrics` accepts a surface raster (a photogrammetric surface model
