@@ -58,6 +58,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Failed to read surface raster band data.\n";
         return 1;
     }
+    // NaN pixels become the finite missing value so the == tests in the surface statistics work
+    noData = static_cast<float>(fusion::raster::NormalizeNoData(elevation, noData));
     fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
     zTransform.ApplyToRaster(elevation, noData);
 
@@ -79,7 +81,8 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: Failed to read reference raster band data.\n";
             return 1;
         }
-        zTransform.ApplyToRaster(reference, refInfo.noDataValue);
+        double referenceNoData = fusion::raster::NormalizeNoData(reference, refInfo.noDataValue);
+        zTransform.ApplyToRaster(reference, referenceNoData);
         hasReference = true;
     }
 

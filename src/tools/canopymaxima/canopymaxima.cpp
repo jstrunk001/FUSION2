@@ -63,6 +63,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Failed to read CHM band data.\n";
         return 1;
     }
+    // NaN pixels become the finite missing value so the == tests below work
+    noData = fusion::raster::NormalizeNoData(chmData, noData);
     fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
     zTransform.ApplyToRaster(chmData, noData);
 

@@ -7,6 +7,7 @@
 #include <optional>
 #include <filesystem>
 #include <cstdint>
+#include <cmath>
 
 class GDALDataset;
 class GDALRasterBand;
@@ -45,6 +46,24 @@ struct RasterInfo {
 // so Y decreases as the row number grows.
 double PixelCentreX(const RasterInfo& info, int col);
 double PixelCentreY(const RasterInfo& info, int row);
+
+// Makes a band's missing-data marking safe to test with ==. A raster whose
+// missing value is NaN (or has none declared) cannot be tested that way,
+// because NaN == NaN is false, so such pixels would be read as real
+// heights. Every NaN pixel is set to the raster's finite missing value, or
+// to -9999 when the raster's missing value is NaN. Returns the finite
+// missing value that now marks missing pixels; use it in place of
+// RasterInfo::noDataValue.
+inline double NormalizeNoData(std::vector<float>& values, double noDataValue) {
+    double finiteNoData = std::isfinite(noDataValue) ? noDataValue : -9999.0;
+    const float finiteNoDataF = static_cast<float>(finiteNoData);
+    for (float& value : values) {
+        if (std::isnan(value)) {
+            value = finiteNoDataF;
+        }
+    }
+    return finiteNoData;
+}
 
 class GDALRaster {
 public:
@@ -89,6 +108,13 @@ public:
     static bool BuildVRT(const std::filesystem::path& outputVRTPath,
                         const std::vector<std::filesystem::path>& inputRasterPaths,
                         bool relativePaths = true);
+
+    // Mosaics every raster file directly inside inputDir (.tif, .tiff, .img,
+    // .asc, .bil, .dtm; not recursive) into one VRT file at outputVRTPath,
+    // with absolute source paths. Returns false when the folder holds no
+    // raster file.
+    static bool BuildVRTFromDirectory(const std::filesystem::path& inputDir,
+                                      const std::filesystem::path& outputVRTPath);
 
     static bool MergeVRTToGeoTIFF(const std::filesystem::path& vrtPath,
                                  const std::filesystem::path& outputGeoTIFFPath,

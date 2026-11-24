@@ -471,6 +471,15 @@ bool GDALRaster::WriteBandData(int bandIdx, const std::vector<float>& buffer) {
     return ok;
 }
 
+bool GDALRaster::BuildVRTFromDirectory(const std::filesystem::path& inputDir,
+                                       const std::filesystem::path& outputVRTPath) {
+    EnsureRegistered();
+    if (!std::filesystem::is_directory(inputDir)) return false;
+    std::vector<std::filesystem::path> tiles = FindRasterTiles(inputDir);
+    if (tiles.empty()) return false;
+    return BuildVRT(outputVRTPath, tiles, /*relativePaths=*/false);
+}
+
 bool GDALRaster::BuildVRT(const std::filesystem::path& outputVRTPath,
                            const std::vector<std::filesystem::path>& inputRasterPaths,
                            bool relativePaths) {

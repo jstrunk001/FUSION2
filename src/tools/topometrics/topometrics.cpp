@@ -56,6 +56,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: Failed to read DEM band data.\n";
         return 1;
     }
+    // NaN pixels become the finite missing value so the == tests below work
+    noData = fusion::raster::NormalizeNoData(demData, noData);
     fusion::cli::ZTransform zTransform = fusion::cli::ZTransform::FromParser(parser);
     zTransform.ApplyToRaster(demData, noData);
 
