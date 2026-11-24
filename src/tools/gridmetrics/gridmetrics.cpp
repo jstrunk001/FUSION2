@@ -26,6 +26,7 @@
 #include <sstream>
 #include <filesystem>
 #include <cmath>
+#include <functional>
 #include <algorithm>
 #include <numeric>
 #include <map>
@@ -242,6 +243,81 @@ static std::string ResolveGroundPath(const fusion::cli::ArgumentParser& parser, 
     return "";
 }
 
+// File extensions GDAL reads as a raster input here (same list a folder of
+// raster tiles is scanned for).
+static bool IsRasterFileExtension(std::string ext) {
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext == ".tif" || ext == ".tiff" || ext == ".vrt" || ext == ".img" ||
+           ext == ".asc" || ext == ".bil" || ext == ".dem" || ext == ".dtm";
+}
+
+// True when dirPath holds raster files and no LAS/LAZ files. A folder with
+// any LAS/LAZ file is treated as a point cloud folder, as before.
+static bool DirectoryHoldsOnlyRasters(const std::filesystem::path& dirPath) {
+    if (!std::filesystem::is_directory(dirPath)) return false;
+    if (!fusion::lidar::ResolveInputFiles({dirPath.string()}).empty()) return false;
+    for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
+        if (entry.is_regular_file() && IsRasterFileExtension(entry.path().extension().string())) return true;
+    }
+    return false;
+}
+
+// Raster input for tiled mode: calls onPixel once for every pixel of the
+// raster whose center lies inside the tile's own area (not its buffer),
+// as a first return at the pixel center with the pixel value as its
+// elevation, so the tile task bins pixels exactly as it bins points. Rows
+// are read in blocks to bound memory. A missing-data pixel is skipped, or,
+// with nodataAsZero, passed as a zero-height return flagged with
+// PointRecord::synthetic so the caller does not subtract ground from it.
+// Returns false when the raster cannot be opened or read.
+static bool ForEachTilePixel(const std::string& rasterPath, const fusion::batch::TileInfo& tile,
+                             bool nodataAsZero,
+                             const std::function<void(const fusion::lidar::PointRecord&)>& onPixel) {
+    fusion::raster::GDALRaster raster;
+    if (!raster.Open(rasterPath)) return false;
+    const auto& info = raster.GetInfo();
+
+    // 1. pixel range whose centers fall inside the tile (columns right, rows down)
+    int colFirst = static_cast<int>(std::ceil((tile.minX - info.originX) / info.pixelWidth - 0.5));
+    int colLast = static_cast<int>(std::floor((tile.maxX - info.originX) / info.pixelWidth - 0.5));
+    int rowFirst = static_cast<int>(std::ceil((info.originY - tile.maxY) / info.pixelHeight - 0.5));
+    int rowLast = static_cast<int>(std::floor((info.originY - tile.minY) / info.pixelHeight - 0.5));
+    colFirst = (std::max)(colFirst, 0);
+    rowFirst = (std::max)(rowFirst, 0);
+    colLast = (std::min)(colLast, info.width - 1);
+    rowLast = (std::min)(rowLast, info.height - 1);
+    if (colFirst > colLast || rowFirst > rowLast) return true;
+
+    // 2. read the range block by block and hand each pixel on
+    const int blockRows = 512;
+    const int windowCols = colLast - colFirst + 1;
+    const float noDataF = static_cast<float>(info.noDataValue);
+    std::vector<float> block;
+    for (int blockStart = rowFirst; blockStart <= rowLast; blockStart += blockRows) {
+        int rowsInBlock = (std::min)(blockRows, rowLast - blockStart + 1);
+        if (!raster.ReadBandWindow(1, colFirst, blockStart, windowCols, rowsInBlock, block)) return false;
+        for (int rowInBlock = 0; rowInBlock < rowsInBlock; ++rowInBlock) {
+            double y = fusion::raster::PixelCentreY(info, blockStart + rowInBlock);
+            for (int colInWindow = 0; colInWindow < windowCols; ++colInWindow) {
+                float value = block[static_cast<size_t>(rowInBlock) * windowCols + colInWindow];
+                bool isMissing = std::isnan(value) || (info.hasNoData && value == noDataF);
+                fusion::lidar::PointRecord pixel;
+                pixel.x = fusion::raster::PixelCentreX(info, colFirst + colInWindow);
+                pixel.y = y;
+                if (isMissing) {
+                    if (!nodataAsZero) continue;
+                    pixel.z = 0.0;
+                    pixel.synthetic = true;
+                } else {
+                    pixel.z = value;
+                }
+                onPixel(pixel);
+            }
+        }
+    }
+    return true;
+}
+
 // Batch/tiled mode: tiles the input directory of LAS/LAZ files, buffers each
 // tile, computes the same full metric set single-file mode does (elevation
 // stat bundle, cover/density, return-number counts, intensity stats,
@@ -254,7 +330,34 @@ static std::string ResolveGroundPath(const fusion::cli::ArgumentParser& parser, 
 // /rgbstrata values go to /output-table only.
 static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::filesystem::path& inputDir,
                               const std::filesystem::path& outDir, const fusion::lidar::PointFilter& pointFilter,
-                              const std::string& groundPath) {
+                              const std::string& groundPath, bool isRasterInput, bool nodataAsZero) {
+    // Raster input (a folder of rasters, or one raster/VRT run with /tilesize):
+    // a folder is mosaicked into one VRT file in the output folder, and every
+    // tile reads its own window of that raster.
+    std::string rasterInputPath;
+    fusion::raster::RasterInfo rasterInputInfo;
+    if (isRasterInput) {
+        std::filesystem::path rasterPath = inputDir;
+        if (std::filesystem::is_directory(inputDir)) {
+            rasterPath = outDir / "input_raster_mosaic.vrt";
+            if (!fusion::raster::GDALRaster::BuildVRTFromDirectory(inputDir, rasterPath)) {
+                std::cerr << "Error: could not mosaic the raster files in " << inputDir.string() << ".\n";
+                return 1;
+            }
+        }
+        fusion::raster::GDALRaster rasterProbe;
+        if (!rasterProbe.Open(rasterPath)) {
+            std::cerr << "Error: could not open input raster '" << rasterPath.string() << "'.\n";
+            return 1;
+        }
+        rasterInputInfo = rasterProbe.GetInfo();
+        rasterProbe.Close();
+        rasterInputPath = rasterPath.string();
+        std::cout << "[GridMetrics] Tiled processing of raster input: " << rasterInputPath << " ("
+                  << rasterInputInfo.width << "x" << rasterInputInfo.height << " pixels, cell size "
+                  << rasterInputInfo.pixelWidth << "x" << rasterInputInfo.pixelHeight << ")\n";
+    }
+
     // Without /extent, the project extent comes from the LAS/LAZ headers
     // (see ResolveProjectExtent), snapped outward to the cell size.
     fusion::batch::TileGridSpec gridSpec;
@@ -279,14 +382,33 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     gridSpec.resolution = std::stod(parser.GetOption("cellsize").value_or("10.0"));
 
     std::string extentMessage;
-    if (!fusion::batch::ResolveProjectExtent(inputDir, hasExtent, gridSpec.resolution, gridSpec, extentMessage)) {
+    if (isRasterInput) {
+        // pixels go straight to cells, so no buffer is read
+        gridSpec.bufferDistance = 0.0;
+        if (!hasExtent) {
+            double snap = gridSpec.resolution > 0.0 ? gridSpec.resolution : 1.0;
+            gridSpec.minX = std::floor(rasterInputInfo.minX / snap) * snap;
+            gridSpec.minY = std::floor(rasterInputInfo.minY / snap) * snap;
+            gridSpec.maxX = std::ceil(rasterInputInfo.maxX / snap) * snap;
+            gridSpec.maxY = std::ceil(rasterInputInfo.maxY / snap) * snap;
+            std::cout << "[GridMetrics] No /extent given -- using the extent of the input raster, snapped to "
+                      << snap << " units: " << gridSpec.minX << "," << gridSpec.minY << ","
+                      << gridSpec.maxX << "," << gridSpec.maxY << "\n";
+        }else if (gridSpec.maxX <= rasterInputInfo.minX || gridSpec.minX >= rasterInputInfo.maxX ||
+                  gridSpec.maxY <= rasterInputInfo.minY || gridSpec.minY >= rasterInputInfo.maxY) {
+            std::cerr << "Error: /extent does not overlap the input raster, which covers "
+                      << rasterInputInfo.minX << "," << rasterInputInfo.minY << ","
+                      << rasterInputInfo.maxX << "," << rasterInputInfo.maxY << "\n";
+            return 1;
+        }
+    }else if (!fusion::batch::ResolveProjectExtent(inputDir, hasExtent, gridSpec.resolution, gridSpec, extentMessage)) {
         std::cerr << "Error: " << extentMessage << "\n";
         return 1;
     }
     if (!extentMessage.empty()) std::cout << "[GridMetrics] " << extentMessage << "\n";
 
     fusion::batch::PipelineJobOptions jobOpts;
-    jobOpts.inputPointCloudDir = inputDir;
+    jobOpts.inputPointCloudDir = isRasterInput ? std::filesystem::path(rasterInputPath) : inputDir;
     jobOpts.outputDir = outDir;
     jobOpts.outputMode = parser.GetOption("output-mode").value_or("multiband");
     jobOpts.numThreads = std::stoi(parser.GetOption("threads").value_or("4"));
@@ -303,7 +425,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     if (auto o = parser.GetOption("outlier")) jobOpts.outlier = *o;
     if (auto c = parser.GetOption("class")) jobOpts.pointClass = *c;
     jobOpts.firstOnly = parser.HasFlag("first");
-    jobOpts.noIntensity = parser.HasFlag("nointensity");
+    jobOpts.noIntensity = parser.HasFlag("nointensity") || isRasterInput;
     if (auto s = parser.GetOption("strata")) jobOpts.strata = *s;
     if (auto is = parser.GetOption("intstrata")) jobOpts.intStrata = *is;
     if (auto rgb = parser.GetOption("rgb")) jobOpts.rgb = *rgb;
@@ -312,6 +434,17 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     jobOpts.surfStatsSource = parser.GetOption("surfstats-source").value_or("max");
     jobOpts.voxelSize = std::stod(parser.GetOption("voxelsize").value_or("20.0"));
     jobOpts.enableRgbStrata = parser.HasFlag("rgbstrata");
+    if (isRasterInput) {
+        // a raster has no spectral channels, intensity, return numbers, or classes
+        if (!jobOpts.rgb.empty() || jobOpts.enableRgbStrata) {
+            std::cerr << "Warning: /rgb and /rgbstrata do not apply to raster input -- ignored.\n";
+        }
+        jobOpts.rgb.clear();
+        jobOpts.enableRgbStrata = false;
+        if (parser.WasExplicit("class") || parser.WasExplicit("return")) {
+            std::cerr << "Warning: /class and /return do not apply to raster input -- ignored.\n";
+        }
+    }
     jobOpts.noRaster = parser.HasFlag("noraster");
     jobOpts.enableStrataRaster = parser.HasFlag("strataraster") && !jobOpts.noRaster;
     if (parser.WasExplicit("output-table")) {
@@ -340,7 +473,9 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     // Resolve representative point format (for /rgb) and coordinate reference
     // system (WKT) from the input directory. Every tile uses these single
     // values so every tile's table schema and raster CRS match.
-    if (std::filesystem::exists(inputDir)) {
+    if (isRasterInput) {
+        jobOpts.projectionWKT = rasterInputInfo.projectionWKT;
+    }else if (std::filesystem::exists(inputDir)) {
         for (const auto& entry : std::filesystem::directory_iterator(inputDir)) {
             if (!entry.is_regular_file()) continue;
             std::string ext = entry.path().extension().string();
@@ -376,7 +511,7 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
 
     fusion::batch::BatchPipeline pipeline(gridSpec, jobOpts);
 
-    auto tileTask = [gridSpec, pointFilter](const fusion::batch::TileInfo& tile, const fusion::batch::PipelineJobOptions& opts) -> bool {
+    auto tileTask = [gridSpec, pointFilter, isRasterInput, rasterInputPath, nodataAsZero](const fusion::batch::TileInfo& tile, const fusion::batch::PipelineJobOptions& opts) -> bool {
         std::filesystem::path outTif = opts.outputDir / (tile.name + ".tif");
 
         double res = gridSpec.resolution;
@@ -430,9 +565,8 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
         // Read the tile's points: every input file overlapping its buffered
         // extent, read directly or from the split file BatchPipeline wrote
         // when several tiles share one input file (see ForEachTilePoint)
-        bool pointsRead = fusion::batch::ForEachTilePoint(tile, opts.inputPointCloudDir, nullptr,
-                                                         [&](const fusion::lidar::PointRecord& pt) {
-            if (!pointFilter.Keep(pt)) {
+        auto onPoint = [&](const fusion::lidar::PointRecord& pt) {
+            if (!isRasterInput && !pointFilter.Keep(pt)) {
                 return;
             }
 
@@ -446,7 +580,9 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
             int row = 0;
             if (fusion::batch::TileCellForPoint(pt.x, pt.y, tile, gridSpec, cols, rows, col, row)) {
                 double elevation = pt.z;
-                if (hasGround) {
+                // a /nodata-as-zero pixel already is zero height above ground
+                bool isZeroFillPixel = isRasterInput && pt.synthetic;
+                if (hasGround && !isZeroFillPixel) {
                     auto gz = groundRaster.GetElevation(pt.x, pt.y);
                     if (!gz) {
                         return;
@@ -509,7 +645,15 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
                     }
                 }
             }
-        });
+        };
+
+        // read the tile's pixels (raster input) or points (point cloud input)
+        bool pointsRead = false;
+        if (isRasterInput) {
+            pointsRead = ForEachTilePixel(rasterInputPath, tile, nodataAsZero, onPoint);
+        }else{
+            pointsRead = fusion::batch::ForEachTilePoint(tile, opts.inputPointCloudDir, nullptr, onPoint);
+        }
         if (!pointsRead) return false;
 
         size_t numCells = static_cast<size_t>(cols) * rows;
@@ -887,6 +1031,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("output-mode", "Output raster mode: multiband or singleband", "multiband");
     parser.AddOption("output-table", "Write the full per-cell metrics table alongside the raster (path ending in .csv or .sqlite) -- omit to skip table output entirely");
     parser.AddFlag("noraster", "Skip writing the GeoTIFF raster(s) -- only valid together with /output-table, since a run must produce at least one output");
+    parser.AddFlag("nodata-as-zero", "Raster input only: count missing-data pixels (NaN or the raster's NoData value) as zero-height returns instead of skipping them -- for canopy height models where missing pixels are bare ground, so cover and density include them");
     parser.AddFlag("profile", "Report high-resolution wall-clock timing breakdown across decompression, binning, metric computation, and I/O");
     parser.AddFlag("gpu", "Enable CUDA GPU acceleration for DSM raster zonal metric calculations");
     parser.AddFlag("nogpu", "Disable CUDA GPU acceleration (force CPU scanline processing)");
@@ -935,9 +1080,21 @@ int main(int argc, char* argv[]) {
         groundCheck.Close();
     }
 
+    // Raster input runs in tiled mode when it is a folder of rasters, or a
+    // single raster or VRT given with /tilesize; a single raster without
+    // /tilesize is processed whole, as before.
+    bool nodataAsZero = parser.HasFlag("nodata-as-zero");
+    bool isRasterFolder = DirectoryHoldsOnlyRasters(inputPath);
+    bool isRasterFileTiled = std::filesystem::is_regular_file(inputPath) &&
+                             IsRasterFileExtension(inputPath.extension().string()) &&
+                             parser.WasExplicit("tilesize");
+    if (isRasterFolder || isRasterFileTiled) {
+        std::filesystem::create_directories(outDir);
+        return RunBatchTiledMode(parser, inputPath, outDir, pointFilter, groundPathStr, true, nodataAsZero);
+    }
     if (std::filesystem::is_directory(inputPath)) {
         std::filesystem::create_directories(outDir);
-        return RunBatchTiledMode(parser, inputPath, outDir, pointFilter, groundPathStr);
+        return RunBatchTiledMode(parser, inputPath, outDir, pointFilter, groundPathStr, false, false);
     }
 
     double cellSize = std::stod(parser.GetOption("cellsize").value_or("10.0"));
@@ -1082,6 +1239,10 @@ int main(int argc, char* argv[]) {
     bool gpuExecuted = false;
     fusion::cuda::CudaRasterMetricsBundle cudaBundle;
 
+    if (isRasterInput && enableGpu && nodataAsZero && hasGround) {
+        std::cout << "[GridMetrics] Notice: /nodata-as-zero with a ground raster is not supported on the GPU path. Using CPU.\n";
+        enableGpu = false;
+    }
     if (isRasterInput && enableGpu && fusion::cuda::IsCudaAvailable()) {
         const auto& dsmInfo = dsmRaster.GetInfo();
         std::cout << "[GridMetrics] Ingesting DSM raster for GPU zonal metric calculation...\n";
@@ -1090,6 +1251,16 @@ int main(int argc, char* argv[]) {
         if (dsmRaster.ReadBandData(1, dsmFull)) {
             auto tRead1 = std::chrono::steady_clock::now();
             secReadDecomp += std::chrono::duration<double>(tRead1 - tRead0).count();
+
+            if (nodataAsZero) {
+                // missing pixels become zero-height returns (no ground raster on this path)
+                const float dsmNoDataF = static_cast<float>(dsmInfo.noDataValue);
+                for (float& dsmValue : dsmFull) {
+                    if (std::isnan(dsmValue) || (dsmInfo.hasNoData && dsmValue == dsmNoDataF)) {
+                        dsmValue = 0.0f;
+                    }
+                }
+            }
 
             std::vector<float> dtmFull;
             const float* dtmPtr = nullptr;
@@ -1166,11 +1337,14 @@ int main(int argc, char* argv[]) {
                     double x = fusion::raster::PixelCentreX(dsmInfo, cGlobal);
                     float val = dsmBlock[br * dsmInfo.width + cGlobal];
 
-                    if (dsmInfo.hasNoData && val == static_cast<float>(dsmInfo.noDataValue)) {
-                        continue;
-                    }
-                    if (std::isnan(val)) {
-                        continue;
+                    bool isZeroFill = false;
+                    if ((dsmInfo.hasNoData && val == static_cast<float>(dsmInfo.noDataValue)) || std::isnan(val)) {
+                        if (!nodataAsZero) {
+                            continue;
+                        }
+                        // /nodata-as-zero: a missing pixel is a zero-height return
+                        val = 0.0f;
+                        isZeroFill = true;
                     }
 
                     int col = static_cast<int>((x - gridMinX) / cellSize);
@@ -1180,7 +1354,7 @@ int main(int argc, char* argv[]) {
 
                     if (col >= 0 && col < cols && row >= 0 && row < rows) {
                         double elevation = val;
-                        if (hasGround) {
+                        if (hasGround && !isZeroFill) {
                             auto gz = groundRaster.GetElevation(x, y, fusion::raster::SampleMethod::Bilinear);
                             if (!gz) {
                                 continue;
