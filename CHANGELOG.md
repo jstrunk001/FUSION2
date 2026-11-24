@@ -6,6 +6,25 @@ Versions match the `VERSION` set in `CMakeLists.txt`'s `project()` call,
 which `build.ps1` reads to build each release's tag and title -- see the
 README's "Distributing built tools" section.
 
+## [Unreleased]
+
+- `gridmetrics` runs raster input in its tiled mode. Give it a folder of
+  rasters (GeoTIFF, `.img`, `.asc`, and similar), or one raster or VRT
+  together with `/tilesize`. A folder is mosaicked into
+  `input_raster_mosaic.vrt` in the output folder, and each tile reads only
+  its own pixels, so a statewide set of canopy height tiles no longer has
+  to fit in memory at once. A single raster without `/tilesize` is still
+  processed whole.
+- New `/nodata-as-zero` option for `gridmetrics` raster input counts
+  missing pixels (NaN or the raster's NoData value) as zero-height returns
+  instead of skipping them. Use it for canopy height models where a
+  missing pixel is bare ground, so cover and density include those pixels.
+  With a ground raster, the GPU path falls back to the CPU path.
+- `canopymaxima`, `treeseg`, `topometrics`, and `gridsurfacestats` now
+  treat NaN pixels as missing. A canopy height model with NaN missing
+  pixels previously gave `canopymaxima` one tree of NaN height for every
+  missing pixel (147 tree tops from 3 real trees in a test raster).
+
 ## [0.0.4] - 2026-11-23
 
 - New `/zmult` and `/zshift` options convert vertical units or move the
