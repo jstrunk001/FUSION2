@@ -8,6 +8,18 @@ README's "Distributing built tools" section.
 
 ## [Unreleased]
 
+- The `/nogpu` option is removed from `canopymodel`, `gridmetrics`, and
+  `pipeline`. The GPU is used only when `/gpu` is given, so `/nogpu` had
+  nothing to turn off.
+- CUDA builds now target many GPU generations. When the caller does not
+  set `CMAKE_CUDA_ARCHITECTURES`, CMake 3.23 or newer builds for every
+  major architecture the installed CUDA Toolkit supports, plus PTX for
+  the newest one; older CMake builds for compute capability 7.5 through
+  9.0. One release binary then runs on a wide range of NVIDIA cards.
+- In a CUDA build, `/gpu` now checks at runtime for a CUDA device and
+  driver. On a computer without one, the tools print the "CUDA not
+  available" notice and run on the CPU before copying any data.
+
 - `gridmetrics` runs raster input in its tiled mode. Give it a folder of
   rasters (GeoTIFF, `.img`, `.asc`, and similar), or one raster or VRT
   together with `/tilesize`. A folder is mosaicked into

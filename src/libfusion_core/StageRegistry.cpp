@@ -107,7 +107,6 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardFlag(args, forwardedOptions, "first");
                 ForwardFlag(args, forwardedOptions, "nointensity");
                 ForwardFlag(args, forwardedOptions, "gpu");
-                ForwardFlag(args, forwardedOptions, "nogpu");
                 ForwardOption(args, forwardedOptions, "strata");
                 ForwardOption(args, forwardedOptions, "intstrata");
                 ForwardZOptionsWithGround(args, forwardedOptions, groundDemPath.has_value());
@@ -174,7 +173,6 @@ const std::vector<StageSpec>& GetStageRegistry() {
                 ForwardOption(args, forwardedOptions, "cellsize");
                 ForwardFlag(args, forwardedOptions, "slope");
                 ForwardFlag(args, forwardedOptions, "gpu");
-                ForwardFlag(args, forwardedOptions, "nogpu");
                 ForwardOption(args, forwardedOptions, "smooth");
                 ForwardOption(args, forwardedOptions, "class");
                 ForwardOption(args, forwardedOptions, "return");

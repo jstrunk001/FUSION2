@@ -3,6 +3,7 @@
 #include "fusion/cuda/CanopyModelCuda.h"
 
 #if defined(FUSION_HAS_CUDA)
+extern "C" bool FusionCudaDeviceAvailable();
 extern "C" bool LaunchCudaChmRasterization(
     const float* h_xRel,
     const float* h_yRel,
@@ -22,7 +23,7 @@ namespace fusion::cuda {
 
 bool IsCudaAvailable() {
 #if defined(FUSION_HAS_CUDA)
-    return true;
+    return FusionCudaDeviceAvailable();
 #else
     return false;
 #endif

@@ -121,6 +121,15 @@ __global__ void SmoothBoxVerticalKernel(const float* __restrict__ inGrid,
 
 } // namespace
 
+// Report whether at least one CUDA device and driver are present at runtime
+extern "C" bool FusionCudaDeviceAvailable() {
+    int deviceCount = 0;
+    if (cudaGetDeviceCount(&deviceCount) != cudaSuccess) {
+        return false;
+    }
+    return deviceCount > 0;
+}
+
 extern "C" bool LaunchCudaChmRasterization(
     const float* h_xRel,
     const float* h_yRel,

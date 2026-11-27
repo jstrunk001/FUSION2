@@ -975,7 +975,6 @@ int main(int argc, char* argv[]) {
     parser.AddFlag("nodata-as-zero", "Raster input only: count missing-data pixels (NaN or the raster's NoData value) as zero-height returns instead of skipping them -- for canopy height models where missing pixels are bare ground, so cover and density include them");
     parser.AddFlag("profile", "Report high-resolution wall-clock timing breakdown across decompression, binning, metric computation, and I/O");
     parser.AddFlag("gpu", "Enable CUDA GPU acceleration for DSM raster zonal metric calculations");
-    parser.AddFlag("nogpu", "Disable CUDA GPU acceleration (force CPU scanline processing)");
 
     // Batch/tiled mode options (used only when the positional input is a directory --
     // see RunBatchTiledMode above). Ignored in single-file mode.
@@ -1069,8 +1068,7 @@ int main(int argc, char* argv[]) {
     bool firstOnly = parser.HasFlag("first");
     bool noIntensity = parser.HasFlag("nointensity");
     bool wantGpu = parser.HasFlag("gpu");
-    bool forceCpu = parser.HasFlag("nogpu");
-    bool enableGpu = (wantGpu && !forceCpu);
+    bool enableGpu = wantGpu;
 
     double outlierMin = -99999.0, outlierMax = 99999.0;
     bool hasOutlier = false;

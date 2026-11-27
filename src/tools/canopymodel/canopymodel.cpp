@@ -26,7 +26,6 @@ int main(int argc, char* argv[]) {
     parser.AddFlag("slope", "Normalize heights perpendicular to local terrain slope plane");
     parser.AddOption("smooth", "Spatial smoothing window size (e.g. 3 for 3x3 filter)", "");
     parser.AddFlag("gpu", "Enable CUDA GPU acceleration for CHM rasterization");
-    parser.AddFlag("nogpu", "Disable CUDA GPU acceleration (force CPU rasterization)");
     fusion::lidar::PointFilter::RegisterOptions(parser);
     fusion::cli::ZTransform::RegisterOptions(parser);
     fusion::cli::ZTransform::RegisterGroundOptions(parser);
@@ -107,8 +106,7 @@ int main(int argc, char* argv[]) {
     fusion::cli::ZTransform groundTransform = fusion::cli::ZTransform::FromGroundParser(parser);
 
     bool wantGpu = parser.HasFlag("gpu");
-    bool forceCpu = parser.HasFlag("nogpu");
-    bool gpuReady = (wantGpu && !forceCpu && !useSlope && fusion::cuda::IsCudaAvailable());
+    bool gpuReady = (wantGpu && !useSlope && fusion::cuda::IsCudaAvailable());
 
     if (wantGpu && !fusion::cuda::IsCudaAvailable()) {
         std::cout << "[CanopyModel] Notice: /gpu requested but CUDA support is not compiled into this build. Falling back to CPU.\n";

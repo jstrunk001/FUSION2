@@ -109,7 +109,7 @@ int RunStageRegistryTests() {
     CHECK(!fusion::batch::ValidateStageChain({"canopymodel", "canopymaxima"}, chainError, true), failures);
     CHECK(!fusion::batch::ValidateStageChain({"gridmetrics"}, chainError, true), failures);
 
-    //7. /gpu and /nogpu forwarding for canopymodel and gridmetrics
+    //7. /gpu forwarding for canopymodel and gridmetrics
     const auto* cm = fusion::batch::FindStage("canopymodel");
     const auto* gm = fusion::batch::FindStage("gridmetrics");
     CHECK(cm != nullptr, failures);
@@ -120,12 +120,6 @@ int RunStageRegistryTests() {
         auto gmGpuArgs = gm->buildArgs(input, dem, outputPath, gpuOpts);
         CHECK(HasArg(cmGpuArgs, "/gpu"), failures);
         CHECK(HasArg(gmGpuArgs, "/gpu"), failures);
-
-        std::unordered_map<std::string, std::string> noGpuOpts = {{"nogpu", "true"}};
-        auto cmNoGpuArgs = cm->buildArgs(input, dem, outputPath, noGpuOpts);
-        auto gmNoGpuArgs = gm->buildArgs(input, dem, outputPath, noGpuOpts);
-        CHECK(HasArg(cmNoGpuArgs, "/nogpu"), failures);
-        CHECK(HasArg(gmNoGpuArgs, "/nogpu"), failures);
     }
 
     //8. /zmult, /zshift, /zmult_ground, /zshift_ground forwarding and double-transform prevention

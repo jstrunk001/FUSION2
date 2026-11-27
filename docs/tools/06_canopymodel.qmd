@@ -28,7 +28,6 @@ plain, smoothed, and slope-adjusted.
 | `/smooth` | `3` | Smooth with a 3 x 3 cell moving average. Empty cells stay empty; they are not filled from their neighbours. |
 | `/slope` | | Measure each point's height perpendicular to the local slope of the ground surface rather than straight up. The two differ only where the ground is sloped. |
 | `/gpu` | | Enable CUDA GPU acceleration for point cloud rasterization and smoothing filter. Automatically falls back to multi-threaded CPU execution if no compatible CUDA GPU is available. |
-| `/nogpu` | | Explicitly disable CUDA GPU acceleration and run strictly on the CPU. |
 
 : Options used in the `canopymodel` examples. {#tbl-options-canopymodel}
 

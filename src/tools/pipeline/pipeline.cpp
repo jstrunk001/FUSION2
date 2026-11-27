@@ -66,7 +66,7 @@ static const std::vector<std::string> kForwardableOptions = {
     "zmult", "zshift", "zmult_ground", "zshift_ground"
 };
 static const std::vector<std::string> kForwardableFlags = {
-    "first", "nointensity", "slope", "gpu", "nogpu"
+    "first", "nointensity", "slope", "gpu"
 };
 
 static std::unordered_map<std::string, std::string> BuildForwardedOptions(const fusion::cli::ArgumentParser& parser) {

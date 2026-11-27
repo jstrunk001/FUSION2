@@ -4,7 +4,6 @@ Generates Canopy Height Model (CHM) GeoTIFF from point cloud
 
 Options:
   /noraster	Skip writing the GeoTIFF raster -- only valid together with /output-table, since a run must produce at least one output
-  /nogpu	Disable CUDA GPU acceleration (force CPU rasterization)
   /gpu	Enable CUDA GPU acceleration for CHM rasterization
   /slope	Normalize heights perpendicular to local terrain slope plane
   /zshift_ground:<value>	Add this offset to /ground raster elevation values after /zmult_ground, before subtracting from point Z (default: 0.0)

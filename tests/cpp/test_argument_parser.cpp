@@ -57,17 +57,15 @@ int RunArgumentParserTests() {
     auto upper = ParseLine({"tile.laz", "/OUTPUT:out.las"});
     CHECK(upper.GetOption("output") == std::optional<std::string>("out.las"), failures);
 
-    //4. flag parsing for /gpu and /nogpu
+    //4. flag parsing for /gpu
     {
         fusion::cli::ArgumentParser cmParser("canopymodel", "test");
         cmParser.AddFlag("gpu", "enable GPU acceleration");
-        cmParser.AddFlag("nogpu", "disable GPU acceleration");
         std::vector<std::string> args = {"canopymodel", "input.laz", "/gpu"};
         std::vector<char*> argv;
         for (auto& s : args) argv.push_back(s.data());
         cmParser.Parse(static_cast<int>(argv.size()), argv.data());
         CHECK(cmParser.HasFlag("gpu"), failures);
-        CHECK(!cmParser.HasFlag("nogpu"), failures);
         CHECK(cmParser.GetPositionalArgs().size() == 1, failures);
         CHECK(cmParser.GetPositionalArgs()[0] == "input.laz", failures);
     }

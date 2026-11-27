@@ -38,7 +38,6 @@ on each.
 | `/minht` | `2` | Passed on to every stage that accepts it. |
 | `/merge` | | Also merge each raster stage's tiles into one GeoTIFF, besides the virtual raster (`.vrt`). |
 | `/gpu` | | Forwarded to stages supporting GPU acceleration (`canopymodel`, `gridmetrics`). Worker threads serialize execution during GPU stages to prevent device memory contention, while CPU stages run in full multi-threaded concurrency across `/threads`. |
-| `/nogpu` | | Forwarded to child stages to explicitly force CPU execution. |
 
 : Options used in the `pipeline` example. {#tbl-options-pipeline}
 

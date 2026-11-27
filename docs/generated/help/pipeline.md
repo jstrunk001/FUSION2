@@ -3,7 +3,6 @@ Usage: pipeline <arguments> [other /options]
 Multi-tool batch pipeline: tiles/buffers the input once and chains any of the FUSION2 tools per tile
 
 Options:
-  /nogpu	Forwarded to whichever stage(s) accept it
   /slope	Forwarded to whichever stage(s) accept it
   /nointensity	Forwarded to whichever stage(s) accept it
   /first	Forwarded to whichever stage(s) accept it

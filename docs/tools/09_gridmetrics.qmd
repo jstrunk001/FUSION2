@@ -121,7 +121,6 @@ predicted from imagery by Meta, with no ground raster.
 | `/cellsize` | `20` | Cell size, 20 m. A whole multiple of the pixel size gives every cell the same number of pixels (400 here). |
 | `/minht` | `2` | Pixels below 2 m are left out of the height statistics. |
 | `/gpu` | | Enable CUDA GPU acceleration for DSM surface raster zonal metric calculations (computes 33-band zonal metrics in device memory, with automatic CPU fallback). |
-| `/nogpu` | | Explicitly disable CUDA GPU acceleration and force CPU scanline execution. |
 | `/profile` | | After the run, print how long each part of it took (@tbl-gridmetrics-profile). |
 
 : Options used in the surface-raster example. {#tbl-options-gridmetrics-surface}
@@ -133,7 +132,7 @@ When compiled with CUDA support and executed on a system with a compatible NVIDI
 1. **33-Band Zonal Engine**: Computes standard elevation percentiles, moments (mean, variance, skewness, kurtosis), L-moments, and canopy metrics directly on device memory across cell windows.
 2. **Scanline Window Buffering**: Strips of pixel rows are uploaded to device memory and processed concurrently, keeping device memory footprint predictable regardless of raster width.
 3. **Resilient Fallback**: If CUDA device allocation or initialization fails, `gridmetrics` logs an informational message and automatically falls back to multi-threaded CPU scanline processing. Point cloud inputs run via the multi-threaded CPU point cloud engine.
-4. **Disabling Acceleration**: Use `/nogpu` to bypass CUDA checks and force CPU execution.
+4. **Opt-in**: The GPU is used only when `/gpu` is given. Without it, `gridmetrics` runs on the CPU.
 
 Every other single-file option works as it does for points, with three
 differences. A raster has no intensity, so the `int_*` bands are left

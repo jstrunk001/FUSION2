@@ -90,7 +90,21 @@ if(FUSION_ENABLE_CUDA)
     include(CheckLanguage)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
+        # Build for many GPU generations so one binary runs on many cards.
+        # Skipped when the caller already set CMAKE_CUDA_ARCHITECTURES.
+        # "all-major" (CMake 3.23+) lets CMake pick every major architecture
+        # the installed toolkit supports, plus PTX for the newest one so
+        # future cards can still run the code. Older CMake gets a fixed
+        # list covering Turing (75) through Hopper (90), with PTX for 90.
+        if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+            if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
+                set(CMAKE_CUDA_ARCHITECTURES "all-major")
+            else()
+                set(CMAKE_CUDA_ARCHITECTURES "75-real;80-real;86-real;89-real;90")
+            endif()
+        endif()
         enable_language(CUDA)
+        message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         target_compile_definitions(fusion_core PUBLIC FUSION_HAS_CUDA=1)
