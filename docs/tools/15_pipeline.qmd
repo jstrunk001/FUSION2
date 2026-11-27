@@ -144,3 +144,25 @@ tallest point above ground. The joined tables list tiles in ascending
 order and are identical at 4 threads and at 1.
 
 {{< include ../examples/fragments/pipeline_chain_checks.md >}}
+
+## Starting from a raster {#sec-pipeline-raster}
+
+`pipeline` can start from a raster instead of a point cloud. Give
+`/input` a raster file, a virtual raster (`.vrt`), or a folder holding
+only rasters, and name stages that read a raster: `canopymaxima`,
+`treeseg`, and `topometrics`. A folder is joined into
+`input_raster_mosaic.vrt` in the processing folder. For each tile,
+`pipeline` crops the tile and its buffer out of the raster, runs the
+stages on the cropped raster, trims each result back to the tile, and
+joins the tiles as for a point cloud input. Tiling, `/threads`, `/tiles`,
+`/retryfailed`, and the ability to resume work as before.
+
+A stage that needs a point cloud (`canopymodel`, `gridmetrics`, and the
+others) is refused for a raster input, with a message naming the stage.
+`/buffer` should be wider than the largest search window of the stages,
+or a tree top near a tile edge can differ from a whole-raster run. In
+`treeseg`'s crown table, a crown centered in the buffer of two tiles can
+appear in both tables, as for a point cloud input; the crown raster has
+no overlap. For metrics on a large raster, use `gridmetrics` in its tiled
+mode (@sec-gridmetrics-raster-tiled).
+

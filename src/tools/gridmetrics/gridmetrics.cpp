@@ -4,6 +4,7 @@
 #include "fusion/cli/ParseUtil.h"
 #include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/raster/RasterPointReader.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/LASPointCloud.h"
@@ -257,49 +258,17 @@ using fusion::batch::DirectoryHoldsOnlyRasters;
 static bool ForEachTilePixel(const std::string& rasterPath, const fusion::batch::TileInfo& tile,
                              bool nodataAsZero,
                              const std::function<void(const fusion::lidar::PointRecord&)>& onPixel) {
-    fusion::raster::GDALRaster raster;
-    if (!raster.Open(rasterPath)) return false;
-    const auto& info = raster.GetInfo();
+    // 1. open the raster and limit reading to the pixels whose centers are in the tile
+    fusion::raster::RasterPointReader pixelReader;
+    if (!pixelReader.Open(rasterPath, nodataAsZero)) return false;
+    pixelReader.SetWindow(tile.minX, tile.minY, tile.maxX, tile.maxY);
 
-    // 1. pixel range whose centers fall inside the tile (columns right, rows down)
-    int colFirst = static_cast<int>(std::ceil((tile.minX - info.originX) / info.pixelWidth - 0.5));
-    int colLast = static_cast<int>(std::floor((tile.maxX - info.originX) / info.pixelWidth - 0.5));
-    int rowFirst = static_cast<int>(std::ceil((info.originY - tile.maxY) / info.pixelHeight - 0.5));
-    int rowLast = static_cast<int>(std::floor((info.originY - tile.minY) / info.pixelHeight - 0.5));
-    colFirst = (std::max)(colFirst, 0);
-    rowFirst = (std::max)(rowFirst, 0);
-    colLast = (std::min)(colLast, info.width - 1);
-    rowLast = (std::min)(rowLast, info.height - 1);
-    if (colFirst > colLast || rowFirst > rowLast) return true;
-
-    // 2. read the range block by block and hand each pixel on
-    const int blockRows = 512;
-    const int windowCols = colLast - colFirst + 1;
-    const float noDataF = static_cast<float>(info.noDataValue);
-    std::vector<float> block;
-    for (int blockStart = rowFirst; blockStart <= rowLast; blockStart += blockRows) {
-        int rowsInBlock = (std::min)(blockRows, rowLast - blockStart + 1);
-        if (!raster.ReadBandWindow(1, colFirst, blockStart, windowCols, rowsInBlock, block)) return false;
-        for (int rowInBlock = 0; rowInBlock < rowsInBlock; ++rowInBlock) {
-            double y = fusion::raster::PixelCentreY(info, blockStart + rowInBlock);
-            for (int colInWindow = 0; colInWindow < windowCols; ++colInWindow) {
-                float value = block[static_cast<size_t>(rowInBlock) * windowCols + colInWindow];
-                bool isMissing = std::isnan(value) || (info.hasNoData && value == noDataF);
-                fusion::lidar::PointRecord pixel;
-                pixel.x = fusion::raster::PixelCentreX(info, colFirst + colInWindow);
-                pixel.y = y;
-                if (isMissing) {
-                    if (!nodataAsZero) continue;
-                    pixel.z = 0.0;
-                    pixel.synthetic = true;
-                } else {
-                    pixel.z = value;
-                }
-                onPixel(pixel);
-            }
-        }
+    // 2. hand each pixel on
+    fusion::lidar::PointRecord pixel;
+    while (pixelReader.ReadNextPoint(pixel)) {
+        onPixel(pixel);
     }
-    return true;
+    return !pixelReader.HadReadError();
 }
 
 // Batch/tiled mode: tiles the input directory of LAS/LAZ files, buffers each

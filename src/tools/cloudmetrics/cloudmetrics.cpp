@@ -4,6 +4,8 @@
 #include "fusion/cli/ParseUtil.h"
 #include "fusion/cli/ZTransform.h"
 #include "fusion/raster/GDALRaster.h"
+#include "fusion/raster/RasterPointReader.h"
+#include "fusion/batch/BatchPipeline.h"
 #include "fusion/lidar/InputResolver.h"
 #include "fusion/lidar/MergedPointCloudReader.h"
 #include "fusion/lidar/PointFilter.h"
@@ -277,6 +279,7 @@ int main(int argc, char* argv[]) {
     parser.AddOption("voxelsize", "3D voxel resolution for voxel volume metrics (same units as the input)", "20.0");
     parser.AddFlag("exp", "Compute additional experimental metrics from RSForTools");
     parser.AddFlag("surfstats", "Compute surface area ratio, roughness, planimetric area, and 3D surface area from a /cellsize elevation grid (top-of-cloud max per cell). Not available with /shape.");
+    parser.AddFlag("nodata-as-zero", "Raster input only: count missing-data pixels (NaN or the raster's NoData value) as zero-height returns instead of skipping them -- for canopy height models where missing pixels are bare ground");
     parser.AddOption("shape", "Polygon shapefile -- compute one metrics row per polygon feature instead of one row for the whole cloud");
     parser.AddOption("field", "Attribute field used to label each /shape polygon's output row; falls back to a zero-padded feature index when omitted or missing on a feature");
     parser.AddOption("nodata", "Value for a cloud/feature with zero points at all: NA, or a number such as 0, -9999, or inf", "NA");
@@ -363,28 +366,84 @@ int main(int argc, char* argv[]) {
         haveShape = true;
     }
 
-    // 3. Resolve input point cloud files and directories
-    auto inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
-    if (inputFiles.empty()) {
-        std::cerr << "Error: No valid .las or .laz files found from input arguments.\n";
-        return 1;
+    // 3. Resolve the input: a raster (a file, a VRT, or a folder holding only
+    //    rasters) is read pixel by pixel as first returns at the pixel
+    //    centers; anything else is a LAS/LAZ point cloud
+    bool isRasterInput = fusion::batch::DirectoryHoldsOnlyRasters(posArgs[0]) ||
+                         (std::filesystem::is_regular_file(posArgs[0]) &&
+                          fusion::batch::IsRasterFileExtension(std::filesystem::path(posArgs[0]).extension().string()));
+    bool nodataAsZero = parser.HasFlag("nodata-as-zero");
+    if (nodataAsZero && !isRasterInput) {
+        std::cerr << "Warning: /nodata-as-zero applies to raster input only -- ignored.\n";
     }
 
+    std::vector<std::filesystem::path> inputFiles;
     fusion::lidar::MergedPointCloudReader reader;
-    if (!reader.Open(inputFiles)) {
-        std::cerr << "Error: Failed to open input point cloud(s).\n";
-        return 1;
+    fusion::raster::RasterPointReader rasterReader;
+    fusion::lidar::LASHeaderInfo inputHeader;
+    if (isRasterInput) {
+        // a folder of rasters is mosaicked into a VRT file next to the output table
+        std::filesystem::path rasterPath = posArgs[0];
+        if (std::filesystem::is_directory(rasterPath)) {
+            std::filesystem::path outputFolder = std::filesystem::path(outputPath).parent_path();
+            if (outputFolder.empty()) outputFolder = ".";
+            rasterPath = outputFolder / "input_raster_mosaic.vrt";
+            if (!fusion::raster::GDALRaster::BuildVRTFromDirectory(posArgs[0], rasterPath)) {
+                std::cerr << "Error: could not mosaic the raster files in " << posArgs[0] << ".\n";
+                return 1;
+            }
+        }
+        if (!rasterReader.Open(rasterPath, nodataAsZero)) {
+            std::cerr << "Error: Failed to open input raster: " << rasterPath.string() << "\n";
+            return 1;
+        }
+        inputFiles.push_back(rasterPath);
+        const auto& rasterInfo = rasterReader.GetInfo();
+        inputHeader.minX = rasterInfo.minX;
+        inputHeader.maxX = rasterInfo.maxX;
+        inputHeader.minY = rasterInfo.minY;
+        inputHeader.maxY = rasterInfo.maxY;
+        std::cout << "[CloudMetrics] Raster input: each pixel counts as one first return at its center ("
+                  << rasterInfo.width << "x" << rasterInfo.height << " pixels).\n";
+    }else{
+        inputFiles = fusion::lidar::ResolveInputFiles(posArgs);
+        if (inputFiles.empty()) {
+            std::cerr << "Error: No valid .las, .laz, or raster files found from input arguments.\n";
+            return 1;
+        }
+        if (!reader.Open(inputFiles)) {
+            std::cerr << "Error: Failed to open input point cloud(s).\n";
+            return 1;
+        }
+        inputHeader = reader.GetHeader();
     }
+
+    // one way to read the next point and to close the input, for either kind of input
+    auto readNextPoint = [&](fusion::lidar::PointRecord& nextPoint) -> bool {
+        return isRasterInput ? rasterReader.ReadNextPoint(nextPoint) : reader.ReadNextPoint(nextPoint);
+    };
+    auto closeInput = [&]() {
+        if (isRasterInput) {
+            rasterReader.Close();
+        }else{
+            reader.Close();
+        }
+    };
+    // point filters (return number, class, scan angle) do not describe pixels
+    auto isPointKept = [&](const fusion::lidar::PointRecord& testPoint) -> bool {
+        return isRasterInput || pointFilter.Keep(testPoint);
+    };
 
     // /rgb: -- a requested channel absent from the file's point format is a
     // printed warning, never a hard failure, since a batch run over
     // mixed-format tiles is a real, expected case.
     fusion::metrics::SpectralChannelSelection spectralSelection;
     if (auto rgbOpt = parser.GetOption("rgb")) {
-        spectralSelection = fusion::metrics::ParseSpectralChannels(*rgbOpt, reader.GetHeader().pointFormat);
+        spectralSelection = fusion::metrics::ParseSpectralChannels(*rgbOpt, inputHeader.pointFormat);
         for (const auto& token : spectralSelection.unknownTokens) {
-            std::cerr << "Warning: /rgb channel '" << token << "' is not available for LAS point format "
-                      << static_cast<int>(reader.GetHeader().pointFormat) << " -- skipped.\n";
+            std::cerr << "Warning: /rgb channel '" << token << "' is not available for "
+                      << (isRasterInput ? std::string("raster input") : "LAS point format " + std::to_string(static_cast<int>(inputHeader.pointFormat)))
+                      << " -- skipped.\n";
         }
     }
 
@@ -427,15 +486,15 @@ int main(int argc, char* argv[]) {
                 spectralSelection.channels.size(), std::vector<std::vector<double>>(numStrataBuckets)));
 
         fusion::lidar::PointRecord pt;
-        while (reader.ReadNextPoint(pt)) {
-            if (!pointFilter.Keep(pt)) continue;
+        while (readNextPoint(pt)) {
+            if (!isPointKept(pt)) continue;
             size_t featureIdx = featureSet.FindContaining(pt.x, pt.y);
             if (featureIdx == fusion::geom::PolygonFeatureSet::npos) {
                 continue;
             }
 
             double h = pt.z;
-            if (hasGround) {
+            if (hasGround && !pt.synthetic) {
                 auto gz = groundRaster.GetElevation(pt.x, pt.y);
                 if (!gz) {
                     continue;
@@ -462,7 +521,7 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        reader.Close();
+        closeInput();
 
         outFile << "FeatureIndex,Label,TotalPoints,CanopyPoints,CanopyCoverPct";
         for (const auto& name : elevColNames) outFile << "," << name;
@@ -528,7 +587,7 @@ int main(int argc, char* argv[]) {
     // grid (same col/row indexing idiom gridmetrics uses), tracking each
     // cell's max height -- never written to disk, only used to feed
     // ComputeSurfaceStatsGrid/SummarizeSurfaceStats below.
-    const auto& header = reader.GetHeader();
+    const auto& header = inputHeader;
     constexpr float kSurfNoValue = -3.0e38f; // private, reliably `==`-comparable marker -- see gridmetrics.cpp's identical use
     int surfCols = 1, surfRows = 1;
     std::vector<float> surfCellMax;
@@ -552,11 +611,11 @@ int main(int argc, char* argv[]) {
     uint64_t totalPts = 0;
     uint64_t ptsAboveMin = 0;
 
-    while (reader.ReadNextPoint(pt)) {
-        if (!pointFilter.Keep(pt)) continue;
+    while (readNextPoint(pt)) {
+        if (!isPointKept(pt)) continue;
         totalPts++;
         double h = pt.z;
-        if (hasGround) {
+        if (hasGround && !pt.synthetic) {
             auto gz = groundRaster.GetElevation(pt.x, pt.y);
             if (!gz) {
                 continue;
@@ -590,7 +649,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-    reader.Close();
+    closeInput();
 
     fusion::metrics::SurfaceStatsSummary surfSummary;
     if (enableSurfStats) {

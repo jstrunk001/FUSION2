@@ -139,9 +139,39 @@ Every other single-file option works as it does for points, with three
 differences. A raster has no intensity, so the `int_*` bands are left
 out. Every pixel counts as a first return, so `FirstReturns` equals
 `TotalReturns` and all pixels fall in `r1count`. `point_density` is
-pixels per square unit, which reflects only the pixel size. Batch mode
-(@sec-gridmetrics-batch) reads point files only, so surface rasters are
-processed one file at a time.
+pixels per square unit, which reflects only the pixel size.
+
+### Missing pixels and `/nodata-as-zero` {#sec-gridmetrics-nodata}
+
+A pixel is missing when it is NaN or holds the raster's nodata value.
+By default a missing pixel is left out, as if no return had been
+recorded there. In a canopy height model a missing pixel often means
+bare ground, and leaving it out makes canopy cover and density too high.
+`/nodata-as-zero` counts each missing pixel as a return of height zero
+instead, so cover and density include it. With a ground raster, a pixel
+counted this way keeps height zero and is not reduced by the ground
+elevation. On the GPU path, a ground raster together with
+`/nodata-as-zero` falls back to the CPU path.
+
+### Large rasters, folders, and virtual rasters {#sec-gridmetrics-raster-tiled}
+
+A raster too large to process in one piece runs in batch mode
+(@sec-gridmetrics-batch). Give `gridmetrics` a folder of rasters (GeoTIFF,
+`.img`, `.asc`, and similar; the folder must hold no LAS/LAZ files), or
+give it one raster or virtual raster (`.vrt`) together with `/tilesize`.
+A folder is joined into `input_raster_mosaic.vrt` in the `/outdir`
+folder. Each output tile reads only its own pixels from the raster, so
+the whole raster is never in memory, and no buffer is needed because a
+pixel goes straight to its cell. The output tiles, the virtual raster
+that joins them, and `/merge` work as they do for point clouds.
+
+Point-only options (`/class`, `/return`, `/rgb`, `/rgbstrata`) have no
+effect on a raster; batch mode prints a warning when one is given. When
+`/extent` is left out, the extent of the input raster is used, snapped
+outward to the cell size. Give a `/cellsize` that is a whole multiple of
+the pixel size, so every cell holds the same number of pixels. Gaps
+between the rasters of a folder or virtual raster read as missing, if
+the tiles declare a nodata value; without one, a gap reads as zero.
 
 ### Outputs
 

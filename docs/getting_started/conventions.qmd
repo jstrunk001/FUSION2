@@ -45,8 +45,14 @@ combined point cloud. LAS versions 1.0 through 1.4 are read, compressed
 (LAZ) or not. A COPC file (a LAZ file with a built-in spatial index) is
 read like any other LAZ file; `gridmetrics`' batch mode also uses its
 index to read only the parts each tile needs (@sec-many-tiles).
-`gridmetrics` also accepts a single surface raster in place of points,
-counting each pixel as one return (@sec-gridmetrics-surface).
+`gridmetrics` and `cloudmetrics` also accept a surface raster, such as a
+canopy height model, in place of points, counting each pixel as one return
+(@sec-gridmetrics-surface, @sec-cloudmetrics-raster). A folder of rasters
+or a virtual raster (`.vrt`) works too, and `gridmetrics` processes it in
+tiles (@sec-gridmetrics-raster-tiled). `/nodata-as-zero` counts missing
+pixels as zero-height returns (@sec-gridmetrics-nodata). `pipeline`
+starts from a raster for the stages that read rasters
+(@sec-pipeline-raster).
 
 Tools that need a ground surface (`/ground:`) accept a single raster
 (GeoTIFF, ERDAS Imagine, or ENVI) or a folder of raster tiles. A folder is

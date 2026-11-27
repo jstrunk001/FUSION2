@@ -27,6 +27,10 @@ README's "Distributing built tools" section.
   existing tiling, resume, and mosaic steps are unchanged. A stage that
   needs a point cloud is refused for a raster input. Use a `/buffer` wider
   than the largest search window of the stages.
+- `cloudmetrics` accepts a raster file, a VRT, or a folder of rasters.
+  Each pixel counts as one first return at its center, for the whole
+  raster or, with `/shape`, for each polygon. `/nodata-as-zero` works as it
+  does in `gridmetrics`.
 - `canopymaxima`, `treeseg`, `topometrics`, and `gridsurfacestats` now
   treat NaN pixels as missing. A canopy height model with NaN missing
   pixels previously gave `canopymaxima` one tree of NaN height for every

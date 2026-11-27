@@ -57,3 +57,25 @@ and that the per-plot table has one row per plot, labelled from
 `plot_id`, with point counts within 0.5% of R.
 
 {{< include ../examples/fragments/cloudmetrics_checks.md >}}
+
+## Rasters as input {#sec-cloudmetrics-raster}
+
+`cloudmetrics` also summarizes a surface raster, such as a canopy height
+model, in place of a point cloud. Give it a raster file, a virtual raster
+(`.vrt`), or a folder holding only rasters. Each valid pixel counts as one
+first return at the pixel center, with the pixel value as its height, so
+the output table has the same columns as for points. Without `/shape` the
+output has one row for the whole raster. With `/shape`, it has one row per
+polygon, summarizing the pixels whose centers lie inside the polygon.
+
+A pixel is missing when it is NaN or holds the raster's nodata value, and
+a missing pixel is left out by default. `/nodata-as-zero` counts each
+missing pixel as a return of height zero instead, which suits a canopy
+height model where a missing pixel is bare ground, so cover includes it.
+A folder of rasters is joined into `input_raster_mosaic.vrt` next to the
+output table. A ground raster given with `/ground:` is subtracted from
+the pixel values, except for pixels counted as zero by `/nodata-as-zero`.
+
+Point filters (`/class`, `/return`, and the scan angle options) do not
+apply to pixels. A raster has no intensity or color, so the `int_*`
+columns and `/rgb` channels carry no information.

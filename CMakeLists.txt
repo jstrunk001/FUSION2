@@ -58,6 +58,7 @@ include_directories(
 # Core static library
 add_library(fusion_core STATIC
     src/libfusion_core/GDALRaster.cpp
+    src/libfusion_core/RasterPointReader.cpp
     src/libfusion_core/LASPointCloud.cpp
     src/libfusion_core/InputResolver.cpp
     src/libfusion_core/MergedPointCloudReader.cpp
