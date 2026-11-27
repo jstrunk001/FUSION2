@@ -5,6 +5,55 @@ Versions match the `VERSION` set in `CMakeLists.txt`'s `project()` call,
 which `build.ps1` reads to build each release's tag and title -- see the
 README's "Distributing built tools" section.
 
+## [Unreleased]
+
+- The `/nogpu` option is removed from `canopymodel`, `gridmetrics`, and
+  `pipeline`. The GPU is used only when `/gpu` is given, so `/nogpu` had
+  nothing to turn off.
+- Release tools are now built with MSVC and include GPU code. `build.ps1`
+  uses Microsoft's C++ compiler with static GDAL, PROJ, and LASzip from
+  vcpkg (`x64-windows-static`), so each exe is self-contained, and builds
+  the CUDA code when the CUDA Toolkit 12.8 or newer is installed. Without
+  the CUDA Toolkit it builds MSVC tools without GPU code; without Visual
+  Studio or vcpkg it falls back to the MinGW/Rtools build. `-Toolchain
+  msvc|mingw` overrides the choice. Each bundle includes `build_info.txt`,
+  which states whether it has GPU code.
+- CUDA builds now target many GPU generations: compute capability 7.5
+  (Turing) through 12.0 (Blackwell), plus PTX for 12.0 so newer cards can
+  still run the code. One release binary then runs on a wide range of
+  NVIDIA cards.
+- In a CUDA build, `/gpu` now checks at runtime for a CUDA device and
+  driver. On a computer without one, the tools print the "CUDA not
+  available" notice and run on the CPU before copying any data.
+
+- `gridmetrics` runs raster input in its tiled mode. Give it a folder of
+  rasters (GeoTIFF, `.img`, `.asc`, and similar), or one raster or VRT
+  together with `/tilesize`. A folder is mosaicked into
+  `input_raster_mosaic.vrt` in the output folder, and each tile reads only
+  its own pixels, so a statewide set of canopy height tiles no longer has
+  to fit in memory at once. A single raster without `/tilesize` is still
+  processed whole.
+- New `/nodata-as-zero` option for `gridmetrics` raster input counts
+  missing pixels (NaN or the raster's NoData value) as zero-height returns
+  instead of skipping them. Use it for canopy height models where a
+  missing pixel is bare ground, so cover and density include those pixels.
+  With a ground raster, the GPU path falls back to the CPU path.
+- `pipeline` can start from a raster. Give `/input` a raster file, a VRT,
+  or a folder of rasters, and chain the raster-reading stages
+  (`canopymaxima`, `treeseg`, `topometrics`). Each tile crops the buffered
+  tile from the input raster instead of clipping a point cloud, and the
+  existing tiling, resume, and mosaic steps are unchanged. A stage that
+  needs a point cloud is refused for a raster input. Use a `/buffer` wider
+  than the largest search window of the stages.
+- `cloudmetrics` accepts a raster file, a VRT, or a folder of rasters.
+  Each pixel counts as one first return at its center, for the whole
+  raster or, with `/shape`, for each polygon. `/nodata-as-zero` works as it
+  does in `gridmetrics`.
+- `canopymaxima`, `treeseg`, `topometrics`, and `gridsurfacestats` now
+  treat NaN pixels as missing. A canopy height model with NaN missing
+  pixels previously gave `canopymaxima` one tree of NaN height for every
+  missing pixel (147 tree tops from 3 real trees in a test raster).
+
 ## [0.0.4] - 2026-11-23
 
 - New `/zmult` and `/zshift` options convert vertical units or move the
