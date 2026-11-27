@@ -11,11 +11,18 @@ README's "Distributing built tools" section.
 - The `/nogpu` option is removed from `canopymodel`, `gridmetrics`, and
   `pipeline`. The GPU is used only when `/gpu` is given, so `/nogpu` had
   nothing to turn off.
-- CUDA builds now target many GPU generations. When the caller does not
-  set `CMAKE_CUDA_ARCHITECTURES`, CMake 3.23 or newer builds for every
-  major architecture the installed CUDA Toolkit supports, plus PTX for
-  the newest one; older CMake builds for compute capability 7.5 through
-  9.0. One release binary then runs on a wide range of NVIDIA cards.
+- Release tools are now built with MSVC and include GPU code. `build.ps1`
+  uses Microsoft's C++ compiler with static GDAL, PROJ, and LASzip from
+  vcpkg (`x64-windows-static`), so each exe is self-contained, and builds
+  the CUDA code when the CUDA Toolkit 12.8 or newer is installed. Without
+  the CUDA Toolkit it builds MSVC tools without GPU code; without Visual
+  Studio or vcpkg it falls back to the MinGW/Rtools build. `-Toolchain
+  msvc|mingw` overrides the choice. Each bundle includes `build_info.txt`,
+  which states whether it has GPU code.
+- CUDA builds now target many GPU generations: compute capability 7.5
+  (Turing) through 12.0 (Blackwell), plus PTX for 12.0 so newer cards can
+  still run the code. One release binary then runs on a wide range of
+  NVIDIA cards.
 - In a CUDA build, `/gpu` now checks at runtime for a CUDA device and
   driver. On a computer without one, the tools print the "CUDA not
   available" notice and run on the CPU before copying any data.

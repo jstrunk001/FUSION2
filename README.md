@@ -106,7 +106,30 @@ FUSION2/
 
 ---
 
+### Toolchains: MSVC with CUDA (standard) and MinGW (fallback)
+
+The standard build uses Microsoft's C++ compiler (MSVC) with static GDAL, PROJ, and LASzip from vcpkg (triplet `x64-windows-static`). The C runtime is linked in as well, so each exe needs only DLLs that ship with Windows. NVIDIA's CUDA compiler (`nvcc`) works only with MSVC on Windows, so this is the only build that contains GPU code for the `/gpu` option of `canopymodel`, `gridmetrics`, and `pipeline`.
+
+`.\build.ps1` picks the toolchain from what is installed:
+
+| Installed | Build | GPU code |
+|---|---|---|
+| Visual Studio C++ tools, CMake, vcpkg, and CUDA Toolkit 12.8+ with its Visual Studio plug-in | MSVC, in `build_msvc/` | yes |
+| Visual Studio C++ tools, CMake, and vcpkg, no usable CUDA Toolkit | MSVC, in `build_msvc/` | no |
+| Visual Studio or vcpkg missing | MinGW/Rtools with the minimal GDAL below, in `build/` | no |
+
+The GPU code covers compute capability 7.5 (Turing, for example the Quadro RTX 5000) through 12.0 (Blackwell), plus portable code (PTX) that newer cards compile when they first run it. On a computer without an NVIDIA card, `/gpu` prints a notice and the tool runs on the CPU. Each bundle carries a `build_info.txt` that states which build it is.
+
+Setting up the MSVC build on a new computer:
+1. Install Visual Studio 2022 with the "Desktop development with C++" workload.
+2. Install the CUDA Toolkit after Visual Studio, so its installer adds the Visual Studio plug-in: `winget install Nvidia.CUDA`.
+3. Install vcpkg (for example in `C:\vcpkg`) and set `VCPKG_ROOT` to that folder. `build.ps1` installs `gdal[core]` and `laszip` for `x64-windows-static` on its first run, which takes about 15 minutes.
+
+---
+
 ### Build Profiles: Minimal (Default) vs Full GDAL
+
+These profiles apply to the MinGW fallback build. The MSVC build takes GDAL from vcpkg instead.
 
 FUSION2 provides two build configurations:
 
@@ -134,19 +157,33 @@ From inside the `FUSION2` directory, in PowerShell:
 .\build.ps1
 ```
 
-This ensures the minimal static GDAL is ready (compiling it if not already present), configures CMake in Release mode, compiles all 15 tools and the unit tests, runs the unit tests (stopping if any fail), renders the user manual, strips debug symbols, collects the resulting `.exe` files into `bin/`, and zips them into a versioned bundle at `dist/FUSION2_tools_v<version>-<timestamp>.zip`. If `dist/` already holds a bundle from a previous run, that older zip is moved into `archive/` first.
+This picks the toolchain (see "Toolchains" above), makes sure its static libraries are ready (vcpkg's GDAL and LASzip for MSVC, or the minimal GDAL for MinGW, building them if not already present), configures CMake in Release mode, compiles all 15 tools and the unit tests, runs the unit tests (stopping if any fail), renders the user manual, collects the resulting `.exe` files into `bin/`, and zips them into a versioned bundle at `dist/FUSION2_tools_v<version>-<timestamp>.zip`. If `dist/` already holds a bundle from a previous run, that older zip is moved into `archive/` first.
 
 Useful options:
-- `.\build.ps1` -- build minimal, lightweight standalone tools (~8–15 MB each).
-- `.\build.ps1 -FullGDAL` -- build using full multi-format static GDAL (NetCDF, HDF, etc.).
-- `.\build.ps1 -GDALDir "C:\path\to\cmake\gdal"` -- use a custom user-provided GDAL CMake directory.
-- `.\build.ps1 -VcpkgRoot "C:\path\to\vcpkg"` -- pass a vcpkg toolchain path.
+- `.\build.ps1` -- standard build: MSVC with GPU code when the tools are installed, otherwise the fallback described above.
+- `.\build.ps1 -Toolchain msvc` -- require the MSVC build; stop with a list of what is missing instead of falling back.
+- `.\build.ps1 -Toolchain mingw` -- force the MinGW/Rtools build.
+- `.\build.ps1 -FullGDAL` -- MinGW only: build using full multi-format static GDAL (NetCDF, HDF, etc.).
+- `.\build.ps1 -GDALDir "C:\path\to\cmake\gdal"` -- MinGW only: use a custom user-provided GDAL CMake directory.
+- `.\build.ps1 -VcpkgRoot "C:\path\to\vcpkg"` -- vcpkg folder (default: `VCPKG_ROOT`, then `C:\vcpkg`).
 - `.\build.ps1 -Reconfigure` -- wipe and re-run CMake configure.
 - `.\build.ps1 -Publish` -- after building, publish the bundle as a GitHub Release asset via `gh` and delete the previous `tools-v*` release.
 
 ### Manual Build (equivalent CMake commands)
 
-If building manually with CMake:
+MSVC with CUDA (standard), from a terminal opened after the CUDA install:
+
+```powershell
+C:\vcpkg\vcpkg.exe install "gdal[core]" laszip --triplet x64-windows-static --classic
+cmake -S . -B build_msvc -G "Visual Studio 17 2022" -A x64 -T "cuda=$env:CUDA_PATH" `
+  -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static -DVCPKG_MANIFEST_MODE=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build_msvc --config Release --parallel
+```
+
+Run `vcpkg install` from the vcpkg folder, or with `--classic` as shown, so it does not use this repository's `vcpkg.json`. `-DCMAKE_BUILD_TYPE=Release` is needed even though Visual Studio builds are multi-config: without it, the vcpkg toolchain finds vcpkg's Debug libraries first. Leave out `-T` and add `-DFUSION_ENABLE_CUDA=OFF` for a CPU-only MSVC build.
+
+MinGW (fallback):
 
 1. **Build minimal GDAL (once):**
    ```powershell
