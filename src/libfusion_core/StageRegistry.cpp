@@ -374,7 +374,7 @@ const StageSpec* FindStage(const std::string& name) {
     return nullptr;
 }
 
-bool ValidateStageChain(const std::vector<std::string>& stageNames, std::string& errorOut) {
+bool ValidateStageChain(const std::vector<std::string>& stageNames, std::string& errorOut, bool inputIsRaster) {
     if (stageNames.empty()) {
         errorOut = "Pipeline stage list is empty.";
         return false;
@@ -389,6 +389,18 @@ bool ValidateStageChain(const std::vector<std::string>& stageNames, std::string&
             return false;
         }
         stages.push_back(spec);
+    }
+
+    // a raster input has no point cloud, so every stage must read a raster
+    if (inputIsRaster) {
+        for (const auto* stage : stages) {
+            if (stage->inputKind != ArtifactKind::Raster) {
+                errorOut = "The input is a raster, so every stage must read a raster (canopymaxima, topometrics, "
+                           "or treeseg) -- \"" + stage->name + "\" expects a point cloud.";
+                return false;
+            }
+        }
+        return true;
     }
 
     if (stages.front()->inputKind != ArtifactKind::PointCloud) {

@@ -117,6 +117,30 @@ static bool MaterializeTileClip(const std::filesystem::path& inputPath,
     return pointsRead && writerOk;
 }
 
+// Raster-input version of Stage 0: crops the input raster to the tile's
+// buffered extent (limited to the area the raster covers) and writes it as
+// the tile's buffered raster. Every raster-reading stage in the chain reads
+// this file or a later stage's output. Returns false when the raster does
+// not overlap the tile or the crop fails.
+static bool MaterializeTileRasterClip(const std::filesystem::path& rasterPath,
+                                      const fusion::raster::RasterInfo& rasterInfo,
+                                      const fusion::batch::TileInfo& tile,
+                                      const std::filesystem::path& outPath) {
+    // 1. limit the buffered extent to the area the raster covers
+    double clipMinX = (std::max)(tile.bufferedMinX, rasterInfo.minX);
+    double clipMaxX = (std::min)(tile.bufferedMaxX, rasterInfo.maxX);
+    double clipMinY = (std::max)(tile.bufferedMinY, rasterInfo.minY);
+    double clipMaxY = (std::min)(tile.bufferedMaxY, rasterInfo.maxY);
+
+    // 2. a tile outside the raster has nothing to crop
+    if (clipMinX >= clipMaxX || clipMinY >= clipMaxY) {
+        return false;
+    }
+
+    // 3. crop
+    return fusion::raster::GDALRaster::CropToExtent(rasterPath, outPath, clipMinX, clipMinY, clipMaxX, clipMaxY);
+}
+
 // Rewrites canopymaxima's tree-top CSV (TreeID,X,Y,Height,CrownDiameter) in
 // place: drops rows whose (X,Y) falls in the tile's buffer zone, and
 // prefixes TreeID with the tile name so IDs stay unique once every tile's
@@ -259,8 +283,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // 1b. a raster file, or a folder holding only rasters, starts the run from
+    //     a raster instead of a point cloud
+    bool isRasterInput = fusion::batch::DirectoryHoldsOnlyRasters(inputPath) ||
+                         (std::filesystem::is_regular_file(inputPath) &&
+                          fusion::batch::IsRasterFileExtension(inputPath.extension().string()));
+
     std::string validationError;
-    if (!fusion::batch::ValidateStageChain(stageNames, validationError)) {
+    if (!fusion::batch::ValidateStageChain(stageNames, validationError, isRasterInput)) {
         std::cerr << "Error: " << validationError << "\n";
         return 1;
     }
@@ -305,7 +335,32 @@ int main(int argc, char* argv[]) {
     }
     double extentSnap = std::stod(parser.GetOption("cellsize").value_or("1.0"));
     std::string extentMessage;
-    if (!fusion::batch::ResolveProjectExtent(inputPath, hasExtent, extentSnap, gridSpec, extentMessage)) {
+
+    // A folder of rasters is mosaicked into one VRT file in the processing
+    // folder, and the project extent comes from the raster.
+    std::filesystem::path rasterInputPath;
+    fusion::raster::RasterInfo rasterInputInfo;
+    if (isRasterInput) {
+        rasterInputPath = inputPath;
+        if (std::filesystem::is_directory(inputPath)) {
+            rasterInputPath = processingDir / "input_raster_mosaic.vrt";
+            if (!fusion::raster::GDALRaster::BuildVRTFromDirectory(inputPath, rasterInputPath)) {
+                std::cerr << "Error: could not mosaic the raster files in " << inputPath.string() << ".\n";
+                return 1;
+            }
+        }
+        fusion::raster::GDALRaster rasterProbe;
+        if (!rasterProbe.Open(rasterInputPath)) {
+            std::cerr << "Error: could not open input raster '" << rasterInputPath.string() << "'.\n";
+            return 1;
+        }
+        rasterInputInfo = rasterProbe.GetInfo();
+        rasterProbe.Close();
+        if (!fusion::batch::ResolveRasterProjectExtent(rasterInputInfo, hasExtent, extentSnap, gridSpec, extentMessage)) {
+            std::cerr << "Error: " << extentMessage << "\n";
+            return 1;
+        }
+    }else if (!fusion::batch::ResolveProjectExtent(inputPath, hasExtent, extentSnap, gridSpec, extentMessage)) {
         std::cerr << "Error: " << extentMessage << "\n";
         return 1;
     }
@@ -320,7 +375,8 @@ int main(int argc, char* argv[]) {
     }
 
     fusion::batch::PipelineJobOptions jobOpts;
-    jobOpts.inputPointCloudDir = inputPath;
+    // a raster input holds no point files to split, so the scan finds none
+    jobOpts.inputPointCloudDir = isRasterInput ? rasterInputPath : inputPath;
     jobOpts.outputDir = outputDir;
     jobOpts.numThreads = std::stoi(parser.GetOption("threads").value_or("4"));
     jobOpts.generateVRT = false;
@@ -339,7 +395,7 @@ int main(int argc, char* argv[]) {
         return tileFilter.empty() || std::find(tileFilter.begin(), tileFilter.end(), tile.name) != tileFilter.end();
     };
     auto clipDone = [&](const fusion::batch::TileInfo& tile) -> bool {
-        std::filesystem::path clipPath = processingDir / tile.name / "clip.laz";
+        std::filesystem::path clipPath = processingDir / tile.name / (isRasterInput ? "clip.tif" : "clip.laz");
         const StageResult* clipState = state.Find(tile.name, "clip");
         return resume && clipState && clipState->status == StageStatus::Done && std::filesystem::exists(clipPath);
     };
@@ -357,10 +413,12 @@ int main(int argc, char* argv[]) {
         std::filesystem::path logPath = tileDir / "log.txt";
 
         // Stage 0: buffered clip, resumable exactly like every other stage.
-        std::filesystem::path clipPath = tileDir / "clip.laz";
+        std::filesystem::path clipPath = tileDir / (isRasterInput ? "clip.tif" : "clip.laz");
         if (!clipDone(tile)) {
             std::string startedAt = NowTimestamp();
-            bool ok = MaterializeTileClip(inputPath, tile, clipPath);
+            bool ok = isRasterInput
+                ? MaterializeTileRasterClip(rasterInputPath, rasterInputInfo, tile, clipPath)
+                : MaterializeTileClip(inputPath, tile, clipPath);
             StageResult result;
             result.tile = tile.name;
             result.stage = "clip";
@@ -379,6 +437,10 @@ int main(int argc, char* argv[]) {
         std::filesystem::path currentPointCloudPath = clipPath;
         std::optional<std::filesystem::path> lastRasterBufferedPath;
         std::optional<std::filesystem::path> groundDemBufferedPath;
+        // a raster input's tile clip is the first raster the stages read
+        if (isRasterInput) {
+            lastRasterBufferedPath = clipPath;
+        }
         auto tileForwardedOptions = forwardedOptions;
         bool tileOk = true;
 

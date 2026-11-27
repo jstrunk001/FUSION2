@@ -87,6 +87,23 @@ bool TileCellForPoint(double x, double y, const TileInfo& tile, const TileGridSp
 bool ResolveProjectExtent(const std::filesystem::path& inputDir, bool hasExtent, double snapSize,
                           TileGridSpec& spec, std::string& messageOut);
 
+// File extensions GDAL reads as raster input (the same list a folder of
+// raster tiles is scanned for). The extension is compared without regard
+// to case.
+bool IsRasterFileExtension(std::string extension);
+
+// True when dirPath is a folder holding raster files and no LAS/LAZ files.
+// A folder with any LAS/LAZ file counts as a point cloud folder.
+bool DirectoryHoldsOnlyRasters(const std::filesystem::path& dirPath);
+
+// Sets the project extent for a batch run over a raster. With hasExtent
+// false, spec's extent is the raster's extent snapped outward to multiples
+// of snapSize, and messageOut describes it. With hasExtent true, spec's
+// extent is kept as given. Returns false, with messageOut holding the
+// error, when a given extent does not overlap the raster.
+bool ResolveRasterProjectExtent(const fusion::raster::RasterInfo& rasterInfo, bool hasExtent, double snapSize,
+                                TileGridSpec& spec, std::string& messageOut);
+
 struct PipelineJobOptions {
     std::filesystem::path inputPointCloudDir;
     std::filesystem::path outputDir;

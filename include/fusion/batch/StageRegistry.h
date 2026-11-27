@@ -74,7 +74,12 @@ const StageSpec* FindStage(const std::string& name);
 // canopymodel,canopymaxima,treeseg is valid: canopymaxima writes a table,
 // and treeseg reads canopymodel's raster. Returns false with errorOut set
 // when the list is invalid.
-bool ValidateStageChain(const std::vector<std::string>& stageNames, std::string& errorOut);
+//
+// With inputIsRaster true, the run starts from a raster (a height or
+// elevation model) instead of a point cloud. Every stage must then consume a
+// raster, since no point cloud exists, and the first stage reads the input
+// raster cropped to the tile.
+bool ValidateStageChain(const std::vector<std::string>& stageNames, std::string& errorOut, bool inputIsRaster = false);
 
 } // namespace fusion::batch
 

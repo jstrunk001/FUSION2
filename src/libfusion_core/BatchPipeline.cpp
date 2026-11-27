@@ -126,6 +126,48 @@ bool ResolveProjectExtent(const std::filesystem::path& inputDir, bool hasExtent,
     return true;
 }
 
+bool IsRasterFileExtension(std::string extension) {
+    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+    return extension == ".tif" || extension == ".tiff" || extension == ".vrt" || extension == ".img" ||
+           extension == ".asc" || extension == ".bil" || extension == ".dem" || extension == ".dtm";
+}
+
+bool DirectoryHoldsOnlyRasters(const std::filesystem::path& dirPath) {
+    if (!std::filesystem::is_directory(dirPath)) return false;
+    if (!fusion::lidar::ResolveInputFiles({dirPath.string()}).empty()) return false;
+    for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
+        if (entry.is_regular_file() && IsRasterFileExtension(entry.path().extension().string())) return true;
+    }
+    return false;
+}
+
+bool ResolveRasterProjectExtent(const fusion::raster::RasterInfo& rasterInfo, bool hasExtent, double snapSize,
+                                TileGridSpec& spec, std::string& messageOut) {
+    std::ostringstream msg;
+    msg << std::fixed << std::setprecision(2);
+    if (hasExtent) {
+        bool isOutside = spec.maxX <= rasterInfo.minX || spec.minX >= rasterInfo.maxX ||
+                         spec.maxY <= rasterInfo.minY || spec.minY >= rasterInfo.maxY;
+        if (isOutside) {
+            msg << "/extent does not overlap the input raster, which covers "
+                << rasterInfo.minX << "," << rasterInfo.minY << "," << rasterInfo.maxX << "," << rasterInfo.maxY;
+            messageOut = msg.str();
+            return false;
+        }
+        messageOut.clear();
+        return true;
+    }
+    if (snapSize <= 0.0) snapSize = 1.0;
+    spec.minX = std::floor(rasterInfo.minX / snapSize) * snapSize;
+    spec.minY = std::floor(rasterInfo.minY / snapSize) * snapSize;
+    spec.maxX = std::ceil(rasterInfo.maxX / snapSize) * snapSize;
+    spec.maxY = std::ceil(rasterInfo.maxY / snapSize) * snapSize;
+    msg << "No /extent given -- using the extent of the input raster, snapped to "
+        << snapSize << " units: " << spec.minX << "," << spec.minY << "," << spec.maxX << "," << spec.maxY;
+    messageOut = msg.str();
+    return true;
+}
+
 BatchPipeline::BatchPipeline(TileGridSpec gridSpec, PipelineJobOptions jobOptions)
     : m_gridSpec(gridSpec), m_options(jobOptions) {
     m_tiles = TileGridManager::GenerateTiles(m_gridSpec);

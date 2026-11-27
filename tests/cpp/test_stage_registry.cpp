@@ -103,6 +103,12 @@ int RunStageRegistryTests() {
     CHECK(!fusion::batch::ValidateStageChain({"canopymodel", "nosuchstage"}, chainError), failures);
     CHECK(!fusion::batch::ValidateStageChain({}, chainError), failures);
 
+    //  - a raster input accepts only raster-reading stages
+    CHECK(fusion::batch::ValidateStageChain({"canopymaxima", "treeseg"}, chainError, true), failures);
+    CHECK(fusion::batch::ValidateStageChain({"topometrics"}, chainError, true), failures);
+    CHECK(!fusion::batch::ValidateStageChain({"canopymodel", "canopymaxima"}, chainError, true), failures);
+    CHECK(!fusion::batch::ValidateStageChain({"gridmetrics"}, chainError, true), failures);
+
     //7. /gpu and /nogpu forwarding for canopymodel and gridmetrics
     const auto* cm = fusion::batch::FindStage("canopymodel");
     const auto* gm = fusion::batch::FindStage("gridmetrics");

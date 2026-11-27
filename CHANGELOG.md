@@ -20,6 +20,13 @@ README's "Distributing built tools" section.
   instead of skipping them. Use it for canopy height models where a
   missing pixel is bare ground, so cover and density include those pixels.
   With a ground raster, the GPU path falls back to the CPU path.
+- `pipeline` can start from a raster. Give `/input` a raster file, a VRT,
+  or a folder of rasters, and chain the raster-reading stages
+  (`canopymaxima`, `treeseg`, `topometrics`). Each tile crops the buffered
+  tile from the input raster instead of clipping a point cloud, and the
+  existing tiling, resume, and mosaic steps are unchanged. A stage that
+  needs a point cloud is refused for a raster input. Use a `/buffer` wider
+  than the largest search window of the stages.
 - `canopymaxima`, `treeseg`, `topometrics`, and `gridsurfacestats` now
   treat NaN pixels as missing. A canopy height model with NaN missing
   pixels previously gave `canopymaxima` one tree of NaN height for every

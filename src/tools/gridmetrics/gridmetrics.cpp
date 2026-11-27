@@ -243,24 +243,8 @@ static std::string ResolveGroundPath(const fusion::cli::ArgumentParser& parser, 
     return "";
 }
 
-// File extensions GDAL reads as a raster input here (same list a folder of
-// raster tiles is scanned for).
-static bool IsRasterFileExtension(std::string ext) {
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    return ext == ".tif" || ext == ".tiff" || ext == ".vrt" || ext == ".img" ||
-           ext == ".asc" || ext == ".bil" || ext == ".dem" || ext == ".dtm";
-}
-
-// True when dirPath holds raster files and no LAS/LAZ files. A folder with
-// any LAS/LAZ file is treated as a point cloud folder, as before.
-static bool DirectoryHoldsOnlyRasters(const std::filesystem::path& dirPath) {
-    if (!std::filesystem::is_directory(dirPath)) return false;
-    if (!fusion::lidar::ResolveInputFiles({dirPath.string()}).empty()) return false;
-    for (const auto& entry : std::filesystem::directory_iterator(dirPath)) {
-        if (entry.is_regular_file() && IsRasterFileExtension(entry.path().extension().string())) return true;
-    }
-    return false;
-}
+using fusion::batch::IsRasterFileExtension;
+using fusion::batch::DirectoryHoldsOnlyRasters;
 
 // Raster input for tiled mode: calls onPixel once for every pixel of the
 // raster whose center lies inside the tile's own area (not its buffer),
@@ -385,20 +369,8 @@ static int RunBatchTiledMode(fusion::cli::ArgumentParser& parser, const std::fil
     if (isRasterInput) {
         // pixels go straight to cells, so no buffer is read
         gridSpec.bufferDistance = 0.0;
-        if (!hasExtent) {
-            double snap = gridSpec.resolution > 0.0 ? gridSpec.resolution : 1.0;
-            gridSpec.minX = std::floor(rasterInputInfo.minX / snap) * snap;
-            gridSpec.minY = std::floor(rasterInputInfo.minY / snap) * snap;
-            gridSpec.maxX = std::ceil(rasterInputInfo.maxX / snap) * snap;
-            gridSpec.maxY = std::ceil(rasterInputInfo.maxY / snap) * snap;
-            std::cout << "[GridMetrics] No /extent given -- using the extent of the input raster, snapped to "
-                      << snap << " units: " << gridSpec.minX << "," << gridSpec.minY << ","
-                      << gridSpec.maxX << "," << gridSpec.maxY << "\n";
-        }else if (gridSpec.maxX <= rasterInputInfo.minX || gridSpec.minX >= rasterInputInfo.maxX ||
-                  gridSpec.maxY <= rasterInputInfo.minY || gridSpec.minY >= rasterInputInfo.maxY) {
-            std::cerr << "Error: /extent does not overlap the input raster, which covers "
-                      << rasterInputInfo.minX << "," << rasterInputInfo.minY << ","
-                      << rasterInputInfo.maxX << "," << rasterInputInfo.maxY << "\n";
+        if (!fusion::batch::ResolveRasterProjectExtent(rasterInputInfo, hasExtent, gridSpec.resolution, gridSpec, extentMessage)) {
+            std::cerr << "Error: " << extentMessage << "\n";
             return 1;
         }
     }else if (!fusion::batch::ResolveProjectExtent(inputDir, hasExtent, gridSpec.resolution, gridSpec, extentMessage)) {
