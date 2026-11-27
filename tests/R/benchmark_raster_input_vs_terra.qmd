@@ -1,0 +1,213 @@
+---
+title: "gridmetrics raster input versus terra"
+format: html
+---
+
+Times `gridmetrics` on a height raster against `terra` doing equivalent
+work in R, on a synthetic canopy height model written once to the work
+folder. Not rendered; run the chunks in order.
+
+```{r, setup, eval=T}
+
+    # 1. settings
+        dir_work = "D:/FUSION2_build/benchmark_terra"
+        exe_gridmetrics = "D:/FUSION2_build/build_pipeline_raster/gridmetrics.exe"
+        n_pixel_side = 8000
+        cell_pixels = 30
+        min_height = 2
+        n_threads_tiled = 8
+
+    # 2. create the work folder
+        dir.create(dir_work, showWarnings = FALSE, recursive = TRUE)
+
+    # Validation 2 (STOP). confirm the executable exists
+        if(!file.exists(exe_gridmetrics)){
+            stop("gridmetrics.exe was not found.")
+        }
+
+```
+
+## Create the canopy height model
+
+A smooth, tree-like surface with 15% bare ground and a few missing blocks,
+written as one GeoTIFF with 1 m pixels.
+
+```{r, make_chm, eval=T}
+
+    # 1. build the raster description
+        path_chm = file.path(dir_work, "chm_synthetic.tif")
+        rast_chm = terra::rast(
+            nrows = n_pixel_side
+            , ncols = n_pixel_side
+            , xmin = 500000
+            , xmax = 500000 + n_pixel_side
+            , ymin = 5000000
+            , ymax = 5000000 + n_pixel_side
+            , crs = "EPSG:32610"
+        )
+
+    # 2. fill with heights, only when the file does not exist yet
+        if(!file.exists(path_chm)){
+
+            # A. column and row positions of every pixel
+            col_index = rep(1:n_pixel_side, times = n_pixel_side)
+            row_index = rep(1:n_pixel_side, each = n_pixel_side)
+
+            # B. crown-like heights between 0 and 40
+            heights = 20 + 12 * sin(col_index / 17) * cos(row_index / 23) + 8 * sin((col_index + row_index) / 41)
+            heights = pmax(heights, 0)
+
+            # C. bare ground in 15% of pixels, and missing blocks
+            set.seed(1)
+            is_bare = runif(length(heights)) < 0.15
+            heights[is_bare] = 0
+            heights[col_index > 1000 & col_index < 1400 & row_index > 2000 & row_index < 2400] = NA
+
+            # D. write the raster
+            terra::values(rast_chm) = heights
+            terra::writeRaster(rast_chm, path_chm, datatype = "FLT4S", gdal = c("COMPRESS=LZW", "TILED=YES"), overwrite = TRUE)
+            rm(heights, col_index, row_index, is_bare)
+            gc()
+        }
+
+    # Validation 2 (STOP). confirm the raster is on disk
+        if(!file.exists(path_chm)){
+            stop("The synthetic raster was not written.")
+        }
+
+```
+
+## Time terra
+
+`terra::aggregate()` with built-in functions, then with one custom R
+function that returns the same statistics gridmetrics reports: mean, three
+percentiles, maximum, and cover.
+
+```{r, time_terra, eval=T}
+
+    # 1. read the raster as terra would for a normal workflow
+        rast_in = terra::rast(path_chm)
+
+    # 2. built-in functions: mean and max of every 30 x 30 pixel cell
+        time_terra_mean = system.time({
+            rast_mean = terra::aggregate(rast_in, fact = cell_pixels, fun = "mean", na.rm = TRUE)
+        })
+        time_terra_max = system.time({
+            rast_max = terra::aggregate(rast_in, fact = cell_pixels, fun = "max", na.rm = TRUE)
+        })
+
+    # 3. one custom function giving six statistics per cell
+        fn_cell_stats = function(x){
+            x = x[!is.na(x)]
+            x_canopy = x[x >= min_height]
+            if(length(x_canopy) == 0){
+                return(c(NA, NA, NA, NA, NA, 100 * 0))
+            }
+            q = quantile(x_canopy, c(0.25, 0.5, 0.95), names = FALSE)
+            c(mean(x_canopy), q[1], q[2], q[3], max(x_canopy), 100 * length(x_canopy) / length(x))
+        }
+        time_terra_custom = system.time({
+            rast_custom = terra::aggregate(rast_in, fact = cell_pixels, fun = fn_cell_stats)
+        })
+
+```
+
+## Time gridmetrics
+
+Whole raster in one run, then tiled with 1 and several threads. Each run
+produces all of gridmetrics' bands, not only the six terra computed.
+
+```{r, time_gridmetrics, eval=T}
+
+    # 1. helper that runs gridmetrics and returns its elapsed seconds
+        fn_run_gridmetrics = function(args){
+            seconds = system.time({
+                status = system2(exe_gridmetrics, args, stdout = FALSE, stderr = FALSE)
+            })[["elapsed"]]
+            if(status != 0){
+                stop("gridmetrics failed: ", paste(args, collapse = " "))
+            }
+            seconds
+        }
+        common_args = c(
+            paste0("/cellsize:", cell_pixels)
+            , paste0("/minht:", min_height)
+        )
+
+    # 2. whole raster in one run
+        dir_out_whole = file.path(dir_work, "out_whole")
+        seconds_whole = fn_run_gridmetrics(c(path_chm, common_args, paste0("/outdir:", dir_out_whole)))
+
+    # 3. tiled, one thread
+        dir_out_tiled_1 = file.path(dir_work, "out_tiled_1")
+        seconds_tiled_1 = fn_run_gridmetrics(c(path_chm, common_args, "/tilesize:2400,2400", "/threads:1", paste0("/outdir:", dir_out_tiled_1)))
+
+    # 4. tiled, several threads
+        dir_out_tiled_n = file.path(dir_work, "out_tiled_n")
+        seconds_tiled_n = fn_run_gridmetrics(c(path_chm, common_args, "/tilesize:2400,2400", paste0("/threads:", n_threads_tiled), paste0("/outdir:", dir_out_tiled_n)))
+
+```
+
+## Check that both did the same work
+
+Cover and maximum height of each cell from gridmetrics against terra.
+
+```{r, check_same_work, eval=T}
+
+    # 1. read the gridmetrics whole-raster output
+        path_gm_whole = file.path(dir_out_whole, "chm_synthetic_gridmetrics.tif")
+        rast_gm = terra::rast(path_gm_whole)
+        names_gm = names(rast_gm)
+
+    # 2. pick the maximum height and cover bands
+        name_max = names_gm[grepl("^elev_max$", names_gm)]
+        name_cover = names_gm[grepl("cover", names_gm, ignore.case = TRUE)][1]
+
+    # 3. compare maximum height cell by cell (terra's max excludes nothing below min_height, so compare cells with canopy)
+        vals_gm_max = terra::values(rast_gm[[name_max]])[, 1]
+        vals_terra_max = terra::values(rast_max)[, 1]
+        is_canopy_cell = !is.na(vals_gm_max)
+        max_abs_diff_max = max(abs(vals_gm_max[is_canopy_cell] - vals_terra_max[is_canopy_cell]), na.rm = TRUE)
+
+    # 4. compare cover (terra's custom statistic 6 is cover percent)
+        vals_gm_cover = terra::values(rast_gm[[name_cover]])[, 1]
+        vals_terra_cover = terra::values(rast_custom[[6]])[, 1]
+        max_abs_diff_cover = max(abs(vals_gm_cover - vals_terra_cover), na.rm = TRUE)
+
+    # Validation 4 (WARN). confirm the two tools agree to within rounding
+        if(max_abs_diff_max > 1e-3 || max_abs_diff_cover > 0.05){
+            warning("gridmetrics and terra differ: max height ", max_abs_diff_max, ", cover ", max_abs_diff_cover)
+        }
+
+```
+
+## Summary table
+
+```{r, summary_table, eval=T}
+
+    # 1. gather the timings
+        dt_timing = data.frame(
+            tool = c(
+                "terra aggregate, mean only"
+                , "terra aggregate, max only"
+                , "terra aggregate, custom function (6 statistics)"
+                , "gridmetrics whole raster (all bands)"
+                , "gridmetrics tiled, 1 thread (all bands)"
+                , paste0("gridmetrics tiled, ", n_threads_tiled, " threads (all bands)")
+            )
+            , seconds = c(
+                time_terra_mean[["elapsed"]]
+                , time_terra_max[["elapsed"]]
+                , time_terra_custom[["elapsed"]]
+                , seconds_whole
+                , seconds_tiled_1
+                , seconds_tiled_n
+            )
+        )
+
+    # Validation 1 (INSPECT). confirm the timings look plausible
+        print(dt_timing)
+        print(paste("max height difference:", max_abs_diff_max, "cover difference:", max_abs_diff_cover))
+        print(paste("pixels:", format(n_pixel_side^2, big.mark = ","), "cells:", (n_pixel_side %/% cell_pixels)^2))
+
+```
