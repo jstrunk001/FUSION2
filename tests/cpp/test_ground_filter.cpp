@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <string>
 #include <vector>
 
 // Checks the Kraus & Pfeifer weight function, the empty-cell fill, and the

@@ -20,6 +20,21 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 
+if(MSVC)
+    # Link the C runtime statically (/MT) so each exe is self-contained.
+    # This matches vcpkg's x64-windows-static triplet, which builds GDAL,
+    # PROJ, and LASzip the same way; mixing /MT and /MD fails to link.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    # Drop unused functions and merge identical ones in Release builds.
+    # /Gy is an MSVC flag, so it is limited to C and C++ files; nvcc
+    # rejects it when it is passed to .cu files.
+    add_compile_options($<$<AND:$<CONFIG:Release>,$<COMPILE_LANGUAGE:C,CXX>>:/Gy>)
+    add_link_options(
+        $<$<CONFIG:Release>:/OPT:REF>
+        $<$<CONFIG:Release>:/OPT:ICF>
+    )
+endif()
+
 # Find GDAL using CMake Config mode to automatically pull in static dependencies
 find_package(GDAL CONFIG REQUIRED)
 
@@ -32,6 +47,11 @@ find_package(GDAL CONFIG REQUIRED)
 # not a performance one. A configure-time copy is enough since proj.db
 # doesn't change between builds.
 set(PROJ_DB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/deps/gdal_minimal/share/proj/proj.db")
+if(MSVC)
+    # An MSVC build takes PROJ from vcpkg, so use the proj.db of that same
+    # PROJ version. PROJ_DIR is set by find_package(GDAL), which finds PROJ.
+    set(PROJ_DB_SOURCE "${PROJ_DIR}/proj.db")
+endif()
 if(EXISTS "${PROJ_DB_SOURCE}")
     file(COPY "${PROJ_DB_SOURCE}" DESTINATION "${CMAKE_BINARY_DIR}/proj_data")
 else()
@@ -42,9 +62,30 @@ endif()
 # vendors it the same way build_gdal_minimal.ps1 vendors GDAL) -- locate its
 # static libs and headers directly instead of find_package().
 set(LASZIP_MINIMAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps/laszip_minimal")
-find_library(LASZIP_BASE_LIBRARY NAMES laszip3 PATHS "${LASZIP_MINIMAL_DIR}/lib" NO_DEFAULT_PATH)
-if(NOT LASZIP_BASE_LIBRARY)
-    message(FATAL_ERROR "Minimal static LASzip not found under ${LASZIP_MINIMAL_DIR} -- run build_laszip_minimal.ps1 first.")
+if(MSVC)
+    # An MSVC build cannot link the MinGW .a files in deps/laszip_minimal.
+    # It takes LASzip from vcpkg (port laszip, triplet x64-windows-static),
+    # whose lib and include folders the vcpkg toolchain file puts on the
+    # search path; the headers sit in include/laszip/ as in the MinGW copy.
+    # vcpkg keeps a Release copy in lib/ and a Debug copy in debug/lib/,
+    # built against different C runtimes, so each build type is pointed at
+    # its own copy; a plain find_library() can return the Debug one.
+    set(VCPKG_TRIPLET_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+    find_library(LASZIP_RELEASE_LIBRARY NAMES laszip3 PATHS "${VCPKG_TRIPLET_DIR}/lib" NO_DEFAULT_PATH)
+    find_library(LASZIP_DEBUG_LIBRARY NAMES laszip3 PATHS "${VCPKG_TRIPLET_DIR}/debug/lib" NO_DEFAULT_PATH)
+    if(NOT LASZIP_RELEASE_LIBRARY)
+        message(FATAL_ERROR "Static LASzip not found under ${VCPKG_TRIPLET_DIR}/lib -- run: vcpkg install laszip --triplet x64-windows-static")
+    endif()
+    if(LASZIP_DEBUG_LIBRARY)
+        set(LASZIP_BASE_LIBRARY optimized ${LASZIP_RELEASE_LIBRARY} debug ${LASZIP_DEBUG_LIBRARY})
+    else()
+        set(LASZIP_BASE_LIBRARY ${LASZIP_RELEASE_LIBRARY})
+    endif()
+else()
+    find_library(LASZIP_BASE_LIBRARY NAMES laszip3 PATHS "${LASZIP_MINIMAL_DIR}/lib" NO_DEFAULT_PATH)
+    if(NOT LASZIP_BASE_LIBRARY)
+        message(FATAL_ERROR "Minimal static LASzip not found under ${LASZIP_MINIMAL_DIR} -- run build_laszip_minimal.ps1 first.")
+    endif()
 endif()
 
 # Include directories
@@ -109,6 +150,11 @@ if(FUSION_ENABLE_CUDA)
         set(CMAKE_CUDA_STANDARD 17)
         set(CMAKE_CUDA_STANDARD_REQUIRED ON)
         target_compile_definitions(fusion_core PUBLIC FUSION_HAS_CUDA=1)
+        # fusion_core is created above, before this list is set, so the
+        # target does not pick it up on its own; set it on the target.
+        set_target_properties(fusion_core PROPERTIES
+            CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+        )
         target_sources(fusion_core PRIVATE
             src/cuda/canopymodel_cuda.cu
             src/cuda/gridmetrics_raster_cuda.cu
@@ -121,7 +167,11 @@ endif()
 
 target_link_libraries(fusion_core PUBLIC GDAL::GDAL)
 
-if(WIN32)
+if(MSVC)
+    # GDAL::GDAL from vcpkg already carries PROJ, libtiff, curl, and the
+    # rest of its static dependencies, so only LASzip is added here.
+    target_link_libraries(fusion_core PUBLIC ${LASZIP_BASE_LIBRARY})
+elseif(WIN32)
     # When linking static GDAL/PROJ from MinGW/Rtools, resolve circular/transitive static references with linker group.
     # LASzip's laszip_api3 (references symbols defined in laszip3's
     # laszip_dll.cpp) is folded into this same group rather than given its
